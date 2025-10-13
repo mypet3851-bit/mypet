@@ -27,6 +27,12 @@ const categorySchema = new mongoose.Schema({
   order: {
     type: Number,
     default: 0
+  },
+  // Controls the visual tile size on the storefront categories grid
+  tileSize: {
+    type: String,
+    enum: ['short', 'long'],
+    default: 'short'
   }
 }, {
   timestamps: true
