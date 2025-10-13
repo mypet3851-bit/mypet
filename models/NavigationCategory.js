@@ -10,7 +10,8 @@ const navigationCategorySchema = new mongoose.Schema({
   slug: {
     type: String,
     unique: true,
-    lowercase: true
+    lowercase: true,
+    index: true
   },
   isActive: {
     type: Boolean,
@@ -20,6 +21,7 @@ const navigationCategorySchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  // Optional display sub-categories (kept for backwards compatibility with existing UI)
   subCategories: [{
     name: {
       type: String,
@@ -29,43 +31,54 @@ const navigationCategorySchema = new mongoose.Schema({
       type: String,
       required: true
     }
+  }],
+  // Canonical mapping to catalog categories; allows selecting multiple categories per nav item
+  categories: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Category',
+    index: true
   }]
 }, {
   timestamps: true
 });
 
-// Create slug from name before saving
+// Create slug from name (if needed) and sync categories from subCategories before saving
 navigationCategorySchema.pre('save', async function(next) {
-  if (!this.isModified('name')) {
-    return next();
-  }
-
   try {
-    this.slug = this.name
-      .toLowerCase()
-      .replace(/[^\w\s-]/g, '')
-      .replace(/\s+/g, '-')
-      .replace(/-+/g, '-');
+    // 1) Ensure slug exists and is unique
+    if (this.isModified('name') || !this.slug) {
+      const base = (this.name || this.slug || '')
+        .toLowerCase()
+        .trim()
+        .replace(/[^\w\s-]/g, '')
+        .replace(/\s+/g, '-')
+        .replace(/-+/g, '-');
 
-    // Check if slug exists
-    const existingCategory = await this.constructor.findOne({ 
-      slug: this.slug,
-      _id: { $ne: this._id }
-    });
+      let desired = base || 'nav';
+      let candidate = desired;
 
-    if (existingCategory) {
+      // If updating and slug already matches, skip uniqueness loop
       let counter = 1;
-      let newSlug = this.slug;
-      
-      while (await this.constructor.findOne({ 
-        slug: newSlug,
-        _id: { $ne: this._id }
-      })) {
-        newSlug = `${this.slug}-${counter}`;
+      while (await this.constructor.findOne({ slug: candidate, _id: { $ne: this._id } })) {
+        candidate = `${desired}-${counter}`;
         counter++;
       }
-      
-      this.slug = newSlug;
+      this.slug = candidate;
+    }
+
+    // 2) If categories not provided explicitly, try to resolve from subCategories slugs
+    const hasExplicitCategories = Array.isArray(this.categories) && this.isModified('categories');
+    const hasSubCats = Array.isArray(this.subCategories) && this.subCategories.length > 0;
+
+    if (!hasExplicitCategories && hasSubCats) {
+      const slugs = this.subCategories
+        .map(sc => sc && sc.slug)
+        .filter(Boolean);
+      if (slugs.length > 0) {
+        const Category = mongoose.model('Category');
+        const docs = await Category.find({ slug: { $in: slugs } }).select('_id slug');
+        this.categories = docs.map(d => d._id);
+      }
     }
 
     next();
