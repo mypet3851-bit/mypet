@@ -104,8 +104,9 @@ router.get('/', async (req, res) => {
     // Normalize favicon (and optionally logo) to absolute so other-origins (Netlify) can load it
     try {
   if (obj.favicon) obj.favicon = toAbsolute(req, obj.favicon);
-      if (obj.logo && obj.logo.startsWith('/uploads/')) obj.logo = toAbsolute(req, obj.logo);
-      if (obj.authBackgroundImage && obj.authBackgroundImage.startsWith('/uploads/')) obj.authBackgroundImage = toAbsolute(req, obj.authBackgroundImage);
+  if (obj.logo && obj.logo.startsWith('/uploads/')) obj.logo = toAbsolute(req, obj.logo);
+  if (obj.authBackgroundImage && obj.authBackgroundImage.startsWith('/uploads/')) obj.authBackgroundImage = toAbsolute(req, obj.authBackgroundImage);
+  if (obj.headerBackgroundImage && obj.headerBackgroundImage.startsWith('/uploads/')) obj.headerBackgroundImage = toAbsolute(req, obj.headerBackgroundImage);
     } catch {}
     res.json(obj);
   } catch (error) {
@@ -367,6 +368,7 @@ router.put('/', settingsWriteGuard, async (req, res) => {
             headerLayout: settings.headerLayout,
             headerBackgroundColor: settings.headerBackgroundColor,
             headerTextColor: settings.headerTextColor,
+            headerBackgroundImage: settings.headerBackgroundImage,
             headerIcons: settings.headerIcons,
             headerIconVariants: settings.headerIconVariants,
             footerStyle: settings.footerStyle,
@@ -429,7 +431,8 @@ router.put('/', settingsWriteGuard, async (req, res) => {
     try {
   if (savedObj.favicon) savedObj.favicon = toAbsolute(req, savedObj.favicon);
       if (savedObj.logo && savedObj.logo.startsWith('/uploads/')) savedObj.logo = toAbsolute(req, savedObj.logo);
-      if (savedObj.authBackgroundImage && savedObj.authBackgroundImage.startsWith('/uploads/')) savedObj.authBackgroundImage = toAbsolute(req, savedObj.authBackgroundImage);
+  if (savedObj.authBackgroundImage && savedObj.authBackgroundImage.startsWith('/uploads/')) savedObj.authBackgroundImage = toAbsolute(req, savedObj.authBackgroundImage);
+  if (savedObj.headerBackgroundImage && savedObj.headerBackgroundImage.startsWith('/uploads/')) savedObj.headerBackgroundImage = toAbsolute(req, savedObj.headerBackgroundImage);
       if (savedObj.newArrivalsBannerImage && savedObj.newArrivalsBannerImage.startsWith('/uploads/')) savedObj.newArrivalsBannerImage = toAbsolute(req, savedObj.newArrivalsBannerImage);
     } catch {}
     if (savedObj.googleAuth) {
@@ -560,6 +563,66 @@ router.post('/upload/auth-background', adminAuth, upload.single('file'), async (
     } catch {}
 
   res.json({ url: finalUrl, stored: hasCloudinaryCreds ? 'cloudinary' : 'inline' });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Upload header background image (admin only)
+router.post('/upload/header-background', adminAuth, upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: 'No file uploaded' });
+    }
+
+    let settings = await Settings.findOne();
+    if (!settings) settings = new Settings();
+
+    let finalUrl = `/uploads/${req.file.filename}`;
+    const hasCloudinaryCreds = await hasCloudinaryCredentials();
+    if (hasCloudinaryCreds) {
+      try {
+        await ensureCloudinaryConfig();
+        const uploadResult = await cloudinary.uploader.upload(path.join(uploadDir, req.file.filename), {
+          folder: 'settings/header',
+          resource_type: 'image',
+          use_filename: true,
+          unique_filename: false,
+          overwrite: true
+        });
+        if (uploadResult?.secure_url) {
+          finalUrl = uploadResult.secure_url;
+          try { fs.unlinkSync(path.join(uploadDir, req.file.filename)); } catch {}
+        }
+      } catch (cloudErr) {
+        console.warn('[header-background] Cloudinary upload failed, keeping local file:', cloudErr.message);
+      }
+    }
+
+    if (!hasCloudinaryCreds) {
+      try {
+        const filePath = path.join(uploadDir, req.file.filename);
+        const buf = fs.readFileSync(filePath);
+        const b64 = buf.toString('base64');
+        const mime = req.file.mimetype || 'image/png';
+        finalUrl = `data:${mime};base64,${b64}`;
+        try { fs.unlinkSync(filePath); } catch {}
+      } catch (inlineErr) {
+        console.warn('[header-background] Failed to inline image, falling back to relative path:', inlineErr.message);
+      }
+    }
+
+    settings.headerBackgroundImage = finalUrl;
+    await settings.save();
+
+    try {
+      const broadcast = req.app.get('broadcastToClients');
+      if (typeof broadcast === 'function') {
+        broadcast({ type: 'settings_updated', data: { headerBackgroundImage: settings.headerBackgroundImage } });
+      }
+    } catch {}
+
+    res.json({ url: toAbsolute(req, finalUrl), stored: hasCloudinaryCreds ? 'cloudinary' : 'inline' });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
