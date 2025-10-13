@@ -1,5 +1,5 @@
 import cloudinary from '../services/cloudinaryClient.js';
-import { ensureCloudinaryConfig } from '../services/cloudinaryConfigService.js';
+import { ensureCloudinaryConfig, cloudinarySettingsDiagnostics } from '../services/cloudinaryConfigService.js';
 
 // List resources with optional folder, type, and pagination
 export const listResources = async (req, res) => {
@@ -101,5 +101,36 @@ export const renameResource = async (req, res) => {
   } catch (err) {
     console.error('Cloudinary renameResource error:', err);
     return res.status(500).json({ message: 'Failed to rename resource', error: err.message });
+  }
+};
+
+// Health check for Cloudinary configuration and API connectivity
+export const health = async (req, res) => {
+  const timestamp = new Date().toISOString();
+  try {
+    const diag = await cloudinarySettingsDiagnostics().catch(() => null);
+    const configured = await ensureCloudinaryConfig();
+    if (!configured) {
+      return res.status(200).json({ ok: false, status: 'not_configured', timestamp, diag });
+    }
+    // Try Cloudinary ping (Admin API). If not available, fallback to listing a single resource.
+    try {
+      if (typeof cloudinary.api.ping === 'function') {
+        const ping = await cloudinary.api.ping();
+        return res.json({ ok: true, status: 'ok', timestamp, ping, diag });
+      }
+    } catch (e) {
+      // ignore and fallback
+    }
+    try {
+      const sample = await cloudinary.api.resources({ type: 'upload', resource_type: 'image', max_results: 1 });
+      return res.json({ ok: true, status: 'ok', timestamp, sampleCount: Array.isArray(sample?.resources) ? sample.resources.length : 0, diag });
+    } catch (apiErr) {
+      const msg = apiErr?.error?.message || apiErr?.message || 'cloudinary_api_error';
+      const authLike = /api_key|signature|authorization|not allowed|invalid/i.test(msg);
+      return res.status(authLike ? 400 : 502).json({ ok: false, status: authLike ? 'auth_failed' : 'api_error', message: msg, timestamp, diag });
+    }
+  } catch (err) {
+    return res.status(500).json({ ok: false, status: 'error', message: err?.message || 'unknown_error', timestamp });
   }
 };
