@@ -31,7 +31,20 @@ import { cacheGet, cacheSet } from '../utils/cache/simpleCache.js';
 
 // Get all products
 // Shared query builder so both product listing and facet endpoints derive sizes/colors from actual filtered product set
-function buildProductQuery(params) {
+async function resolveCategoryAndDescendants(categoryParam) {
+  if (!categoryParam) return null;
+  let catDoc = null;
+  if (typeof categoryParam === 'string' && /^[a-fA-F0-9]{24}$/.test(categoryParam)) {
+    catDoc = await Category.findById(categoryParam).select('_id');
+  } else if (typeof categoryParam === 'string') {
+    catDoc = await Category.findOne({ $or: [ { slug: categoryParam }, { name: new RegExp(`^${categoryParam}$`, 'i') } ] }).select('_id');
+  }
+  if (!catDoc) return { ids: null, notFound: true };
+  const descendants = await Category.find({ $or: [ { _id: catDoc._id }, { ancestors: catDoc._id } ] }).select('_id');
+  return { ids: descendants.map(d => d._id.toString()), notFound: false };
+}
+
+async function buildProductQuery(params) {
   const { search, category, categories, isNew, isFeatured, onSale, includeInactive, colors, sizes, size, color, minPrice, maxPrice, primaryOnly, strictCategory } = params;
   let query = {};
 
@@ -43,18 +56,35 @@ function buildProductQuery(params) {
   }
 
   if (category) {
-    // If primaryOnly or strictCategory specified, match only primary category field
-    if (primaryOnly === 'true' || strictCategory === 'true') {
-      query.$and = [...(query.$and || []), { category }];
-    } else {
-      // Default behavior: product matches if category is primary or listed in additional categories
-      query.$and = [...(query.$and || []), { $or: [ { category }, { categories: category } ] }];
+    const resolved = await resolveCategoryAndDescendants(category);
+    if (resolved?.notFound) {
+      // Force empty query
+      query.$and = [...(query.$and || []), { _id: { $in: [] } }];
+    } else if (resolved?.ids && resolved.ids.length) {
+      if (primaryOnly === 'true' || strictCategory === 'true') {
+        query.$and = [...(query.$and || []), { category: { $in: resolved.ids } }];
+      } else {
+        query.$and = [...(query.$and || []), { $or: [ { category: { $in: resolved.ids } }, { categories: { $in: resolved.ids } } ] }];
+      }
     }
   }
   if (categories) {
-    const list = String(categories).split(',').map(s => s.trim()).filter(Boolean);
-    if (list.length) {
-      query.$and = [ ...(query.$and || []), { $or: [ { category: { $in: list } }, { categories: { $in: list } } ] } ];
+    const listRaw = String(categories).split(',').map(s => s.trim()).filter(Boolean);
+    if (listRaw.length) {
+      // Expand each to include descendants if possible (ignore notFound tokens silently)
+      const allIds = new Set();
+      for (const token of listRaw) {
+        const resolved = await resolveCategoryAndDescendants(token);
+        if (resolved?.ids?.length) {
+          resolved.ids.forEach(id => allIds.add(id));
+        } else if (!resolved?.notFound) {
+          allIds.add(token); // fallback raw id
+        }
+      }
+      const ids = Array.from(allIds);
+      if (ids.length) {
+        query.$and = [ ...(query.$and || []), { $or: [ { category: { $in: ids } }, { categories: { $in: ids } } ] } ];
+      }
     }
   }
   if (isNew === 'true') query.isNew = true;
@@ -109,7 +139,7 @@ export const getProducts = async (req, res) => {
     if (forceEmpty) {
       return res.json([]);
     }
-    const query = buildProductQuery(req.query);
+  const query = await buildProductQuery(req.query);
 
     const products = await Product.find(query)
       .select('+colors.name +colors.code +colors.images +colors.sizes')
@@ -147,7 +177,7 @@ export const getProductFilters = async (req, res) => {
       if (catDoc) req.query.category = catDoc._id.toString(); else delete req.query.category; // remove invalid
     }
 
-    const baseQuery = buildProductQuery(req.query);
+  const baseQuery = await buildProductQuery(req.query);
 
     // Build cache key (category + selected filters subset) - avoid including transient params like random query order
     const cacheKeyParts = [
