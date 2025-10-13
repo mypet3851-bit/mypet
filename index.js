@@ -100,7 +100,7 @@ const defaultAllowedOrigins = [
   'http://127.0.0.1:3000',
   'https://relaxed-cucurucho-360448.netlify.app',
   // Self origin (Render) – harmless for health checks and internal tools
-  'https://leohol.onrender.com'
+  'https://mypet-98uh.onrender.com'
 ];
 
 // Allow override via env (comma-separated list)
