@@ -187,6 +187,33 @@ const settingsSchema = new mongoose.Schema({
     language: { type: String, default: '' },
     currency: { type: String, default: '' }
   },
+  // Header icon backgrounds (color and/or image)
+  headerIconBackgrounds: {
+    cart: {
+      color: { type: String, default: '' },
+      image: { type: String, default: '' }
+    },
+    wishlist: {
+      color: { type: String, default: '' },
+      image: { type: String, default: '' }
+    },
+    account: {
+      color: { type: String, default: '' },
+      image: { type: String, default: '' }
+    },
+    search: {
+      color: { type: String, default: '' },
+      image: { type: String, default: '' }
+    },
+    language: {
+      color: { type: String, default: '' },
+      image: { type: String, default: '' }
+    },
+    currency: {
+      color: { type: String, default: '' },
+      image: { type: String, default: '' }
+    }
+  },
   footerStyle: {
     type: String,
     enum: ['simple', 'detailed', 'newsletter'],
