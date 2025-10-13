@@ -10,5 +10,7 @@ router.get('/folders', adminAuth, listFolders);
 router.post('/delete', adminAuth, deleteResources);
 router.post('/rename', adminAuth, renameResource);
 router.get('/health', adminAuth, health);
+// Public health endpoint (read-only diagnostics)
+router.get('/health/public', health);
 
 export default router;
