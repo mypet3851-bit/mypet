@@ -146,6 +146,11 @@ const settingsSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  // Optional header background image (URL, data URI, or /uploads relative path)
+  headerBackgroundImage: {
+    type: String,
+    default: ''
+  },
   headerTextColor: {
     type: String,
     default: ''
