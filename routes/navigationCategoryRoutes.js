@@ -22,7 +22,13 @@ async function ensureUniqueSlug(desired, excludeId) {
   // Loop until a free slug is found
   // eslint-disable-next-line no-constant-condition
   while (true) {
-    const exists = await NavigationCategory.findOne({ slug: candidate, ...(excludeId ? { _id: { $ne: excludeId } } : {}) }).select('_id');
+    const exists = await NavigationCategory.findOne({
+      ...(excludeId ? { _id: { $ne: excludeId } } : {}),
+      $or: [
+        { slug: candidate },
+        { 'slugGroups.slug': candidate }
+      ]
+    }).select('_id');
     if (!exists) return candidate;
     candidate = `${base}-${counter++}`;
   }
@@ -33,6 +39,7 @@ router.get('/', async (req, res) => {
   try {
     const categories = await NavigationCategory.find()
       .populate('categories', '_id name slug path')
+      .populate('slugGroups.categories', '_id name slug path')
       .sort('order');
     res.json(categories);
   } catch (error) {
@@ -58,7 +65,10 @@ router.post('/', adminAuth, async (req, res) => {
     }
     const category = new NavigationCategory(body);
     const savedCategory = await category.save();
-    const populated = await savedCategory.populate('categories', '_id name slug path');
+    const populated = await savedCategory.populate([
+      { path: 'categories', select: '_id name slug path' },
+      { path: 'slugGroups.categories', select: '_id name slug path' }
+    ]);
     res.status(201).json(populated);
   } catch (error) {
     if (error.code === 11000) {
@@ -106,7 +116,10 @@ router.put('/:id([0-9a-fA-F]{24})', adminAuth, async (req, res) => {
       req.params.id,
       body,
       { new: true, runValidators: true }
-    ).populate('categories', '_id name slug path');
+    ).populate([
+      { path: 'categories', select: '_id name slug path' },
+      { path: 'slugGroups.categories', select: '_id name slug path' }
+    ]);
     
     if (!category) {
       return res.status(404).json({ message: 'Category not found' });
@@ -137,11 +150,118 @@ router.delete('/:id([0-9a-fA-F]{24})', adminAuth, async (req, res) => {
   }
 });
 
+// Groups API
+// GET groups for a navigation item
+router.get('/:id([0-9a-fA-F]{24})/groups', async (req, res) => {
+  try {
+    const doc = await NavigationCategory.findById(req.params.id)
+      .populate('slugGroups.categories', '_id name slug path');
+    if (!doc) return res.status(404).json({ message: 'Navigation item not found' });
+    res.json(doc.slugGroups || []);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Add group
+router.post('/:id([0-9a-fA-F]{24})/groups', adminAuth, async (req, res) => {
+  try {
+    const { slug, title, categories = [], categorySlugs = [] } = req.body || {};
+    const doc = await NavigationCategory.findById(req.params.id);
+    if (!doc) return res.status(404).json({ message: 'Navigation item not found' });
+
+    const sanitized = sanitizeSlug(slug || title || '');
+    // Ensure global uniqueness via helper
+    const unique = await ensureUniqueSlug(sanitized);
+
+    let catIds = Array.isArray(categories) ? categories.slice() : [];
+    if ((!catIds.length) && Array.isArray(categorySlugs) && categorySlugs.length) {
+      const found = await Category.find({ slug: { $in: categorySlugs } }).select('_id');
+      catIds = found.map(f => f._id);
+    }
+
+    doc.slugGroups = doc.slugGroups || [];
+    doc.slugGroups.push({ slug: unique, title, categories: catIds });
+    await doc.save();
+    await doc.populate('slugGroups.categories', '_id name slug path');
+    res.status(201).json(doc.slugGroups);
+  } catch (error) {
+    if (error.code === 11000) {
+      res.status(400).json({ message: 'Slug already exists' });
+    } else {
+      res.status(400).json({ message: error.message });
+    }
+  }
+});
+
+// Update group by slug
+router.put('/:id([0-9a-fA-F]{24})/groups/:groupSlug', adminAuth, async (req, res) => {
+  try {
+    const { slug, title, categories = [], categorySlugs = [] } = req.body || {};
+    const doc = await NavigationCategory.findById(req.params.id);
+    if (!doc) return res.status(404).json({ message: 'Navigation item not found' });
+
+    const grp = (doc.slugGroups || []).find(g => g.slug === req.params.groupSlug);
+    if (!grp) return res.status(404).json({ message: 'Group not found' });
+
+    if (slug && slug !== grp.slug) {
+      grp.slug = await ensureUniqueSlug(slug, doc._id); // excludeId only avoids same doc slug collision
+    }
+    if (typeof title === 'string') grp.title = title;
+
+    let catIds = Array.isArray(categories) ? categories.slice() : undefined;
+    if (!catIds && Array.isArray(categorySlugs) && categorySlugs.length) {
+      const found = await Category.find({ slug: { $in: categorySlugs } }).select('_id');
+      catIds = found.map(f => f._id);
+    }
+    if (catIds) grp.categories = catIds;
+
+    await doc.save();
+    await doc.populate('slugGroups.categories', '_id name slug path');
+    res.json(doc.slugGroups);
+  } catch (error) {
+    if (error.code === 11000) {
+      res.status(400).json({ message: 'Slug already exists' });
+    } else {
+      res.status(400).json({ message: error.message });
+    }
+  }
+});
+
+// Delete group
+router.delete('/:id([0-9a-fA-F]{24})/groups/:groupSlug', adminAuth, async (req, res) => {
+  try {
+    const doc = await NavigationCategory.findById(req.params.id);
+    if (!doc) return res.status(404).json({ message: 'Navigation item not found' });
+    const before = (doc.slugGroups || []).length;
+    doc.slugGroups = (doc.slugGroups || []).filter(g => g.slug !== req.params.groupSlug);
+    if (doc.slugGroups.length === before) return res.status(404).json({ message: 'Group not found' });
+    await doc.save();
+    res.json({ message: 'Group deleted' });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Public: fetch by group slug (across all navigation items)
+router.get('/group/by-slug/:groupSlug', async (req, res) => {
+  try {
+    const doc = await NavigationCategory.findOne({ 'slugGroups.slug': req.params.groupSlug, isActive: true })
+      .populate('slugGroups.categories', '_id name slug path');
+    if (!doc) return res.status(404).json({ message: 'Group not found' });
+    const grp = (doc.slugGroups || []).find(g => g.slug === req.params.groupSlug);
+    res.json({ navigationId: doc._id, group: grp });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
 // Public: get a single navigation category by slug with its mapped categories
 router.get('/:slug', async (req, res) => {
   try {
     const doc = await NavigationCategory.findOne({ slug: req.params.slug, isActive: true })
-      .populate('categories', '_id name slug path');
+      .populate('categories', '_id name slug path')
+      .populate('slugGroups.categories', '_id name slug path');
     if (!doc) return res.status(404).json({ message: 'Navigation item not found' });
     res.json(doc);
   } catch (error) {
