@@ -4,7 +4,6 @@ const categorySchema = new mongoose.Schema({
   name: {
     type: String,
     required: [true, 'Category name is required'],
-    unique: true,
     trim: true
   },
   description: {
@@ -19,6 +18,29 @@ const categorySchema = new mongoose.Schema({
     type: String,
     unique: true,
     lowercase: true
+  },
+  // Hierarchy
+  parent: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Category',
+    default: null,
+    index: true
+  },
+  // Ancestor chain (root -> ... -> parent)
+  ancestors: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Category',
+    index: true
+  }],
+  depth: {
+    type: Number,
+    default: 0,
+    index: true
+  },
+  // SEO-friendly full path of slugs (e.g., "men/tops/shirts")
+  path: {
+    type: String,
+    index: true
   },
   isActive: {
     type: Boolean,
@@ -38,7 +60,7 @@ const categorySchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Create a more robust slug from name before saving
+// Create a more robust slug from name before saving and compute hierarchy fields
 categorySchema.pre('save', async function(next) {
   try {
     if (!this.name) {
@@ -80,6 +102,32 @@ categorySchema.pre('save', async function(next) {
     }
 
     this.slug = slug;
+
+    // Guard: parent cannot be itself
+    if (this.parent && this._id && this.parent.toString() === this._id.toString()) {
+      throw new Error('Category cannot be its own parent');
+    }
+
+    // Compute ancestors/depth/path based on parent
+    if (this.parent) {
+      const parentDoc = await mongoose.model('Category').findById(this.parent).select('_id slug path ancestors depth');
+      if (!parentDoc) {
+        throw new Error('Parent category not found');
+      }
+      // Prevent cycles: parent cannot be a descendant of this
+      if (this._id && parentDoc.ancestors && parentDoc.ancestors.map(String).includes(this._id.toString())) {
+        throw new Error('Invalid parent: would create a cycle');
+      }
+      this.ancestors = [...(parentDoc.ancestors || []), parentDoc._id];
+      this.depth = (parentDoc.depth || 0) + 1;
+      const parentPath = parentDoc.path || parentDoc.slug;
+      this.path = parentPath ? `${parentPath}/${this.slug}` : this.slug;
+    } else {
+      // Root category
+      this.ancestors = [];
+      this.depth = 0;
+      this.path = this.slug;
+    }
     next();
   } catch (error) {
     next(error);
@@ -91,5 +139,12 @@ categorySchema.index({ slug: 1 }, {
   unique: true,
   collation: { locale: 'en', strength: 2 }
 });
+
+// Helpful indexes for hierarchy queries
+categorySchema.index({ parent: 1, order: 1 });
+categorySchema.index({ ancestors: 1 });
+categorySchema.index({ path: 1 });
+// Enforce name uniqueness per parent (case-insensitive)
+categorySchema.index({ parent: 1, name: 1 }, { unique: true, collation: { locale: 'en', strength: 2 } });
 
 export default mongoose.model('Category', categorySchema);
