@@ -161,6 +161,16 @@ const settingsSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  // Global store background (applies to the entire site body)
+  storeBackgroundImage: {
+    type: String,
+    default: ''
+  },
+  // Optional global store background color (fallback/overlay)
+  storeBackgroundColor: {
+    type: String,
+    default: ''
+  },
   headerTextColor: {
     type: String,
     default: ''
