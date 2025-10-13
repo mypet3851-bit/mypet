@@ -37,10 +37,31 @@ const navigationCategorySchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Category',
     index: true
+  }],
+  // New: allow multiple slugs under a single navigation item, each with its own categories
+  slugGroups: [{
+    slug: {
+      type: String,
+      required: true,
+      lowercase: true,
+      trim: true
+    },
+    title: {
+      type: String,
+      trim: true
+    },
+    categories: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Category'
+    }]
   }]
 }, {
   timestamps: true
 });
+
+// Unique index for nested group slugs across the whole collection
+// This enforces that each slug across all groups is globally unique
+navigationCategorySchema.index({ 'slugGroups.slug': 1 }, { unique: true, sparse: true, collation: { locale: 'en', strength: 2 } });
 
 // Create slug from name (if needed) and sync categories from subCategories before saving
 navigationCategorySchema.pre('save', async function(next) {
@@ -79,6 +100,25 @@ navigationCategorySchema.pre('save', async function(next) {
         const docs = await Category.find({ slug: { $in: slugs } }).select('_id slug');
         this.categories = docs.map(d => d._id);
       }
+    }
+
+    // 3) Sanitize group slugs and ensure they are unique within the document.
+    if (Array.isArray(this.slugGroups) && this.slugGroups.length) {
+      const used = new Set();
+      this.slugGroups = this.slugGroups.map((grp) => {
+        let base = String(grp.slug || '').toLowerCase().trim()
+          .replace(/[^\w\s-]/g, '')
+          .replace(/\s+/g, '-')
+          .replace(/-+/g, '-');
+        if (!base) base = 'nav';
+        let candidate = base;
+        let c = 1;
+        while (used.has(candidate)) {
+          candidate = `${base}-${c++}`;
+        }
+        used.add(candidate);
+        return { ...grp, slug: candidate };
+      });
     }
 
     next();
