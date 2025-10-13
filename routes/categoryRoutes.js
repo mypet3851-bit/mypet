@@ -6,13 +6,17 @@ import {
   createCategory,
   updateCategory,
   deleteCategory,
-  reorderCategories
+  reorderCategories,
+  getSubcategories,
+  getCategoryTree
 } from '../controllers/categoryController.js';
 
 const router = express.Router();
 
 // Public routes
 router.get('/', getAllCategories);
+router.get('/tree', getCategoryTree);
+router.get('/parent/:parentId', getSubcategories); // parentId = 'root' for root categories
 router.get('/:id', getCategory);
 
 // Admin routes
