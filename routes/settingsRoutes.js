@@ -109,6 +109,15 @@ router.get('/', async (req, res) => {
   if (obj.headerBackgroundImage && obj.headerBackgroundImage.startsWith('/uploads/')) obj.headerBackgroundImage = toAbsolute(req, obj.headerBackgroundImage);
   if (obj.navBackgroundImage && obj.navBackgroundImage.startsWith('/uploads/')) obj.navBackgroundImage = toAbsolute(req, obj.navBackgroundImage);
   if (obj.announcementsBackgroundImage && obj.announcementsBackgroundImage.startsWith('/uploads/')) obj.announcementsBackgroundImage = toAbsolute(req, obj.announcementsBackgroundImage);
+  // Normalize header icon background images
+  if (obj.headerIconBackgrounds) {
+    ['cart','wishlist','account','search','language','currency'].forEach(k => {
+      const v = obj.headerIconBackgrounds?.[k]?.image;
+      if (typeof v === 'string' && v.startsWith('/uploads/')) {
+        obj.headerIconBackgrounds[k].image = toAbsolute(req, v);
+      }
+    });
+  }
     } catch {}
     res.json(obj);
   } catch (error) {
@@ -375,6 +384,7 @@ router.put('/', settingsWriteGuard, async (req, res) => {
             announcementsBackgroundImage: settings.announcementsBackgroundImage,
             headerIcons: settings.headerIcons,
             headerIconVariants: settings.headerIconVariants,
+            headerIconBackgrounds: settings.headerIconBackgrounds,
             footerStyle: settings.footerStyle,
             productCardStyle: settings.productCardStyle,
             productGridStyle: settings.productGridStyle,
@@ -439,6 +449,14 @@ router.put('/', settingsWriteGuard, async (req, res) => {
   if (savedObj.headerBackgroundImage && savedObj.headerBackgroundImage.startsWith('/uploads/')) savedObj.headerBackgroundImage = toAbsolute(req, savedObj.headerBackgroundImage);
   if (savedObj.navBackgroundImage && savedObj.navBackgroundImage.startsWith('/uploads/')) savedObj.navBackgroundImage = toAbsolute(req, savedObj.navBackgroundImage);
     if (savedObj.announcementsBackgroundImage && savedObj.announcementsBackgroundImage.startsWith('/uploads/')) savedObj.announcementsBackgroundImage = toAbsolute(req, savedObj.announcementsBackgroundImage);
+      if (savedObj.headerIconBackgrounds) {
+        ['cart','wishlist','account','search','language','currency'].forEach(k => {
+          const v = savedObj.headerIconBackgrounds?.[k]?.image;
+          if (typeof v === 'string' && v.startsWith('/uploads/')) {
+            savedObj.headerIconBackgrounds[k].image = toAbsolute(req, v);
+          }
+        });
+      }
       if (savedObj.newArrivalsBannerImage && savedObj.newArrivalsBannerImage.startsWith('/uploads/')) savedObj.newArrivalsBannerImage = toAbsolute(req, savedObj.newArrivalsBannerImage);
     } catch {}
     if (savedObj.googleAuth) {
@@ -499,6 +517,81 @@ router.post('/upload/header-icon/:key', adminAuth, upload.single('file'), async 
     } catch {}
 
     res.json({ key, url: publicUrl });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Upload header icon background image (admin only)
+router.post('/upload/header-icon-bg/:key', adminAuth, upload.single('file'), async (req, res) => {
+  try {
+    const { key } = req.params; // cart|wishlist|account|search|language|currency
+    const allowed = ['cart','wishlist','account','search','language','currency'];
+    if (!allowed.includes(key)) {
+      return res.status(400).json({ message: 'Invalid header icon key' });
+    }
+    if (!req.file) {
+      return res.status(400).json({ message: 'No file uploaded' });
+    }
+
+    let settings = await Settings.findOne();
+    if (!settings) settings = new Settings();
+
+    let finalUrl = `/uploads/${req.file.filename}`;
+    const hasCloudinaryCreds = await hasCloudinaryCredentials();
+    if (hasCloudinaryCreds) {
+      try {
+        await ensureCloudinaryConfig();
+        const uploadResult = await cloudinary.uploader.upload(path.join(uploadDir, req.file.filename), {
+          folder: `settings/header-icons/${key}`,
+          resource_type: 'image',
+          use_filename: true,
+          unique_filename: false,
+          overwrite: true
+        });
+        if (uploadResult?.secure_url) {
+          finalUrl = uploadResult.secure_url;
+          try { fs.unlinkSync(path.join(uploadDir, req.file.filename)); } catch {}
+        }
+      } catch (cloudErr) {
+        console.warn('[header-icon-bg] Cloudinary upload failed, keeping local file:', cloudErr.message);
+      }
+    }
+
+    if (!hasCloudinaryCreds) {
+      try {
+        const filePath = path.join(uploadDir, req.file.filename);
+        const buf = fs.readFileSync(filePath);
+        const b64 = buf.toString('base64');
+        const mime = req.file.mimetype || 'image/png';
+        finalUrl = `data:${mime};base64,${b64}`;
+        try { fs.unlinkSync(filePath); } catch {}
+      } catch (inlineErr) {
+        console.warn('[header-icon-bg] Failed to inline image, using relative path:', inlineErr.message);
+      }
+    }
+
+    settings.headerIconBackgrounds = settings.headerIconBackgrounds || {};
+    settings.headerIconBackgrounds[key] = settings.headerIconBackgrounds[key] || { color: '', image: '' };
+    settings.headerIconBackgrounds[key].image = finalUrl;
+    settings.markModified('headerIconBackgrounds');
+    await settings.save();
+
+    // Broadcast minimal update
+    try {
+      const broadcast = req.app.get('broadcastToClients');
+      if (typeof broadcast === 'function') {
+        const payload = { ...settings.headerIconBackgrounds };
+        // Ensure absolute for this one key if needed
+        const maybeRel = payload?.[key]?.image;
+        if (typeof maybeRel === 'string' && maybeRel.startsWith('/uploads/')) {
+          payload[key].image = toAbsolute(req, maybeRel);
+        }
+        broadcast({ type: 'settings_updated', data: { headerIconBackgrounds: payload } });
+      }
+    } catch {}
+
+    res.json({ key, url: toAbsolute(req, settings.headerIconBackgrounds[key].image), stored: hasCloudinaryCreds ? 'cloudinary' : 'inline' });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
