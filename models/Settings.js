@@ -151,6 +151,11 @@ const settingsSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  // Optional background image for the announcements (sliding text) bar
+  announcementsBackgroundImage: {
+    type: String,
+    default: ''
+  },
   // Optional background image for the navigation links bar (below header)
   navBackgroundImage: {
     type: String,
