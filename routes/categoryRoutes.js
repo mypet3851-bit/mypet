@@ -14,7 +14,17 @@ import {
 const router = express.Router();
 
 // Public routes
-router.get('/', getAllCategories);
+// Alias handler: support query params active and parent used by mobile
+router.get('/', (req, res, next) => {
+  // If parent query is provided, redirect to /parent/:parentId
+  if (typeof req.query.parent === 'string') {
+    req.params.parentId = req.query.parent || 'root';
+    return getSubcategories(req, res, next);
+  }
+  // If active=true, filter via controller (add query; controller already returns all)
+  // For now, just call default controller which returns all; client can filter.
+  return getAllCategories(req, res, next);
+});
 router.get('/tree', getCategoryTree);
 router.get('/parent/:parentId', getSubcategories); // parentId = 'root' for root categories
 router.get('/:id', getCategory);

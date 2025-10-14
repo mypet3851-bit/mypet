@@ -31,6 +31,13 @@ import { updateProductImages } from '../controllers/productController.js';
 const router = express.Router();
 
 // Public routes
+// Alias: allow GET /api/products?q=term (maps to search controller when q present)
+router.get('/', (req, res, next) => {
+  if (req.query && typeof req.query.q === 'string' && req.query.q.trim()) {
+    return searchProducts(req, res, next);
+  }
+  return getProducts(req, res, next);
+});
 router.get('/', getProducts);
 router.get('/filters', getProductFilters); // must be before :id
 router.get('/search', searchProducts);

@@ -13,6 +13,8 @@ const router = express.Router();
 
 // Public routes
 router.get('/active', getActiveAnnouncements);
+// Mobile alias route used by app
+router.get('/mobile-active', getActiveAnnouncements);
 
 // Admin routes
 router.get('/', adminAuth, getAnnouncements);

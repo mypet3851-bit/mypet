@@ -1,6 +1,7 @@
 import express from 'express';
-import { login, register, getCurrentUser, promoteToAdmin, isAdmin, refresh, logout } from '../controllers/authController.js';
+import { login, register, getCurrentUser, promoteToAdmin, isAdmin, refresh, logout, checkIdentifier } from '../controllers/authController.js';
 import { googleAuth } from '../controllers/googleAuthController.js';
+import { facebookAuth } from '../controllers/facebookAuthController.js';
 import Settings from '../models/Settings.js';
 import { auth } from '../middleware/auth.js';
 
@@ -8,8 +9,10 @@ const router = express.Router();
 
 router.post('/login', login);
 router.post('/register', register);
+router.post('/check-identifier', checkIdentifier);
 // Google OAuth (One-Tap / Button) - expects { credential }
 router.post('/google', googleAuth);
+router.post('/facebook', facebookAuth);
 router.post('/refresh', refresh);
 router.post('/logout', auth, logout);
 // Public auth config (currently only Google)
