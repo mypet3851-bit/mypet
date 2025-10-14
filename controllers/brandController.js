@@ -22,9 +22,9 @@ export const listActiveBrands = asyncHandler(async (req, res) => {
 });
 
 export const createBrand = asyncHandler(async (req, res) => {
-  const { name, slug, imageUrl, linkUrl, isActive = true, order = 0 } = req.body || {};
+  const { name, slug, label, labelImageUrl, imageUrl, linkUrl, isActive = true, order = 0 } = req.body || {};
   const normalizedSlug = slug ? String(slug).trim().toLowerCase() : (name ? slugify(name) : undefined);
-  const brand = await Brand.create({ name, slug: normalizedSlug, imageUrl, linkUrl, isActive, order });
+  const brand = await Brand.create({ name, slug: normalizedSlug, label, labelImageUrl, imageUrl, linkUrl, isActive, order });
   res.status(201).json(brand);
 });
 
@@ -32,7 +32,7 @@ export const updateBrand = asyncHandler(async (req, res) => {
   const { id } = req.params;
   const brand = await Brand.findById(id);
   if (!brand) return res.status(404).json({ message: 'Brand not found' });
-  const updatable = ['name', 'slug', 'imageUrl', 'linkUrl', 'isActive', 'order'];
+  const updatable = ['name', 'slug', 'label', 'labelImageUrl', 'imageUrl', 'linkUrl', 'isActive', 'order'];
   updatable.forEach((k) => {
     if (Object.prototype.hasOwnProperty.call(req.body || {}, k)) {
       const val = req.body[k];
