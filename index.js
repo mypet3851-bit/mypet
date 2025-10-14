@@ -60,6 +60,7 @@ import paypalRoutes from './routes/paypalRoutes.js';
 import legalRoutes from './routes/legalRoutes.js';
 import uploadRoutes from './routes/uploadRoutes.js';
 import pageRoutes from './routes/pageRoutes.js';
+import formRoutes from './routes/formRoutes.js';
 
 // Path Setup
 const __filename = fileURLToPath(import.meta.url);
@@ -218,6 +219,7 @@ app.use('/api/db', dbRoutes);
 // File upload endpoints (must come before static /uploads to avoid intercepting multipart requests)
 app.use('/api/uploads', uploadRoutes);
 app.use('/api/pages', pageRoutes);
+app.use('/api/forms', formRoutes);
 
 // Health Check Route
 app.get('/health', (req, res) => {
@@ -428,6 +430,7 @@ const startServer = async () => {
     const Settings = (await import('./models/Settings.js')).default;
     const FooterSettings = (await import('./models/FooterSettings.js')).default;
     const Background = (await import('./models/Background.js')).default;
+  const Form = (await import('./models/Form.js')).default;
 
     // Create default admin user
     await User.createDefaultAdmin();
@@ -440,6 +443,9 @@ const startServer = async () => {
 
     // Create default background
     await Background.createDefaultBackground();
+
+  // Create default forms (if none)
+  try { await Form.createDefaultForms(); } catch {}
 
     // Ensure a test delivery company exists
     try {
