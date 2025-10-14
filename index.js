@@ -60,7 +60,9 @@ import paypalRoutes from './routes/paypalRoutes.js';
 import legalRoutes from './routes/legalRoutes.js';
 import uploadRoutes from './routes/uploadRoutes.js';
 import pageRoutes from './routes/pageRoutes.js';
+import translateRoutes from './routes/translateRoutes.js';
 import formRoutes from './routes/formRoutes.js';
+import flashSaleRoutes from './routes/flashSaleRoutes.js';
 
 // Path Setup
 const __filename = fileURLToPath(import.meta.url);
@@ -220,6 +222,8 @@ app.use('/api/db', dbRoutes);
 app.use('/api/uploads', uploadRoutes);
 app.use('/api/pages', pageRoutes);
 app.use('/api/forms', formRoutes);
+app.use('/api/flash-sales', flashSaleRoutes);
+app.use('/api/translate', translateRoutes);
 
 // Health Check Route
 app.get('/health', (req, res) => {
