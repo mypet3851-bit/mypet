@@ -43,4 +43,11 @@ router.post('/upload', adminAuth, upload.single('file'), (req, res) => {
   res.json({ url });
 });
 
+// Label image upload endpoint (returns URL)
+router.post('/upload-label', adminAuth, upload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ message: 'No file uploaded' });
+  const url = `/uploads/${req.file.filename}`;
+  res.json({ url });
+});
+
 export default router;
