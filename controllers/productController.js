@@ -198,6 +198,30 @@ export const getProductFilters = async (req, res) => {
       if (catDoc) req.query.category = catDoc._id.toString(); else delete req.query.category; // remove invalid
     }
 
+    // Resolve brandSlug to id if provided
+    let forceEmpty = false;
+    if (req.query.brandSlug) {
+      try {
+        const b = await Brand.findOne({ slug: String(req.query.brandSlug).toLowerCase() }).select('_id');
+        if (b) req.query.brand = b._id.toString(); else forceEmpty = true;
+      } catch (_) {
+        forceEmpty = true;
+      }
+    }
+
+    if (forceEmpty) {
+      return res.json({
+        minPrice: 0,
+        maxPrice: 0,
+        priceBuckets: [],
+        sizes: [],
+        colors: [],
+        colorObjects: [],
+        categories: [],
+        _ms: Date.now() - start
+      });
+    }
+
   const baseQuery = await buildProductQuery(req.query);
 
     // Build cache key (category + selected filters subset) - avoid including transient params like random query order
