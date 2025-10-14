@@ -42,7 +42,7 @@ export const getPageBySlug = asyncHandler(async (req, res) => {
 
 // POST /api/pages
 export const createPage = asyncHandler(async (req, res) => {
-  const { title, slug, content = '', status = 'draft', metaTitle = '', metaDescription = '' } = req.body || {};
+  const { title, slug, content = '', status = 'draft', metaTitle = '', metaDescription = '', settings = {} } = req.body || {};
   if (!title || !slug) return res.status(400).json({ message: 'Title and slug are required' });
   const exists = await Page.findOne({ slug });
   if (exists) return res.status(409).json({ message: 'Slug already exists' });
@@ -55,7 +55,8 @@ export const createPage = asyncHandler(async (req, res) => {
     metaTitle,
     metaDescription,
     publishedAt: status === 'published' ? now : undefined,
-    updatedBy: req.user?._id
+    updatedBy: req.user?._id,
+    settings
   });
   res.status(201).json(page);
 });
