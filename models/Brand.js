@@ -3,6 +3,8 @@ import mongoose from 'mongoose';
 const brandSchema = new mongoose.Schema(
   {
     name: { type: String, required: false, trim: true },
+    // SEO-friendly identifier; optional historically, now recommended
+    slug: { type: String, required: false, trim: true, lowercase: true, index: true, unique: true, sparse: true },
     imageUrl: { type: String, required: false },
     linkUrl: { type: String, required: false },
     isActive: { type: Boolean, default: true },
