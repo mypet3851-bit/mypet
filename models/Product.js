@@ -45,6 +45,11 @@ const productSchema = new mongoose.Schema({
     ref: 'Category',
     required: [true, 'Product category is required']
   },
+  // Optional brand association
+  brand: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Brand'
+  },
   // Additional categories (multi-category support). Primary category remains in `category` for backward compatibility.
   categories: [{
     type: mongoose.Schema.Types.ObjectId,
