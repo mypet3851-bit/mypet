@@ -49,6 +49,7 @@
     "i18next-http-backend": "^2.5.0",
     "json2csv": "^5.0.7",
     "jsonwebtoken": "^9.0.2",
+  "libphonenumber-js": "^1.11.7",
     "lodash": "^4.17.21",
     "lucide-react": "^0.344.0",
     "mongoose": "^8.2.0",
