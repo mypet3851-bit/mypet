@@ -22,6 +22,7 @@ import Product from '../models/Product.js';
 import Inventory from '../models/Inventory.js';
 import InventoryHistory from '../models/InventoryHistory.js';
 import Category from '../models/Category.js';
+import Brand from '../models/Brand.js';
 import Warehouse from '../models/Warehouse.js';
 import { validateProductData } from '../utils/validation.js';
 import { handleProductImages } from '../utils/imageHandler.js';
@@ -146,6 +147,7 @@ export const getProducts = async (req, res) => {
       // Populate primary & additional categories so client can show names
       .populate('category')
       .populate('categories')
+      .populate('brand')
       .populate('relatedProducts')
       .populate({ path: 'reviews.user', select: 'name email image' })
       .sort({ isFeatured: -1, order: 1, createdAt: -1 });
@@ -282,6 +284,7 @@ export const getProduct = async (req, res) => {
     const product = await Product.findById(req.params.id)
       .populate('category')
       .populate('categories')
+      .populate('brand')
       .populate('relatedProducts')
       .populate('addOns')
       .populate({
@@ -361,6 +364,8 @@ export const createProduct = async (req, res) => {
       stock: req.body.stock,
       category: req.body.category,
       categories: categoriesArray,
+      // optional brand
+      brand: req.body.brand || undefined,
       isNew: !!req.body.isNew,
       isFeatured: !!req.body.isFeatured,
       sizeGuide,
@@ -372,10 +377,20 @@ export const createProduct = async (req, res) => {
       baseDoc.colors = req.body.colors; // legacy path
     }
 
+    // If brand provided as string name, try resolving to Brand _id; if 24-hex assume ObjectId; otherwise ignore
+    if (baseDoc.brand) {
+      const bVal = baseDoc.brand;
+      const isObjectId = typeof bVal === 'string' && /^[a-fA-F0-9]{24}$/.test(bVal);
+      if (!isObjectId) {
+        const bDoc = await Brand.findOne({ name: new RegExp(`^${String(bVal).trim()}$`, 'i') }).select('_id');
+        baseDoc.brand = bDoc?._id || undefined;
+      }
+    }
+
     const product = new Product(baseDoc);
   let savedProduct = await product.save();
   // Populate categories before responding so client gets names immediately
-  savedProduct = await savedProduct.populate(['category','categories']);
+  savedProduct = await savedProduct.populate(['category','categories','brand']);
 
 
     // Find or create a default warehouse
@@ -441,7 +456,7 @@ export const createProduct = async (req, res) => {
 // Update product
 export const updateProduct = async (req, res) => {
   try {
-    const { sizes, colors: incomingColors, videoUrls: incomingVideoUrls, sizeGuide: incomingSizeGuide, categories: incomingCategories, isActive: incomingIsActive, slug: incomingSlug, metaTitle, metaDescription, metaKeywords, ogTitle, ogDescription, ogImage, ...updateData } = req.body;
+  const { sizes, colors: incomingColors, videoUrls: incomingVideoUrls, sizeGuide: incomingSizeGuide, categories: incomingCategories, isActive: incomingIsActive, slug: incomingSlug, metaTitle, metaDescription, metaKeywords, ogTitle, ogDescription, ogImage, brand: incomingBrand, ...updateData } = req.body;
     // Start with shallow copy of remaining fields
     const updateDataSanitized = { ...updateData };
 
@@ -468,6 +483,23 @@ export const updateProduct = async (req, res) => {
         return res.status(400).json({ message: 'categories must be an array' });
       }
       updateDataSanitized.categories = incomingCategories.filter(c => c);
+    }
+
+    // Handle optional brand update
+    if (incomingBrand !== undefined) {
+      if (incomingBrand === null || incomingBrand === '' ) {
+        updateDataSanitized.brand = undefined; // unset
+      } else {
+        const bVal = incomingBrand;
+        const isObjectId = typeof bVal === 'string' && /^[a-fA-F0-9]{24}$/.test(bVal);
+        if (isObjectId) {
+          updateDataSanitized.brand = bVal;
+        } else {
+          const bDoc = await Brand.findOne({ name: new RegExp(`^${String(bVal).trim()}$`, 'i') }).select('_id');
+          if (bDoc) updateDataSanitized.brand = bDoc._id;
+          else updateDataSanitized.brand = undefined; // ignore if not resolvable
+        }
+      }
     }
 
     // Handle isActive flag
@@ -662,7 +694,7 @@ export const updateProduct = async (req, res) => {
       }
     } catch (e) { /* silent */ }
 
-  product = await product.populate(['category','categories']);
+  product = await product.populate(['category','categories','brand']);
   res.json(product);
   } catch (error) {
     console.error('Error updating product:', error);
