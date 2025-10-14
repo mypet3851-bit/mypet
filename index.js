@@ -59,6 +59,7 @@ import cloudinaryRoutes from './routes/cloudinaryRoutes.js';
 import paypalRoutes from './routes/paypalRoutes.js';
 import legalRoutes from './routes/legalRoutes.js';
 import uploadRoutes from './routes/uploadRoutes.js';
+import pageRoutes from './routes/pageRoutes.js';
 
 // Path Setup
 const __filename = fileURLToPath(import.meta.url);
@@ -216,6 +217,7 @@ app.use('/api/legal', legalRoutes);
 app.use('/api/db', dbRoutes);
 // File upload endpoints (must come before static /uploads to avoid intercepting multipart requests)
 app.use('/api/uploads', uploadRoutes);
+app.use('/api/pages', pageRoutes);
 
 // Health Check Route
 app.get('/health', (req, res) => {
