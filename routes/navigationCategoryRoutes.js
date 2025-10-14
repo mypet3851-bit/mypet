@@ -55,6 +55,29 @@ router.post('/', adminAuth, async (req, res) => {
     if (body.slug) {
       body.slug = await ensureUniqueSlug(body.slug);
     }
+    // If slugGroups provided, sanitize and ensure unique for each
+    if (Array.isArray(body.slugGroups) && body.slugGroups.length) {
+      // First sanitize
+      body.slugGroups = body.slugGroups.map((g) => ({
+        ...g,
+        slug: sanitizeSlug(g.slug || g.title || 'nav')
+      }));
+      // Deduplicate within payload
+      const seen = new Set();
+      body.slugGroups = body.slugGroups.map((g) => {
+        let base = g.slug || 'nav';
+        let candidate = base;
+        let i = 1;
+        while (seen.has(candidate)) candidate = `${base}-${i++}`;
+        seen.add(candidate);
+        return { ...g, slug: candidate };
+      });
+      // Ensure uniqueness across collection
+      for (let i = 0; i < body.slugGroups.length; i++) {
+        const g = body.slugGroups[i];
+        body.slugGroups[i].slug = await ensureUniqueSlug(g.slug);
+      }
+    }
     // If client sent subCategories with slugs but not categories, map them here too
     if ((!body.categories || body.categories.length === 0) && Array.isArray(body.subCategories)) {
       const slugs = body.subCategories.map((s) => s && s.slug).filter(Boolean);
@@ -101,6 +124,29 @@ router.put('/:id([0-9a-fA-F]{24})', adminAuth, async (req, res) => {
     // Normalize/ensure unique slug if provided
     if (body.slug) {
       body.slug = await ensureUniqueSlug(body.slug, req.params.id);
+    }
+    // Process slugGroups if provided
+    if (Array.isArray(body.slugGroups)) {
+      // Sanitize
+      body.slugGroups = body.slugGroups.map((g) => ({
+        ...g,
+        slug: sanitizeSlug(g.slug || g.title || 'nav')
+      }));
+      // Deduplicate within payload
+      const seen = new Set();
+      body.slugGroups = body.slugGroups.map((g) => {
+        let base = g.slug || 'nav';
+        let candidate = base;
+        let i = 1;
+        while (seen.has(candidate)) candidate = `${base}-${i++}`;
+        seen.add(candidate);
+        return { ...g, slug: candidate };
+      });
+      // Ensure uniqueness across collection, excluding this doc id
+      for (let i = 0; i < body.slugGroups.length; i++) {
+        const g = body.slugGroups[i];
+        body.slugGroups[i].slug = await ensureUniqueSlug(g.slug, req.params.id);
+      }
     }
     // Map subCategories slugs to categories if categories not explicitly provided
     if ((!body.categories || body.categories.length === 0) && Array.isArray(body.subCategories)) {
