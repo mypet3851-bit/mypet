@@ -46,7 +46,7 @@ async function resolveCategoryAndDescendants(categoryParam) {
 }
 
 async function buildProductQuery(params) {
-  const { search, category, categories, isNew, isFeatured, onSale, includeInactive, colors, sizes, size, color, minPrice, maxPrice, primaryOnly, strictCategory } = params;
+  const { search, category, categories, brand, isNew, isFeatured, onSale, includeInactive, colors, sizes, size, color, minPrice, maxPrice, primaryOnly, strictCategory } = params;
   let query = {};
 
   if (search) {
@@ -108,6 +108,7 @@ async function buildProductQuery(params) {
   if (sizeList.length) query['colors.sizes.name'] = { $in: sizeList };
 
   if (!includeInactive || includeInactive === 'false') query.isActive = { $ne: false };
+  if (brand) query.brand = brand;
   return query;
 }
 
@@ -133,6 +134,24 @@ export const getProducts = async (req, res) => {
         }
       } catch (e) {
         // On lookup error, better to return empty than all products for an invalid category token
+        forceEmpty = true;
+      }
+    }
+
+    // Resolve brand by slug if provided via brandSlug param, or by name (fallback) via brandName
+    if (!forceEmpty && (req.query.brand || req.query.brandSlug || req.query.brandName)) {
+      try {
+        if (req.query.brandSlug) {
+          // Resolve brandSlug to ObjectId
+          const b = await Brand.findOne({ slug: String(req.query.brandSlug).toLowerCase() }).select('_id');
+          if (b) req.query.brand = b._id.toString(); else forceEmpty = true;
+        } else if (req.query.brand && /^[a-fA-F0-9]{24}$/.test(String(req.query.brand))) {
+          // already id; ok
+        } else if (req.query.brandName) {
+          const b = await Brand.findOne({ name: new RegExp(`^${String(req.query.brandName).trim()}$`, 'i') }).select('_id');
+          if (b) req.query.brand = b._id.toString(); else forceEmpty = true;
+        }
+      } catch (_) {
         forceEmpty = true;
       }
     }
