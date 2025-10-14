@@ -4,7 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { adminAuth } from '../middleware/auth.js';
-import { listBrands, listActiveBrands, createBrand, updateBrand, deleteBrand, reorderBrands } from '../controllers/brandController.js';
+import { listBrands, listActiveBrands, createBrand, updateBrand, deleteBrand, reorderBrands, getBrandBySlug } from '../controllers/brandController.js';
 
 const router = express.Router();
 
@@ -28,6 +28,7 @@ const upload = multer({ storage });
 // Public
 router.get('/', listBrands);
 router.get('/active', listActiveBrands);
+router.get('/slug/:slug', getBrandBySlug);
 
 // Admin-only
 router.post('/', adminAuth, createBrand);
