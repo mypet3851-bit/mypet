@@ -47,39 +47,4 @@ export const uploadProductImage = async (req, res) => {
   }
 };
 
-export const uploadMobileNavIcon = async (req, res) => {
-  try {
-    await ensureCloudinaryConfig();
-    if (!req.file) {
-      return res.status(400).json({ message: 'No file received' });
-    }
-    const folder = 'mobile-nav';
-    const result = await new Promise((resolve, reject) => {
-      const stream = cloudinary.uploader.upload_stream({
-        folder,
-        resource_type: 'image',
-        transformation: [
-          { quality: 'auto', fetch_format: 'auto' },
-          { width: 128, height: 128, crop: 'limit' }
-        ]
-      }, (err, uploaded) => {
-        if (err) return reject(err);
-        resolve(uploaded);
-      });
-      stream.end(req.file.buffer);
-    });
-    res.status(201).json({
-      url: result.secure_url,
-      public_id: result.public_id,
-      format: result.format,
-      bytes: result.bytes,
-      width: result.width,
-      height: result.height
-    });
-  } catch (error) {
-    console.error('uploadMobileNavIcon error:', error);
-    res.status(500).json({ message: 'Failed to upload', error: error.message });
-  }
-};
-
 export default { uploadProductImage };
