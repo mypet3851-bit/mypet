@@ -318,22 +318,35 @@ settingsSchema.add({
   mobileTabBar: {
     home: {
       active: { type: String, default: '' },
-      inactive: { type: String, default: '' }
+      inactive: { type: String, default: '' },
+      label: { type: String, default: '' },
+      ionActive: { type: String, default: '' },
+      ionInactive: { type: String, default: '' }
     },
     category: {
       active: { type: String, default: '' },
-      inactive: { type: String, default: '' }
+      inactive: { type: String, default: '' },
+      label: { type: String, default: '' },
+      ionActive: { type: String, default: '' },
+      ionInactive: { type: String, default: '' }
     },
     cart: {
       active: { type: String, default: '' },
-      inactive: { type: String, default: '' }
+      inactive: { type: String, default: '' },
+      label: { type: String, default: '' },
+      ionActive: { type: String, default: '' },
+      ionInactive: { type: String, default: '' }
     },
     me: {
       active: { type: String, default: '' },
-      inactive: { type: String, default: '' }
+      inactive: { type: String, default: '' },
+      label: { type: String, default: '' },
+      ionActive: { type: String, default: '' },
+      ionInactive: { type: String, default: '' }
     },
     center: {
-      icon: { type: String, default: '' }
+      icon: { type: String, default: '' },
+      label: { type: String, default: '' }
     }
   }
 });
