@@ -321,32 +321,37 @@ settingsSchema.add({
       inactive: { type: String, default: '' },
       label: { type: String, default: '' },
       ionActive: { type: String, default: '' },
-      ionInactive: { type: String, default: '' }
+      ionInactive: { type: String, default: '' },
+      size: { type: Number, default: 24, min: 12, max: 48 }
     },
     category: {
       active: { type: String, default: '' },
       inactive: { type: String, default: '' },
       label: { type: String, default: '' },
       ionActive: { type: String, default: '' },
-      ionInactive: { type: String, default: '' }
+      ionInactive: { type: String, default: '' },
+      size: { type: Number, default: 24, min: 12, max: 48 }
     },
     cart: {
       active: { type: String, default: '' },
       inactive: { type: String, default: '' },
       label: { type: String, default: '' },
       ionActive: { type: String, default: '' },
-      ionInactive: { type: String, default: '' }
+      ionInactive: { type: String, default: '' },
+      size: { type: Number, default: 24, min: 12, max: 48 }
     },
     me: {
       active: { type: String, default: '' },
       inactive: { type: String, default: '' },
       label: { type: String, default: '' },
       ionActive: { type: String, default: '' },
-      ionInactive: { type: String, default: '' }
+      ionInactive: { type: String, default: '' },
+      size: { type: Number, default: 24, min: 12, max: 48 }
     },
     center: {
       icon: { type: String, default: '' },
-      label: { type: String, default: '' }
+      label: { type: String, default: '' },
+      iconSize: { type: Number, default: 28, min: 16, max: 56 }
     }
   }
 });
