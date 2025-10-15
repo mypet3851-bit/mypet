@@ -14,6 +14,7 @@ import announcementRoutes from './announcementRoutes.js';
 import backgroundRoutes from './backgroundRoutes.js';
 import bannerRoutes from './bannerRoutes.js';
 import uploadRoutes from './uploadRoutes.js';
+import mobileNavRoutes from './mobileNavRoutes.js';
 
 
 
@@ -42,6 +43,7 @@ router.use('/announcements', announcementRoutes);
 router.use('/backgrounds', backgroundRoutes);
 router.use('/banners', bannerRoutes);
 router.use('/uploads', uploadRoutes);
+router.use('/mobile-nav', mobileNavRoutes);
 
 router.use('/inventory', inventoryRoutes);
 
