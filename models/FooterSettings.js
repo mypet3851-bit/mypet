@@ -5,6 +5,11 @@ const footerSettingsSchema = new mongoose.Schema({
     type: String,
     default: 'Discover luxury fashion that combines timeless elegance with modern style.'
   },
+  // Optional background image URL for the footer
+  backgroundImage: {
+    type: String,
+    default: ''
+  },
   address: {
     type: String,
     default: '123 Fashion Street, NY 10001'
