@@ -120,6 +120,31 @@ router.get('/', async (req, res) => {
       }
     });
   }
+  // Normalize mobile tab bar icons
+  if (obj.mobileTabBar) {
+    const fix = (val) => (typeof val === 'string' && val.startsWith('/uploads/')) ? toAbsolute(req, val) : val;
+    try {
+      if (obj.mobileTabBar.home) {
+        obj.mobileTabBar.home.active = fix(obj.mobileTabBar.home.active);
+        obj.mobileTabBar.home.inactive = fix(obj.mobileTabBar.home.inactive);
+      }
+      if (obj.mobileTabBar.category) {
+        obj.mobileTabBar.category.active = fix(obj.mobileTabBar.category.active);
+        obj.mobileTabBar.category.inactive = fix(obj.mobileTabBar.category.inactive);
+      }
+      if (obj.mobileTabBar.cart) {
+        obj.mobileTabBar.cart.active = fix(obj.mobileTabBar.cart.active);
+        obj.mobileTabBar.cart.inactive = fix(obj.mobileTabBar.cart.inactive);
+      }
+      if (obj.mobileTabBar.me) {
+        obj.mobileTabBar.me.active = fix(obj.mobileTabBar.me.active);
+        obj.mobileTabBar.me.inactive = fix(obj.mobileTabBar.me.inactive);
+      }
+      if (obj.mobileTabBar.center) {
+        obj.mobileTabBar.center.icon = fix(obj.mobileTabBar.center.icon);
+      }
+    } catch {}
+  }
     } catch {}
     res.json(obj);
   } catch (error) {
@@ -600,6 +625,106 @@ router.post('/upload/header-icon-bg/:key', adminAuth, upload.single('file'), asy
     res.json({ key, url: toAbsolute(req, settings.headerIconBackgrounds[key].image), stored: hasCloudinaryCreds ? 'cloudinary' : 'inline' });
   } catch (error) {
     res.status(500).json({ message: error.message });
+  }
+});
+
+// Upload mobile tab bar icon (admin only)
+// key: home.active|home.inactive|category.active|category.inactive|cart.active|cart.inactive|me.active|me.inactive|center.icon
+router.post('/upload/mobile-tab-icon/:key', adminAuth, upload.single('file'), async (req, res) => {
+  try {
+    const { key } = req.params;
+    const allowed = new Set([
+      'home.active','home.inactive','category.active','category.inactive','cart.active','cart.inactive','me.active','me.inactive','center.icon'
+    ]);
+    if (!allowed.has(key)) {
+      return res.status(400).json({ message: 'Invalid mobile tab icon key' });
+    }
+    if (!req.file) {
+      return res.status(400).json({ message: 'No file uploaded' });
+    }
+
+    let settings = await Settings.findOne();
+    if (!settings) settings = new Settings();
+
+    // Store at /uploads/... (or data URI fallback if no persistent storage)
+    let finalUrl = `/uploads/${req.file.filename}`;
+    // Optional: if Cloudinary configured, upload there
+    const hasCloud = await hasCloudinaryCredentials?.();
+    if (hasCloud) {
+      try {
+        await ensureCloudinaryConfig();
+        const folder = `settings/mobile-tabs/${key.replace(/\./g,'_')}`;
+        const uploadResult = await cloudinary.uploader.upload(path.join(uploadDir, req.file.filename), {
+          folder,
+          resource_type: 'image',
+          use_filename: true,
+          unique_filename: false,
+          overwrite: true
+        });
+        if (uploadResult?.secure_url) {
+          finalUrl = uploadResult.secure_url;
+          try { fs.unlinkSync(path.join(uploadDir, req.file.filename)); } catch {}
+        }
+      } catch (e) {
+        console.warn('[mobile-tab-icon] Cloudinary upload failed; keeping local file:', e?.message);
+      }
+    } else {
+      // Inline file so it survives ephemeral storages
+      try {
+        const filePath = path.join(uploadDir, req.file.filename);
+        const buf = fs.readFileSync(filePath);
+        const b64 = buf.toString('base64');
+        const mime = req.file.mimetype || 'image/png';
+        finalUrl = `data:${mime};base64,${b64}`;
+        try { fs.unlinkSync(filePath); } catch {}
+      } catch (inlineErr) {
+        console.warn('[mobile-tab-icon] Failed to inline image, using relative path:', inlineErr.message);
+      }
+    }
+
+    // Persist in settings.mobileTabBar at specified key
+    settings.mobileTabBar = settings.mobileTabBar || {};
+    const [section, field] = key.split('.');
+    if (section === 'center' && field === 'icon') {
+      settings.mobileTabBar.center = settings.mobileTabBar.center || {};
+      settings.mobileTabBar.center.icon = finalUrl;
+    } else {
+      settings.mobileTabBar[section] = settings.mobileTabBar[section] || {};
+      settings.mobileTabBar[section][field] = finalUrl;
+    }
+    settings.markModified('mobileTabBar');
+    await settings.save();
+
+    // Broadcast minimal update
+    try {
+      const broadcast = req.app.get('broadcastToClients');
+      if (typeof broadcast === 'function') {
+        broadcast({ type: 'settings_updated', data: { mobileTabBar: settings.mobileTabBar } });
+      }
+    } catch {}
+
+    // Respond with absolute URL for convenience
+    const abs = (u) => (/^data:|^https?:/i.test(u) ? u : toAbsolute(req, u));
+    return res.json({ key, url: abs(finalUrl) });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Update mobile tab bar config via JSON (admin only)
+router.put('/mobile-tab', settingsWriteGuard, async (req, res) => {
+  try {
+    let settings = await Settings.findOne();
+    if (!settings) settings = new Settings();
+    const incoming = req.body?.mobileTabBar || req.body;
+    if (incoming && typeof incoming === 'object') {
+      settings.mobileTabBar = { ...(settings.mobileTabBar || {}), ...incoming };
+      settings.markModified('mobileTabBar');
+      await settings.save();
+    }
+    res.json(settings.mobileTabBar || {});
+  } catch (e) {
+    res.status(500).json({ message: e.message });
   }
 });
 
