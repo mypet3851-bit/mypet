@@ -20,6 +20,11 @@ const mobileNavItemSchema = new mongoose.Schema({
     trim: true,
     // Example values: Home, Search, Wishlist, Cart, Profile
   },
+  iconType: {
+    type: String,
+    enum: ['vector', 'image'],
+    default: 'vector'
+  },
   iconSet: {
     type: String,
     enum: ['Ionicons', 'MaterialIcons', 'MaterialCommunityIcons', 'Feather', 'Entypo', 'AntDesign', 'FontAwesome', 'FontAwesome5', 'Octicons', 'SimpleLineIcons', 'EvilIcons'],
@@ -29,6 +34,10 @@ const mobileNavItemSchema = new mongoose.Schema({
     type: String,
     required: true,
     trim: true
+  },
+  iconImageUrl: {
+    type: String,
+    default: ''
   },
   order: {
     type: Number,
