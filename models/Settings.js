@@ -311,6 +311,33 @@ settingsSchema.add({
   }
 });
 
+// Mobile app bottom tab bar icon configuration (admin configurable)
+// Each tab can have optional active/inactive icon URLs (absolute, /uploads, or data URI)
+// Center button supports a single icon (when set, overrides gradient text)
+settingsSchema.add({
+  mobileTabBar: {
+    home: {
+      active: { type: String, default: '' },
+      inactive: { type: String, default: '' }
+    },
+    category: {
+      active: { type: String, default: '' },
+      inactive: { type: String, default: '' }
+    },
+    cart: {
+      active: { type: String, default: '' },
+      inactive: { type: String, default: '' }
+    },
+    me: {
+      active: { type: String, default: '' },
+      inactive: { type: String, default: '' }
+    },
+    center: {
+      icon: { type: String, default: '' }
+    }
+  }
+});
+
 // Checkout form customization (admin configurable)
 settingsSchema.add({
   checkoutForm: {
