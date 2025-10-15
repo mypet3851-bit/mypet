@@ -41,6 +41,8 @@ import deliveryRoutes from './routes/deliveryRoutes.js';
 import currencyRoutes from './routes/currencyRoutes.js';
 import footerRoutes from './routes/footerRoutes.js';
 import announcementRoutes from './routes/announcementRoutes.js';
+import announcementMobileRoutes from './routes/announcementMobileRoutes.js';
+import announcementWebRoutes from './routes/announcementWebRoutes.js';
 import backgroundRoutes from './routes/backgroundRoutes.js';
 import bannerRoutes from './routes/bannerRoutes.js';
 import mobileBannerRoutes from './routes/mobileBannerRoutes.js';
@@ -203,6 +205,9 @@ app.use('/api/delivery', deliveryRoutes);
 app.use('/api/currency', currencyRoutes);
 app.use('/api/footer', footerRoutes);
 app.use('/api/announcements', announcementRoutes);
+// Segregated mobile/web announcement read-only routes
+app.use('/api/mobile/announcements', announcementMobileRoutes);
+app.use('/api/web/announcements', announcementWebRoutes);
 app.use('/api/backgrounds', backgroundRoutes);
 app.use('/api/banners', bannerRoutes);
 app.use('/api/mobile-banners', mobileBannerRoutes);

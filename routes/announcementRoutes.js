@@ -3,6 +3,8 @@ import { adminAuth } from '../middleware/auth.js';
 import {
   getAnnouncements,
   getActiveAnnouncements,
+  getActiveAnnouncementsMobile,
+  getActiveAnnouncementsWeb,
   createAnnouncement,
   updateAnnouncement,
   deleteAnnouncement,
@@ -13,8 +15,10 @@ const router = express.Router();
 
 // Public routes
 router.get('/active', getActiveAnnouncements);
-// Mobile alias route used by app
-router.get('/mobile-active', getActiveAnnouncements);
+// Mobile alias route used by app (now platform-aware)
+router.get('/mobile-active', getActiveAnnouncementsMobile);
+// Optional web alias if needed in legacy clients
+router.get('/web-active', getActiveAnnouncementsWeb);
 
 // Admin routes
 router.get('/', adminAuth, getAnnouncements);
