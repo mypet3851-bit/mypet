@@ -64,6 +64,7 @@ import pageRoutes from './routes/pageRoutes.js';
 import translateRoutes from './routes/translateRoutes.js';
 import formRoutes from './routes/formRoutes.js';
 import flashSaleRoutes from './routes/flashSaleRoutes.js';
+import mobileNavRoutes from './routes/mobileNavRoutes.js';
 
 // Path Setup
 const __filename = fileURLToPath(import.meta.url);
@@ -226,6 +227,7 @@ app.use('/api/pages', pageRoutes);
 app.use('/api/forms', formRoutes);
 app.use('/api/flash-sales', flashSaleRoutes);
 app.use('/api/translate', translateRoutes);
+app.use('/api/mobile-nav', mobileNavRoutes);
 
 // Health Check Route
 app.get('/health', (req, res) => {
