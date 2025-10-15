@@ -17,11 +17,18 @@ export const upload = multer({
 
 export const uploadProductImage = async (req, res) => {
   try {
-    await ensureCloudinaryConfig();
+    const configured = await ensureCloudinaryConfig();
+    if (!configured) {
+      return res.status(500).json({
+        message: 'Cloudinary is not configured. Please add credentials in environment variables or Settings.'
+      });
+    }
     if (!req.file) {
       return res.status(400).json({ message: 'No file received' });
     }
-    const folder = 'products';
+    // Allow clients to specify a target folder (e.g., 'footer') via body or query; default to 'products'
+    const rawFolder = (req.body && (req.body.folder || req.body.path)) || (req.query && (req.query.folder || req.query.path)) || 'products';
+    const folder = typeof rawFolder === 'string' && rawFolder.trim() ? rawFolder.trim() : 'products';
     const result = await new Promise((resolve, reject) => {
       const stream = cloudinary.uploader.upload_stream({
         folder,
@@ -36,6 +43,7 @@ export const uploadProductImage = async (req, res) => {
     res.status(201).json({
       url: result.secure_url,
       public_id: result.public_id,
+      folder: result.folder || folder,
       format: result.format,
       bytes: result.bytes,
       width: result.width,
