@@ -29,25 +29,6 @@ export const auth = async (req, res, next) => {
 export const adminAuth = async (req, res, next) => {
   console.log('adminAuth middleware called for:', req.method, req.path);
   console.log('Authorization header:', req.header('Authorization'));
-  // Dev bypass: allow disabling admin checks via env flag (DO NOT USE IN PROD)
-  if (process.env.DISABLE_ADMIN_AUTH === '1' || process.env.DISABLE_ADMIN_AUTH === 'true') {
-    try {
-      // Optional: still try to decode user if token exists; otherwise attach a mock admin
-      const token = req.header('Authorization')?.replace('Bearer ', '');
-      if (token) {
-        try {
-          const decoded = jwt.verify(token, process.env.JWT_SECRET);
-          const user = await User.findById(decoded.userId).catch(() => null);
-          if (user) req.user = user;
-        } catch {}
-      }
-      if (!req.user) {
-        req.user = { role: 'admin', _id: 'dev-bypass' };
-      }
-      console.warn('[auth] Admin auth bypass enabled via DISABLE_ADMIN_AUTH');
-      return next();
-    } catch {}
-  }
   
   try {
     await auth(req, res, () => {
