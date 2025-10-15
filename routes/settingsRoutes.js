@@ -751,6 +751,32 @@ router.put('/mobile-tab/labels', settingsWriteGuard, async (req, res) => {
   }
 });
 
+// Update icon sizes for mobile tabs
+router.put('/mobile-tab/sizes', settingsWriteGuard, async (req, res) => {
+  try {
+    let settings = await Settings.findOne();
+    if (!settings) settings = new Settings();
+    const incoming = req.body || {};
+    const clamp = (n, min, max) => Math.max(min, Math.min(max, Number(n) || 0));
+    const applySize = (section, key = 'size', min = 12, max = 48) => {
+      if (incoming?.[section]?.[key] == null) return;
+      settings.mobileTabBar = settings.mobileTabBar || {};
+      settings.mobileTabBar[section] = settings.mobileTabBar[section] || {};
+      settings.mobileTabBar[section][key] = clamp(incoming[section][key], min, max);
+    };
+    applySize('home');
+    applySize('category');
+    applySize('cart');
+    applySize('me');
+    applySize('center', 'iconSize', 16, 56);
+    settings.markModified('mobileTabBar');
+    await settings.save();
+    res.json(settings.mobileTabBar || {});
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+});
+
 // Upload authentication background image (admin only)
 router.post('/upload/auth-background', adminAuth, upload.single('file'), async (req, res) => {
   try {
