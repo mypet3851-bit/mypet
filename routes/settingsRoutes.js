@@ -728,6 +728,29 @@ router.put('/mobile-tab', settingsWriteGuard, async (req, res) => {
   }
 });
 
+// Update labels/icons for mobile tabs (admin or relaxed guard)
+router.put('/mobile-tab/labels', settingsWriteGuard, async (req, res) => {
+  try {
+    let settings = await Settings.findOne();
+    if (!settings) settings = new Settings();
+    const incoming = req.body || {};
+    const merge = (section) => {
+      if (!incoming[section]) return;
+      settings.mobileTabBar = settings.mobileTabBar || {};
+      settings.mobileTabBar[section] = settings.mobileTabBar[section] || {};
+      ['label','ionActive','ionInactive'].forEach(k => {
+        if (typeof incoming[section][k] === 'string') settings.mobileTabBar[section][k] = incoming[section][k];
+      });
+    };
+    ['home','category','cart','me','center'].forEach(merge);
+    settings.markModified('mobileTabBar');
+    await settings.save();
+    res.json(settings.mobileTabBar || {});
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+});
+
 // Upload authentication background image (admin only)
 router.post('/upload/auth-background', adminAuth, upload.single('file'), async (req, res) => {
   try {
