@@ -15,14 +15,17 @@ import {
 const router = express.Router();
 
 // Attribute CRUD
-router.get('/', adminAuth, listAttributes);
-router.get('/:id', adminAuth, getAttribute);
+// Attribute CRUD
+// Public read endpoints
+router.get('/', listAttributes);
+router.get('/:id', getAttribute);
 router.post('/', adminAuth, createAttribute);
 router.put('/:id', adminAuth, updateAttribute);
 router.delete('/:id', adminAuth, deleteAttribute);
 
 // Values nested under attribute
-router.get('/:attributeId/values', adminAuth, listValues);
+// Public read for values
+router.get('/:attributeId/values', listValues);
 router.post('/:attributeId/values', adminAuth, createValue);
 // Manage individual value by id
 router.put('/values/:id', adminAuth, updateValue);
