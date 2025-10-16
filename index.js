@@ -67,6 +67,7 @@ import translateRoutes from './routes/translateRoutes.js';
 import formRoutes from './routes/formRoutes.js';
 import flashSaleRoutes from './routes/flashSaleRoutes.js';
 import bundleOfferRoutes from './routes/bundleOfferRoutes.js';
+import attributeRoutes from './routes/attributeRoutes.js';
 
 // Path Setup
 const __filename = fileURLToPath(import.meta.url);
@@ -233,6 +234,8 @@ app.use('/api/forms', formRoutes);
 app.use('/api/flash-sales', flashSaleRoutes);
 app.use('/api/bundle-offers', bundleOfferRoutes);
 app.use('/api/translate', translateRoutes);
+// Generic product Attributes CRUD (admin-protected)
+app.use('/api/attributes', attributeRoutes);
 
 // Health Check Route
 app.get('/health', (req, res) => {
