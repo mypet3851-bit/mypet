@@ -3,7 +3,10 @@ import mongoose from 'mongoose';
 
 export const listAdmin = async (req, res) => {
   try {
-    const bundles = await BundleOffer.find().sort({ createdAt: -1 }).lean();
+    const bundles = await BundleOffer.find()
+      .sort({ createdAt: -1 })
+      .populate({ path: 'products.product', select: 'name images price originalPrice' })
+      .lean();
     res.json(bundles);
   } catch (e) {
     res.status(500).json({ message: 'Failed to load bundle offers' });
@@ -12,7 +15,9 @@ export const listAdmin = async (req, res) => {
 
 export const getById = async (req, res) => {
   try {
-    const bundle = await BundleOffer.findById(req.params.id).lean();
+    const bundle = await BundleOffer.findById(req.params.id)
+      .populate({ path: 'products.product', select: 'name images price originalPrice' })
+      .lean();
     if (!bundle) return res.status(404).json({ message: 'Not found' });
     res.json(bundle);
   } catch (e) {

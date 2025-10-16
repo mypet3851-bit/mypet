@@ -835,6 +835,19 @@ export const searchProducts = async (req, res) => {
   }
 };
 
+// Lightweight product by id (name, price, images) for admin selectors
+export const getProductLite = async (req, res) => {
+  try {
+    const id = req.params.id;
+    if (!id) return res.status(400).json({ message: 'Missing id' });
+    const prod = await Product.findById(id).select('name price images');
+    if (!prod) return res.status(404).json({ message: 'Product not found' });
+    res.json(prod);
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to load product' });
+  }
+};
+
 // Update only product images (partial update)
 export const updateProductImages = async (req, res) => {
   try {
