@@ -1,11 +1,12 @@
 import express from 'express';
 import { adminAuth } from '../middleware/auth.js';
-import { listAdmin, create, update, remove, publicActiveList } from '../controllers/flashSaleController.js';
+import { listAdmin, create, update, remove, publicActiveList, publicGetById } from '../controllers/flashSaleController.js';
 
 const router = express.Router();
 
 // Public
 router.get('/public/active/list', publicActiveList);
+router.get('/public/active/:id', publicGetById);
 
 // Admin
 router.get('/', adminAuth, listAdmin);

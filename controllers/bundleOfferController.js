@@ -1,5 +1,6 @@
 import BundleOffer from '../models/BundleOffer.js';
 import mongoose from 'mongoose';
+import { getStoreCurrency } from '../services/storeCurrencyService.js';
 
 export const listAdmin = async (req, res) => {
   try {
@@ -7,6 +8,8 @@ export const listAdmin = async (req, res) => {
       .sort({ createdAt: -1 })
       .populate({ path: 'products.product', select: 'name images price originalPrice' })
       .lean();
+    const currency = await getStoreCurrency();
+    try { res.set('X-Store-Currency', currency); } catch {}
     res.json(bundles);
   } catch (e) {
     res.status(500).json({ message: 'Failed to load bundle offers' });
@@ -18,8 +21,10 @@ export const getById = async (req, res) => {
     const bundle = await BundleOffer.findById(req.params.id)
       .populate({ path: 'products.product', select: 'name images price originalPrice' })
       .lean();
-    if (!bundle) return res.status(404).json({ message: 'Not found' });
-    res.json(bundle);
+  if (!bundle) return res.status(404).json({ message: 'Not found' });
+  const currency = await getStoreCurrency();
+  try { res.set('X-Store-Currency', currency); } catch {}
+  res.json(bundle);
   } catch (e) {
     res.status(500).json({ message: 'Failed to load bundle' });
   }
@@ -92,6 +97,8 @@ export const publicList = async (req, res) => {
       .sort({ createdAt: -1 })
       .populate({ path: 'products.product', select: 'name images price originalPrice' })
       .lean();
+    const currency = await getStoreCurrency();
+    try { res.set('X-Store-Currency', currency); } catch {}
     res.json(bundles);
   } catch (e) {
     res.status(500).json({ message: 'Failed to load bundles' });
@@ -119,6 +126,8 @@ export const publicListByProduct = async (req, res) => {
       .sort({ createdAt: -1 })
       .populate({ path: 'products.product', select: 'name images price originalPrice' })
       .lean();
+    const currency = await getStoreCurrency();
+    try { res.set('X-Store-Currency', currency); } catch {}
     res.json(bundles);
   } catch (e) {
     res.status(500).json({ message: 'Failed to load bundles' });
