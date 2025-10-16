@@ -1036,6 +1036,195 @@ export const reorderFeaturedProducts = async (req, res) => {
   }
 };
 
+// Generate variants from product.attributes by computing cartesian product of selected attribute values
+export const generateProductVariants = async (req, res) => {
+  try {
+  const productId = req.params.id;
+  const product = await Product.findById(productId).populate('attributes.attribute').populate('attributes.values');
+    if (!product) return res.status(404).json({ message: 'Product not found' });
+
+    // Build options list: for each attribute, determine set of values (value ids or text/number)
+    const dimensions = [];
+    for (const pa of (product.attributes || [])) {
+      const attr = pa.attribute;
+      if (!attr) continue;
+      const type = (attr && attr.type) || 'select';
+      if (['text','number'].includes(type)) {
+        // Skip freeform attributes in cartesian generation (or one choice if provided)
+        const single = type === 'text' ? (pa.textValue ? [{ textValue: pa.textValue }] : []) : (pa.numberValue != null ? [{ numberValue: pa.numberValue }] : []);
+        if (single.length) dimensions.push({ attribute: attr._id, choices: single });
+      } else {
+        const values = Array.isArray(pa.values) ? pa.values.map((v) => ({ value: ((v && v._id) || v) })) : [];
+        if (values.length) dimensions.push({ attribute: attr._id, choices: values });
+      }
+    }
+
+    if (!dimensions.length) {
+      return res.status(400).json({ message: 'No attributes with values to generate variants from' });
+    }
+
+    // Cartesian product
+    const combos = [];
+    const backtrack = (idx, acc) => {
+      if (idx === dimensions.length) { combos.push(acc.slice()); return; }
+      for (const choice of dimensions[idx].choices) {
+        acc.push({ attribute: dimensions[idx].attribute, ...choice });
+        backtrack(idx + 1, acc);
+        acc.pop();
+      }
+    };
+    backtrack(0, []);
+
+    // Build variant documents; preserve existing variants (match by attribute set)
+    const existing = Array.isArray(product.variants) ? product.variants : [];
+    const serializeKey = (attrs) => attrs
+      .map(a => `${a.attribute}:${a.value || a.textValue || a.numberValue}`)
+      .sort()
+      .join('|');
+    const existingMap = new Map(existing.map(v => [serializeKey(((v || {}).attributes)||[]), v]));
+
+    // Helper: find images for an attribute value (e.g., Color=Red) from attributeImages
+    const findImagesForCombo = (combo) => {
+      const imgs = [];
+      const ai = Array.isArray(product.attributeImages) ? product.attributeImages : [];
+      for (const c of combo) {
+        if (c.value) {
+          const match = ai.find(x => String(x.attribute) === String(c.attribute) && String(x.value) === String(c.value));
+          if (match && Array.isArray(match.images)) {
+            for (const m of match.images) { if (typeof m === 'string') imgs.push(m); }
+          }
+        }
+      }
+      // dedupe
+      const seen = new Set();
+      return imgs.filter(u => { if (!u || seen.has(u)) return false; seen.add(u); return true; });
+    };
+
+    const nextVariants = combos.map((combo) => {
+      const key = serializeKey(combo);
+      const prev = existingMap.get(key);
+      if (prev) return prev; // keep existing data (price/sku/stock/images)
+      return {
+        sku: undefined,
+        barcode: undefined,
+        price: undefined,
+        originalPrice: undefined,
+        stock: 0,
+        images: findImagesForCombo(combo),
+        isActive: true,
+        attributes: combo
+      };
+    });
+
+    product.variants = nextVariants;
+    await product.save();
+    const populated = await Product.findById(productId)
+      .populate('variants.attributes.attribute')
+      .populate('variants.attributes.value');
+    res.json(populated?.variants || []);
+  } catch (e) {
+    console.error('generateProductVariants error', e);
+    res.status(500).json({ message: 'Failed to generate variants' });
+  }
+};
+
+// Update one variant (price, sku, stock, images, isActive)
+export const updateVariant = async (req, res) => {
+  try {
+  const { id, variantId } = req.params;
+    const { sku, barcode, price, originalPrice, stock, images, isActive } = req.body || {};
+    const product = await Product.findById(id);
+    if (!product) return res.status(404).json({ message: 'Product not found' });
+    const v = (product.variants || []).id(variantId);
+    if (!v) return res.status(404).json({ message: 'Variant not found' });
+    if (sku !== undefined) v.sku = sku;
+    if (barcode !== undefined) v.barcode = barcode;
+    if (price !== undefined) v.price = Number(price);
+    if (originalPrice !== undefined) v.originalPrice = Number(originalPrice);
+    if (stock !== undefined) v.stock = Math.max(0, Number(stock));
+    if (Array.isArray(images)) v.images = images.filter((i)=> typeof i === 'string' && i.trim());
+    if (isActive !== undefined) v.isActive = !!isActive;
+    await product.save();
+    const populated = await Product.findById(id).select('variants').populate('variants.attributes.attribute').populate('variants.attributes.value');
+    res.json((populated && populated.variants ? populated.variants.find((x)=> x._id.toString()===variantId) : null));
+  } catch (e) {
+    res.status(500).json({ message: 'Failed to update variant' });
+  }
+};
+
+// Bulk update variants (e.g., price/stock add/subtract/set)
+export const bulkUpdateVariants = async (req, res) => {
+  try {
+  const { id } = req.params;
+    const { selection, operation } = req.body || {};
+    // selection: array of variantIds; if omitted or empty -> apply to all
+    // operation: { field: 'price'|'stock'|'isActive', mode: 'set'|'add'|'sub', value }
+    const product = await Product.findById(id);
+    if (!product) return res.status(404).json({ message: 'Product not found' });
+  const ids = (Array.isArray(selection) && selection.length) ? selection.map(String) : (product.variants||[]).map((v)=> String(v._id));
+    const { field, mode, value } = operation || {};
+    for (const v of (product.variants || [])) {
+      if (!ids.includes(String(v._id))) continue;
+      if (field === 'isActive') { v.isActive = !!value; continue; }
+      const num = Number(value);
+      if (!Number.isFinite(num)) continue;
+      if (field === 'price') {
+        if (mode === 'set') v.price = num; else if (mode === 'add') v.price = (v.price || 0) + num; else if (mode === 'sub') v.price = (v.price || 0) - num;
+        if (v.price < 0) v.price = 0;
+      } else if (field === 'stock') {
+        if (mode === 'set') v.stock = Math.max(0, Math.floor(num));
+        else if (mode === 'add') v.stock = Math.max(0, Math.floor((v.stock || 0) + num));
+        else if (mode === 'sub') v.stock = Math.max(0, Math.floor((v.stock || 0) - num));
+      }
+    }
+    await product.save();
+    const populated = await Product.findById(id).select('variants').populate('variants.attributes.attribute').populate('variants.attributes.value');
+    res.json(populated?.variants || []);
+  } catch (e) {
+    res.status(500).json({ message: 'Failed to bulk update variants' });
+  }
+};
+
+// Get images for a specific attribute value on a product
+export const getAttributeValueImages = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { attributeId, valueId } = req.query;
+    const product = await Product.findById(id).select('attributeImages');
+    if (!product) return res.status(404).json({ message: 'Product not found' });
+    const match = (product.attributeImages || []).find(x => String(x.attribute) === String(attributeId) && String(x.value) === String(valueId));
+    res.json(match?.images || []);
+  } catch (e) {
+    res.status(500).json({ message: 'Failed to load images' });
+  }
+};
+
+// Set images for attribute value (replace)
+export const setAttributeValueImages = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { attributeId, valueId, images } = req.body || {};
+    if (!attributeId || !valueId || !Array.isArray(images)) {
+      return res.status(400).json({ message: 'attributeId, valueId, and images[] are required' });
+    }
+    const product = await Product.findById(id);
+    if (!product) return res.status(404).json({ message: 'Product not found' });
+    const ai = Array.isArray(product.attributeImages) ? product.attributeImages : [];
+    const idx = ai.findIndex(x => String(x.attribute) === String(attributeId) && String(x.value) === String(valueId));
+    const cleaned = images.filter(i => typeof i === 'string' && i.trim());
+    if (idx >= 0) {
+      ai[idx].images = cleaned;
+    } else {
+      ai.push({ attribute: attributeId, value: valueId, images: cleaned });
+    }
+    product.attributeImages = ai;
+    await product.save();
+    res.json(cleaned);
+  } catch (e) {
+    res.status(500).json({ message: 'Failed to set images' });
+  }
+};
+
 // Bulk create products from parsed data (JSON from client-parsed Excel/CSV)
 export const bulkCreateProducts = async (req, res) => {
   try {
