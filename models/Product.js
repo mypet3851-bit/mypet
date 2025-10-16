@@ -176,6 +176,16 @@ const productSchema = new mongoose.Schema({
     // Extra notes / how to measure text
     note: { type: String }
   }
+  ,
+  // Generic attributes assigned to this product (e.g., Color, Size, Material)
+  attributes: [{
+    attribute: { type: mongoose.Schema.Types.ObjectId, ref: 'Attribute', required: true },
+    // For select/multiselect types, link to predefined values
+    values: [{ type: mongoose.Schema.Types.ObjectId, ref: 'AttributeValue' }],
+    // For freeform types (text/number), allow inline value
+    textValue: { type: String },
+    numberValue: { type: Number }
+  }]
 }, {
   timestamps: true,
   toJSON: { virtuals: true },

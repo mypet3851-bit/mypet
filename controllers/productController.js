@@ -19,6 +19,8 @@ export const getProductStock = async (req, res) => {
 };
 
 import Product from '../models/Product.js';
+import Attribute from '../models/Attribute.js';
+import AttributeValue from '../models/AttributeValue.js';
 import Inventory from '../models/Inventory.js';
 import InventoryHistory from '../models/InventoryHistory.js';
 import Category from '../models/Category.js';
@@ -166,7 +168,9 @@ export const getProducts = async (req, res) => {
       // Populate primary & additional categories so client can show names
       .populate('category')
       .populate('categories')
-      .populate('brand')
+  .populate('brand')
+  .populate('attributes.attribute')
+  .populate('attributes.values')
       .populate('relatedProducts')
       .populate({ path: 'reviews.user', select: 'name email image' })
       .sort({ isFeatured: -1, order: 1, createdAt: -1 });
@@ -328,6 +332,8 @@ export const getProduct = async (req, res) => {
       .populate('category')
       .populate('categories')
       .populate('brand')
+      .populate('attributes.attribute')
+      .populate('attributes.values')
       .populate('relatedProducts')
       .populate('addOns')
       .populate({
@@ -398,6 +404,22 @@ export const createProduct = async (req, res) => {
     }
     const simpleMode = !Array.isArray(req.body.colors) || req.body.colors.length === 0;
 
+    // Normalize attributes if provided
+    const normalizeAttributes = (arr) => {
+      if (!Array.isArray(arr)) return [];
+      return arr.map((a) => {
+        if (!a) return null;
+        const attribute = (typeof a.attribute === 'string' && /^[a-fA-F0-9]{24}$/.test(a.attribute)) ? a.attribute : null;
+        if (!attribute) return null;
+        const values = Array.isArray(a.values)
+          ? a.values.filter(v => typeof v === 'string' && /^[a-fA-F0-9]{24}$/.test(v))
+          : [];
+        const textValue = typeof a.textValue === 'string' ? a.textValue.trim() : undefined;
+        const numberValue = a.numberValue != null && !Number.isNaN(Number(a.numberValue)) ? Number(a.numberValue) : undefined;
+        return { attribute, values, textValue, numberValue };
+      }).filter(Boolean);
+    };
+
     const baseDoc = {
       name: req.body.name,
       description: req.body.description,
@@ -413,7 +435,8 @@ export const createProduct = async (req, res) => {
       isFeatured: !!req.body.isFeatured,
       sizeGuide,
       videoUrls,
-      order: req.body.isFeatured ? await Product.countDocuments({ isFeatured: true }) : 0
+      order: req.body.isFeatured ? await Product.countDocuments({ isFeatured: true }) : 0,
+      attributes: normalizeAttributes(req.body.attributes)
     };
 
     if (!simpleMode) {
@@ -500,6 +523,24 @@ export const createProduct = async (req, res) => {
 export const updateProduct = async (req, res) => {
   try {
   const { sizes, colors: incomingColors, videoUrls: incomingVideoUrls, sizeGuide: incomingSizeGuide, categories: incomingCategories, isActive: incomingIsActive, slug: incomingSlug, metaTitle, metaDescription, metaKeywords, ogTitle, ogDescription, ogImage, brand: incomingBrand, ...updateData } = req.body;
+    // Normalize attributes array if provided
+    if (updateData.attributes !== undefined) {
+      const norm = (arr) => {
+        if (!Array.isArray(arr)) return [];
+        return arr.map((a) => {
+          if (!a) return null;
+          const attribute = (typeof a.attribute === 'string' && /^[a-fA-F0-9]{24}$/.test(a.attribute)) ? a.attribute : null;
+          if (!attribute) return null;
+          const values = Array.isArray(a.values)
+            ? a.values.filter(v => typeof v === 'string' && /^[a-fA-F0-9]{24}$/.test(v))
+            : [];
+          const textValue = typeof a.textValue === 'string' ? a.textValue.trim() : undefined;
+          const numberValue = a.numberValue != null && !Number.isNaN(Number(a.numberValue)) ? Number(a.numberValue) : undefined;
+          return { attribute, values, textValue, numberValue };
+        }).filter(Boolean);
+      };
+      updateDataSanitized.attributes = norm(updateData.attributes);
+    }
     // Start with shallow copy of remaining fields
     const updateDataSanitized = { ...updateData };
 
@@ -737,7 +778,7 @@ export const updateProduct = async (req, res) => {
       }
     } catch (e) { /* silent */ }
 
-  product = await product.populate(['category','categories','brand']);
+  product = await product.populate(['category','categories','brand','attributes.attribute','attributes.values']);
   res.json(product);
   } catch (error) {
     console.error('Error updating product:', error);
