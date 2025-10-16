@@ -27,7 +27,7 @@ import {
   verifyReview,
   deleteReview
 } from '../controllers/reviewController.js';
-import { updateProductImages } from '../controllers/productController.js';
+import { updateProductImages, generateProductVariants, updateVariant, bulkUpdateVariants, getAttributeValueImages, setAttributeValueImages } from '../controllers/productController.js';
 
 const router = express.Router();
 
@@ -55,6 +55,13 @@ router.put('/featured/reorder', adminAuth, reorderFeaturedProducts);
 router.put('/:id', adminAuth, updateProduct);
 router.put('/:id/related', adminAuth, updateRelatedProducts);
 router.put('/:id/addons', adminAuth, updateAddOns);
+// Variant management
+router.post('/:id/variants/generate', adminAuth, generateProductVariants);
+router.put('/:id/variants/:variantId', adminAuth, updateVariant);
+router.put('/:id/variants-bulk', adminAuth, bulkUpdateVariants);
+// Attribute value images on a product
+router.get('/:id/attribute-images', adminAuth, getAttributeValueImages);
+router.put('/:id/attribute-images', adminAuth, setAttributeValueImages);
 // Partial image-only update
 router.patch('/:id/images', adminAuth, updateProductImages);
 router.post('/:id/videos', adminAuth, videoUpload.single('video'), uploadProductVideo);
