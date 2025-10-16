@@ -1,4 +1,5 @@
 import BundleOffer from '../models/BundleOffer.js';
+import mongoose from 'mongoose';
 
 export const listAdmin = async (req, res) => {
   try {
@@ -96,13 +97,18 @@ export const publicListByProduct = async (req, res) => {
   try {
     const now = new Date();
     const productId = req.params.id;
+    // Validate and cast ObjectId to ensure proper matching in nested array queries
+    if (!mongoose.Types.ObjectId.isValid(productId)) {
+      return res.status(400).json({ message: 'Invalid product id' });
+    }
+    const pid = new mongoose.Types.ObjectId(productId);
     const q = {
       active: true,
       $and: [
         { $or: [ { startDate: null }, { startDate: { $lte: now } } ] },
         { $or: [ { endDate: null }, { endDate: { $gte: now } } ] }
       ],
-      'products.product': productId
+      'products.product': pid
     };
     const bundles = await BundleOffer.find(q)
       .sort({ createdAt: -1 })
