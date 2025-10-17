@@ -523,6 +523,8 @@ export const createProduct = async (req, res) => {
 export const updateProduct = async (req, res) => {
   try {
   const { sizes, colors: incomingColors, videoUrls: incomingVideoUrls, sizeGuide: incomingSizeGuide, categories: incomingCategories, isActive: incomingIsActive, slug: incomingSlug, metaTitle, metaDescription, metaKeywords, ogTitle, ogDescription, ogImage, brand: incomingBrand, ...updateData } = req.body;
+    // Start with shallow copy of remaining fields
+    const updateDataSanitized = { ...updateData };
     // Normalize attributes array if provided
     if (updateData.attributes !== undefined) {
       const norm = (arr) => {
@@ -541,8 +543,6 @@ export const updateProduct = async (req, res) => {
       };
       updateDataSanitized.attributes = norm(updateData.attributes);
     }
-    // Start with shallow copy of remaining fields
-    const updateDataSanitized = { ...updateData };
 
     // Assign meta / slug fields after declaration
     if (incomingSlug !== undefined) {
@@ -708,7 +708,7 @@ export const updateProduct = async (req, res) => {
 
       // Create new inventory records for new size/color combinations
       const newCombinations = sizes.flatMap(size =>
-        colors.map(color => ({
+        incomingColors.map(color => ({
           size: size.name,
           color: color.name,
           stock: Number(size.stock) || 0
