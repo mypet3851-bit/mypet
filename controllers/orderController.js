@@ -552,6 +552,22 @@ export const createOrder = async (req, res) => {
         deliveryStatus: savedOrder.deliveryStatus || null,
         deliveryTrackingNumber: savedOrder.deliveryTrackingNumber || savedOrder.trackingNumber || null,
         autoDispatch: autoDispatchResult,
+        // Provide core fields so clients can render order details without another fetch
+        items: Array.isArray(savedOrder.items) ? savedOrder.items.map(it => ({
+          product: it.product,
+          name: it.name,
+          image: it.image,
+          quantity: it.quantity,
+          price: it.price,
+          size: it.size,
+          color: it.color,
+          variants: it.variants,
+          variantId: it.variantId,
+          sku: it.sku
+        })) : [],
+        shippingAddress: savedOrder.shippingAddress,
+        paymentMethod: savedOrder.paymentMethod,
+        createdAt: savedOrder.createdAt,
         totalWithShipping: (() => {
           const base = savedOrder.totalAmount || 0;
           const ship = savedOrder.shippingFee || savedOrder.deliveryFee || 0;
@@ -648,6 +664,26 @@ export const getAllOrders = async (req, res) => {
   } catch (error) {
     console.error('Error fetching all orders:', error);
     res.status(500).json({ message: 'Failed to fetch orders' });
+  }
+};
+
+// Get a single order by ID (public: used for guest checkout "View Order")
+// Returns basic order details with populated product refs. You may tighten access later (e.g., token + ownership check).
+export const getOrderPublic = async (req, res) => {
+  try {
+    const order = await Order.findById(req.params.id)
+      .populate('items.product');
+    if (!order) return res.status(404).json({ message: 'Order not found' });
+    const obj = order.toObject({ virtuals: true });
+    const response = {
+      ...obj,
+      effectiveShippingFee: obj.effectiveShippingFee ?? (obj.shippingFee || obj.deliveryFee || 0),
+      totalWithShipping: obj.totalWithShipping ?? ((obj.totalAmount || 0) + (obj.shippingFee || obj.deliveryFee || 0))
+    };
+    res.json({ order: response });
+  } catch (error) {
+    console.error('Error fetching order by id:', error);
+    res.status(500).json({ message: 'Failed to load order', error: error?.message });
   }
 };
 
