@@ -638,6 +638,15 @@ settingsSchema.add({
   }
 });
 
+// Shipping configuration (admin configurable)
+// When fixedFeeEnabled=true, backend shipping calculations will short-circuit to fixedFeeAmount.
+settingsSchema.add({
+  shipping: {
+    fixedFeeEnabled: { type: Boolean, default: false },
+    fixedFeeAmount: { type: Number, default: 0, min: 0 }
+  }
+});
+
 // Payments configuration (server-side; clientId may be exposed, secret must not be)
 settingsSchema.add({
   payments: {

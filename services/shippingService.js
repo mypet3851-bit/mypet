@@ -1,5 +1,6 @@
 import ShippingZone from '../models/ShippingZone.js';
 import ShippingRate from '../models/ShippingRate.js';
+import Settings from '../models/Settings.js';
 
 /**
  * Calculate shipping fee based on order details
@@ -13,6 +14,16 @@ import ShippingRate from '../models/ShippingRate.js';
  */
 export const calculateShippingFee = async ({ subtotal, weight, country, region, city }) => {
   try {
+    // Global fixed fee override (from Settings)
+    try {
+      const s = await Settings.findOne();
+      if (s?.shipping?.fixedFeeEnabled) {
+        const amt = typeof s.shipping.fixedFeeAmount === 'number' ? s.shipping.fixedFeeAmount : 0;
+        return Math.max(0, amt);
+      }
+    } catch (e) {
+      // Non-fatal; proceed with normal logic
+    }
     // City-first lookup: treat `countries` array as list of cities if no real country logic is used
     let zones = [];
     if (city) {
@@ -104,6 +115,24 @@ export const calculateShippingFee = async ({ subtotal, weight, country, region, 
  */
 export const getAvailableShippingOptions = async ({ country, region, city, subtotal = 0, weight = 0 }) => {
   try {
+    // Global fixed fee override: return single option
+    try {
+      const s = await Settings.findOne();
+      if (s?.shipping?.fixedFeeEnabled) {
+        const amt = typeof s.shipping.fixedFeeAmount === 'number' ? s.shipping.fixedFeeAmount : 0;
+        return [{
+          id: 'fixed:store',
+          name: 'Standard Shipping',
+          description: 'Fixed fee set by store',
+          method: 'fixed_fee',
+          cost: Math.max(0, amt),
+          zone: 'All',
+          estimatedDays: null
+        }];
+      }
+    } catch (e) {
+      // ignore and continue with zone/rates logic
+    }
     // City-first strategy (we repurpose `countries` to store city names)
     let zones = [];
     if (city) {
