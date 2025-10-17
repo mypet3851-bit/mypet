@@ -643,7 +643,10 @@ settingsSchema.add({
 settingsSchema.add({
   shipping: {
     fixedFeeEnabled: { type: Boolean, default: false },
-    fixedFeeAmount: { type: Number, default: 0, min: 0 }
+    fixedFeeAmount: { type: Number, default: 0, min: 0 },
+    // If enabled and order subtotal >= freeShippingMinSubtotal, shipping is free (cost 0)
+    freeShippingEnabled: { type: Boolean, default: false },
+    freeShippingMinSubtotal: { type: Number, default: 0, min: 0 }
   }
 });
 
