@@ -361,6 +361,8 @@ settingsSchema.add({
   checkoutForm: {
     showEmail: { type: Boolean, default: false },
     showLastName: { type: Boolean, default: false },
+    // Allow users to proceed to checkout without authentication
+    allowGuestCheckout: { type: Boolean, default: true },
     // Future toggles (currently not rendered in UI):
     showSecondaryMobile: { type: Boolean, default: false },
     showCountry: { type: Boolean, default: false },
