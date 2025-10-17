@@ -1329,6 +1329,7 @@ router.get('/checkout', async (req, res) => {
     res.json({
       showEmail: !!cf.showEmail,
       showLastName: !!cf.showLastName,
+      allowGuestCheckout: cf.allowGuestCheckout !== false, // default true
       showSecondaryMobile: !!cf.showSecondaryMobile,
       showCountry: !!cf.showCountry,
       allowOtherCity: !!cf.allowOtherCity,
@@ -1342,7 +1343,7 @@ router.get('/checkout', async (req, res) => {
 // Update checkout form (guarded; can be relaxed via env)
 router.put('/checkout', settingsWriteGuard, async (req, res) => {
   try {
-    const { showEmail, showLastName, showSecondaryMobile, showCountry, cities, allowOtherCity } = req.body || {};
+    const { showEmail, showLastName, showSecondaryMobile, showCountry, cities, allowOtherCity, allowGuestCheckout } = req.body || {};
     let settings = await Settings.findOne();
     if (!settings) settings = new Settings();
     settings.checkoutForm = settings.checkoutForm || {};
@@ -1350,6 +1351,7 @@ router.put('/checkout', settingsWriteGuard, async (req, res) => {
     if (typeof showLastName === 'boolean') settings.checkoutForm.showLastName = showLastName;
     if (typeof showSecondaryMobile === 'boolean') settings.checkoutForm.showSecondaryMobile = showSecondaryMobile;
     if (typeof showCountry === 'boolean') settings.checkoutForm.showCountry = showCountry;
+  if (typeof allowGuestCheckout === 'boolean') settings.checkoutForm.allowGuestCheckout = allowGuestCheckout;
     if (typeof allowOtherCity === 'boolean') settings.checkoutForm.allowOtherCity = allowOtherCity;
     if (Array.isArray(cities)) settings.checkoutForm.cities = cities.filter(c => typeof c === 'string' && c.trim().length).map(c => c.trim());
     settings.markModified('checkoutForm');
