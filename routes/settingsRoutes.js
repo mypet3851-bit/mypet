@@ -352,6 +352,12 @@ router.put('/', settingsWriteGuard, async (req, res) => {
           const num = Number(s.fixedFeeAmount);
           if (!isNaN(num) && num >= 0) settings.shipping.fixedFeeAmount = num;
         }
+        // Free shipping threshold
+        if (typeof s.freeShippingEnabled !== 'undefined') settings.shipping.freeShippingEnabled = !!s.freeShippingEnabled;
+        if (typeof s.freeShippingMinSubtotal !== 'undefined') {
+          const min = Number(s.freeShippingMinSubtotal);
+          if (!isNaN(min) && min >= 0) settings.shipping.freeShippingMinSubtotal = min;
+        }
         try { settings.markModified('shipping'); } catch {}
       }
 
