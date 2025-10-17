@@ -343,6 +343,18 @@ router.put('/', settingsWriteGuard, async (req, res) => {
         try { settings.markModified('checkoutForm'); } catch {}
       }
 
+      // Shipping settings
+      if (req.body.shipping && typeof req.body.shipping === 'object') {
+        settings.shipping = settings.shipping || { fixedFeeEnabled: false, fixedFeeAmount: 0 };
+        const s = req.body.shipping;
+        if (typeof s.fixedFeeEnabled !== 'undefined') settings.shipping.fixedFeeEnabled = !!s.fixedFeeEnabled;
+        if (typeof s.fixedFeeAmount !== 'undefined') {
+          const num = Number(s.fixedFeeAmount);
+          if (!isNaN(num) && num >= 0) settings.shipping.fixedFeeAmount = num;
+        }
+        try { settings.markModified('shipping'); } catch {}
+      }
+
       // Header icon configurations
       if (Object.prototype.hasOwnProperty.call(req.body, 'headerIcons')) {
         try { settings.markModified('headerIcons'); } catch {}
