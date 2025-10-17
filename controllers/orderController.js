@@ -148,7 +148,7 @@ export const createOrder = async (req, res) => {
     const exchangeRate = 1; // No runtime FX conversion; prices stored as-is
     const stockUpdates = []; // Track stock updates for rollback
 
-    for (const item of items) {
+  for (const item of items) {
       const baseProductQuery = Product.findById(item.product);
       const product = useTransaction ? await baseProductQuery.session(session) : await baseProductQuery;
 
@@ -204,7 +204,17 @@ export const createOrder = async (req, res) => {
         price: catalogPrice, // store unmodified
         name: product.name,
         image: Array.isArray(product.images) && product.images.length ? product.images[0] : undefined,
-        size: hasSizes ? (sizeName || undefined) : undefined
+        size: hasSizes ? (sizeName || undefined) : undefined,
+        // Persist optional color and generic variants if provided by client
+        color: (typeof item.color === 'string' ? item.color : (item.color?.name || item.color?.code || undefined)),
+        variants: Array.isArray(item.variants) ? item.variants.map(v => ({
+          attributeId: v.attributeId || v.attribute || undefined,
+          attributeName: v.attributeName || v.name || undefined,
+          valueId: v.valueId || v.value || undefined,
+          valueName: v.valueName || v.valueLabel || v.label || undefined
+        })) : undefined,
+        variantId: (item.variantId ? String(item.variantId) : undefined),
+        sku: (typeof item.sku === 'string' ? item.sku : undefined)
       });
 
       // Track stock update for this product
@@ -467,6 +477,14 @@ export const createOrder = async (req, res) => {
     // Attempt auto-dispatch to delivery company if configuration enables it.
     let autoDispatchResult = null;
     try {
+      // Guard against long waits to keep API responsive
+      const AUTO_DISPATCH_TIMEOUT_MS = Number(process.env.AUTO_DISPATCH_TIMEOUT_MS || 8000);
+      const withTimeout = (p) => new Promise((resolve) => {
+        let settled = false;
+        const t = setTimeout(() => { if (!settled) { settled = true; resolve({ timeout: true }); } }, AUTO_DISPATCH_TIMEOUT_MS);
+        p.then((v) => { if (!settled) { settled = true; clearTimeout(t); resolve(v); } })
+         .catch((e) => { if (!settled) { settled = true; clearTimeout(t); resolve({ error: e }); } });
+      });
       // Find an active delivery company with autoDispatchOnOrderCreate enabled.
       const autoCompany = await DeliveryCompany.findOne({ isActive: true, autoDispatchOnOrderCreate: true }).sort('-isDefault');
       if (autoCompany) {
@@ -480,7 +498,14 @@ export const createOrder = async (req, res) => {
             const mappingCheck = validateRequiredMappings(savedOrder.toObject(), autoCompany.toObject());
             if (mappingCheck.ok) {
               const deliveryFee = savedOrder.shippingFee || savedOrder.deliveryFee || 0;
-              const { trackingNumber, providerResponse, providerStatus } = await sendToCompany(savedOrder.toObject(), autoCompany.toObject(), { deliveryFee });
+              const dispatchAttempt = withTimeout(sendToCompany(savedOrder.toObject(), autoCompany.toObject(), { deliveryFee }));
+              const dispatchResult = await dispatchAttempt;
+              if (dispatchResult?.timeout) {
+                autoDispatchResult = { success: false, reason: 'TIMEOUT' };
+              } else if (dispatchResult?.error) {
+                throw dispatchResult.error;
+              } else {
+                const { trackingNumber, providerResponse, providerStatus } = dispatchResult;
               savedOrder.deliveryCompany = autoCompany._id;
               savedOrder.deliveryStatus = mapStatus(autoCompany, providerStatus || 'assigned');
               savedOrder.deliveryTrackingNumber = trackingNumber;
@@ -496,6 +521,7 @@ export const createOrder = async (req, res) => {
                 status: savedOrder.deliveryStatus,
                 providerStatus: providerStatus || 'assigned'
               };
+              }
             } else {
               autoDispatchResult = { success: false, reason: 'MISSING_MAPPINGS', missing: mappingCheck.missing };
             }
