@@ -27,7 +27,7 @@ import {
   verifyReview,
   deleteReview
 } from '../controllers/reviewController.js';
-import { updateProductImages, generateProductVariants, updateVariant, bulkUpdateVariants, getAttributeValueImages, setAttributeValueImages } from '../controllers/productController.js';
+import { updateProductImages, generateProductVariants, updateVariant, bulkUpdateVariants, getAttributeValueImages, setAttributeValueImages, deleteVariant } from '../controllers/productController.js';
 
 const router = express.Router();
 
@@ -59,6 +59,7 @@ router.put('/:id/addons', adminAuth, updateAddOns);
 router.post('/:id/variants/generate', adminAuth, generateProductVariants);
 router.put('/:id/variants/:variantId', adminAuth, updateVariant);
 router.put('/:id/variants-bulk', adminAuth, bulkUpdateVariants);
+router.delete('/:id/variants/:variantId', adminAuth, deleteVariant);
 // Attribute value images on a product
 router.get('/:id/attribute-images', adminAuth, getAttributeValueImages);
 router.put('/:id/attribute-images', adminAuth, setAttributeValueImages);
