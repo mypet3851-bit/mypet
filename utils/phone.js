@@ -1,16 +1,23 @@
 // Simple E.164-ish normalization
 // - Keep digits and leading +
 // - Remove extra leading zeros after country code when possible
-// Note: For full accuracy consider using libphonenumber-js; this lightweight helper avoids external deps.
-import { parsePhoneNumberFromString } from 'libphonenumber-js';
+// Note: Tries to use libphonenumber-js if available, otherwise falls back to lightweight helper.
+let parsePhoneNumberFromString;
+try {
+  // Optional dependency – don't crash server if not installed in minimal setups
+  // eslint-disable-next-line n/no-missing-import
+  ({ parsePhoneNumberFromString } = await import('libphonenumber-js'));
+} catch {}
 
 export function normalizePhoneE164ish(input, region) {
   if (!input) return '';
   const raw = String(input).trim();
   // Try robust parsing with libphonenumber-js first
   try {
-    const parsed = parsePhoneNumberFromString(raw, region || undefined);
-    if (parsed && parsed.isValid()) return parsed.number; // E.164 format like +15551234567
+    if (parsePhoneNumberFromString) {
+      const parsed = parsePhoneNumberFromString(raw, region || undefined);
+      if (parsed && parsed.isValid()) return parsed.number; // E.164 format like +15551234567
+    }
   } catch {}
   // Keep + and digits only
   let s = raw.replace(/[^0-9+]/g, '');
