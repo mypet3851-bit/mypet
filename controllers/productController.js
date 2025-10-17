@@ -334,6 +334,9 @@ export const getProduct = async (req, res) => {
       .populate('brand')
       .populate('attributes.attribute')
       .populate('attributes.values')
+      // Ensure variant attribute/value documents are populated for UI labels
+      .populate('variants.attributes.attribute')
+      .populate('variants.attributes.value')
       .populate('relatedProducts')
       .populate('addOns')
       .populate({
@@ -1200,6 +1203,27 @@ export const bulkUpdateVariants = async (req, res) => {
     res.json(populated?.variants || []);
   } catch (e) {
     res.status(500).json({ message: 'Failed to bulk update variants' });
+  }
+};
+
+// Delete one variant from a product
+export const deleteVariant = async (req, res) => {
+  try {
+    const { id, variantId } = req.params;
+    const product = await Product.findById(id);
+    if (!product) return res.status(404).json({ message: 'Product not found' });
+    const v = (product.variants || []).id(variantId);
+    if (!v) return res.status(404).json({ message: 'Variant not found' });
+    v.remove();
+    await product.save();
+    // Return updated variants (populated) so client can refresh list
+    const populated = await Product.findById(id)
+      .select('variants')
+      .populate('variants.attributes.attribute')
+      .populate('variants.attributes.value');
+    res.json(populated?.variants || []);
+  } catch (e) {
+    res.status(500).json({ message: 'Failed to delete variant' });
   }
 };
 
