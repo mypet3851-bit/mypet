@@ -48,7 +48,8 @@ export const publicActiveList = async (req, res) => {
       .sort({ startDate: 1 })
       .populate({
         path: 'items.product',
-        select: 'name images colors price originalPrice',
+          // Include attributeImages so storefront can show per-attribute images on flash cards
+          select: 'name images colors attributeImages price originalPrice',
       })
       .lean();
 
@@ -80,7 +81,7 @@ export const publicGetById = async (req, res) => {
     const s = await FlashSale.findOne({ _id: id, active: true, startDate: { $lte: now }, endDate: { $gte: now } })
       .populate({
         path: 'items.product',
-        select: 'name images colors price originalPrice',
+          select: 'name images colors attributeImages price originalPrice',
       })
       .lean();
     if (!s) return res.status(404).json({ message: 'Flash sale not found or not active' });
