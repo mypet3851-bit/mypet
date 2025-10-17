@@ -404,20 +404,29 @@ export const createProduct = async (req, res) => {
     }
     const simpleMode = !Array.isArray(req.body.colors) || req.body.colors.length === 0;
 
-    // Normalize attributes if provided
+    // Normalize attributes if provided (accept ids or populated objects)
     const normalizeAttributes = (arr) => {
       if (!Array.isArray(arr)) return [];
-      return arr.map((a) => {
-        if (!a) return null;
-        const attribute = (typeof a.attribute === 'string' && /^[a-fA-F0-9]{24}$/.test(a.attribute)) ? a.attribute : null;
-        if (!attribute) return null;
-        const values = Array.isArray(a.values)
-          ? a.values.filter(v => typeof v === 'string' && /^[a-fA-F0-9]{24}$/.test(v))
-          : [];
-        const textValue = typeof a.textValue === 'string' ? a.textValue.trim() : undefined;
-        const numberValue = a.numberValue != null && !Number.isNaN(Number(a.numberValue)) ? Number(a.numberValue) : undefined;
-        return { attribute, values, textValue, numberValue };
-      }).filter(Boolean);
+      return arr
+        .map((a) => {
+          if (!a) return null;
+          let attribute = null;
+          if (typeof a.attribute === 'string' && /^[a-fA-F0-9]{24}$/.test(a.attribute)) {
+            attribute = a.attribute;
+          } else if (a.attribute && typeof a.attribute === 'object' && typeof a.attribute._id === 'string' && /^[a-fA-F0-9]{24}$/.test(a.attribute._id)) {
+            attribute = a.attribute._id;
+          }
+          if (!attribute) return null;
+          const values = Array.isArray(a.values)
+            ? a.values
+                .map((v) => (typeof v === 'string' && /^[a-fA-F0-9]{24}$/.test(v) ? v : (v && typeof v === 'object' && typeof v._id === 'string' && /^[a-fA-F0-9]{24}$/.test(v._id) ? v._id : null)))
+                .filter(Boolean)
+            : [];
+          const textValue = typeof a.textValue === 'string' ? a.textValue.trim() : undefined;
+          const numberValue = a.numberValue != null && !Number.isNaN(Number(a.numberValue)) ? Number(a.numberValue) : undefined;
+          return { attribute, values, textValue, numberValue };
+        })
+        .filter(Boolean);
     };
 
     const baseDoc = {
@@ -529,17 +538,26 @@ export const updateProduct = async (req, res) => {
     if (updateData.attributes !== undefined) {
       const norm = (arr) => {
         if (!Array.isArray(arr)) return [];
-        return arr.map((a) => {
-          if (!a) return null;
-          const attribute = (typeof a.attribute === 'string' && /^[a-fA-F0-9]{24}$/.test(a.attribute)) ? a.attribute : null;
-          if (!attribute) return null;
-          const values = Array.isArray(a.values)
-            ? a.values.filter(v => typeof v === 'string' && /^[a-fA-F0-9]{24}$/.test(v))
-            : [];
-          const textValue = typeof a.textValue === 'string' ? a.textValue.trim() : undefined;
-          const numberValue = a.numberValue != null && !Number.isNaN(Number(a.numberValue)) ? Number(a.numberValue) : undefined;
-          return { attribute, values, textValue, numberValue };
-        }).filter(Boolean);
+        return arr
+          .map((a) => {
+            if (!a) return null;
+            let attribute = null;
+            if (typeof a.attribute === 'string' && /^[a-fA-F0-9]{24}$/.test(a.attribute)) {
+              attribute = a.attribute;
+            } else if (a.attribute && typeof a.attribute === 'object' && typeof a.attribute._id === 'string' && /^[a-fA-F0-9]{24}$/.test(a.attribute._id)) {
+              attribute = a.attribute._id;
+            }
+            if (!attribute) return null;
+            const values = Array.isArray(a.values)
+              ? a.values
+                  .map((v) => (typeof v === 'string' && /^[a-fA-F0-9]{24}$/.test(v) ? v : (v && typeof v === 'object' && typeof v._id === 'string' && /^[a-fA-F0-9]{24}$/.test(v._id) ? v._id : null)))
+                  .filter(Boolean)
+              : [];
+            const textValue = typeof a.textValue === 'string' ? a.textValue.trim() : undefined;
+            const numberValue = a.numberValue != null && !Number.isNaN(Number(a.numberValue)) ? Number(a.numberValue) : undefined;
+            return { attribute, values, textValue, numberValue };
+          })
+          .filter(Boolean);
       };
       updateDataSanitized.attributes = norm(updateData.attributes);
     }
