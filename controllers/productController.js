@@ -31,7 +31,7 @@ import { handleProductImages } from '../utils/imageHandler.js';
 import cloudinary from '../services/cloudinaryClient.js';
 import { cacheGet, cacheSet } from '../utils/cache/simpleCache.js';
 import { inventoryService } from '../services/inventoryService.js';
-import { deepseekTranslate, deepseekTranslateBatch } from '../services/translate/deepseek.js';
+import { deepseekTranslate, deepseekTranslateBatch, isDeepseekConfigured } from '../services/translate/deepseek.js';
 // Currency conversion disabled for product storage/display; prices are stored and served as-is in store currency
 
 // Get all products
@@ -178,7 +178,7 @@ export const getProducts = async (req, res) => {
       .populate({ path: 'reviews.user', select: 'name email image' })
       .sort({ isFeatured: -1, order: 1, createdAt: -1 });
 
-    const allowAutoTranslate = process.env.ALLOW_RUNTIME_PRODUCT_TRANSLATE === 'true';
+  const allowAutoTranslate = isDeepseekConfigured();
     const productsWithInventory = await Promise.all(
       products.map(async (product) => {
         const inventory = await Inventory.find({ product: product._id });
@@ -403,7 +403,7 @@ export const getProduct = async (req, res) => {
         if (nm) productObj.name = nm;
         if (desc) productObj.description = desc;
         // Optionally auto-translate and persist when missing
-        if ((!nm || !desc) && process.env.ALLOW_RUNTIME_PRODUCT_TRANSLATE === 'true') {
+  if ((!nm || !desc) && isDeepseekConfigured()) {
           let changed = false;
           if (!nm && typeof product.name === 'string' && product.name.trim()) {
             try {
