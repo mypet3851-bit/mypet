@@ -171,6 +171,55 @@ router.get('/analytics', async (req, res) => {
   }
 });
 
+// Inventory settings: GET
+router.get('/inventory', async (req, res) => {
+  try {
+    let settings = await Settings.findOne();
+    if (!settings) settings = await Settings.create({});
+    const inv = settings.inventory || {
+      autoDecrementOnOrder: true,
+      autoIncrementOnCancel: true,
+      autoIncrementOnReturn: true,
+      allowNegativeStock: false,
+      reserveOnCheckout: true,
+      reservationTTLMinutes: 15
+    };
+    res.json(inv);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Inventory settings: PUT (guarded like general settings)
+router.put('/inventory', settingsWriteGuard, async (req, res) => {
+  try {
+    let settings = await Settings.findOne().sort({ updatedAt: -1 });
+    if (!settings) settings = new Settings();
+    settings.inventory = settings.inventory || {};
+    const inc = req.body || {};
+    const next = { ...settings.inventory };
+    const coerceBool = (v, def) => (typeof v === 'undefined' ? def : !!v);
+    const coerceNum = (v, def) => {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : def;
+    };
+    next.autoDecrementOnOrder = coerceBool(inc.autoDecrementOnOrder, true);
+    next.autoIncrementOnCancel = coerceBool(inc.autoIncrementOnCancel, true);
+    next.autoIncrementOnReturn = coerceBool(inc.autoIncrementOnReturn, true);
+    next.allowNegativeStock = coerceBool(inc.allowNegativeStock, false);
+    next.reserveOnCheckout = coerceBool(inc.reserveOnCheckout, true);
+    let ttl = coerceNum(inc.reservationTTLMinutes, settings.inventory.reservationTTLMinutes || 15);
+    if (!(ttl >= 1 && ttl <= 1440)) ttl = 15;
+    next.reservationTTLMinutes = ttl;
+    settings.inventory = next;
+    try { settings.markModified('inventory'); } catch {}
+    await settings.save();
+    res.json(settings.inventory);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
 // Lightweight version endpoint for polling (no secrets, minimal payload)
 router.get('/version', async (req, res) => {
   try {

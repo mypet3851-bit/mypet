@@ -204,8 +204,14 @@ export const createOrder = async (req, res) => {
       stockUpdates.push({ productId: product._id });
     }
 
-    // Reserve inventory across warehouses for all items atomically
-    await inventoryService.reserveItems(reservationItems, req.user?._id, useTransaction ? session : null);
+    // Inventory settings control: reserve/decrement on order placement if enabled
+    let invCfg = null;
+    try { invCfg = (await Settings.findOne())?.inventory || null; } catch {}
+    const shouldDecrementNow = !!(invCfg?.reserveOnCheckout || invCfg?.autoDecrementOnOrder);
+    if (shouldDecrementNow) {
+      // Reserve (decrement) inventory across warehouses for all items atomically
+      await inventoryService.reserveItems(reservationItems, req.user?._id, useTransaction ? session : null);
+    }
 
     // Save or update recipient in Recipient collection
     const recipientQuery = {
@@ -677,20 +683,32 @@ export const updateOrderStatus = async (req, res) => {
     order.status = status;
     await order.save();
 
-    // Only auto-decrement inventory if status is first set to 'delivered' (or 'fulfilled')
-    if ((status === 'delivered' || status === 'fulfilled') && prevStatus !== status) {
-      for (const item of order.items) {
-        // Find inventory record for product, size, color
-        const inv = await Inventory.findOne({
-          product: item.product,
-          size: item.size || '',
-          color: item.color || ''
-        });
-        if (inv) {
-          const newQty = Math.max(0, inv.quantity - item.quantity);
-          await inventoryService.updateInventory(inv._id, newQty, req.user?._id || null);
-        }
-      }
+    // Inventory configuration driven stock adjustments
+    let invCfg = null;
+    try { invCfg = (await Settings.findOne())?.inventory || null; } catch {}
+    const decrementedAtOrder = !!(invCfg?.reserveOnCheckout || invCfg?.autoDecrementOnOrder);
+    const shouldDecrementOnDelivery = !decrementedAtOrder;
+
+    // Build items array in variant-aware form
+    const asInventoryItems = (items) => items.map(it => ({
+      product: it.product,
+      quantity: it.quantity,
+      ...(it.variantId ? { variantId: it.variantId } : { size: it.size, color: it.color })
+    }));
+
+    // Auto-decrement when delivered if not already decremented earlier
+    if ((status === 'delivered' || status === 'fulfilled') && prevStatus !== status && shouldDecrementOnDelivery) {
+      try { await inventoryService.reserveItems(asInventoryItems(order.items), req.user?._id || null); } catch (e) { console.warn('Delivery decrement failed:', e?.message || e); }
+    }
+
+    // Auto-increment on cancel if it was decremented earlier
+    if (status === 'cancelled' && prevStatus !== status && invCfg?.autoIncrementOnCancel && decrementedAtOrder) {
+      try { await inventoryService.incrementItems(asInventoryItems(order.items), req.user?._id || null, 'Order cancelled'); } catch (e) { console.warn('Cancel increment failed:', e?.message || e); }
+    }
+
+    // Auto-increment on returned
+    if (status === 'returned' && prevStatus !== status && invCfg?.autoIncrementOnReturn) {
+      try { await inventoryService.incrementItems(asInventoryItems(order.items), req.user?._id || null, 'Order returned'); } catch (e) { console.warn('Return increment failed:', e?.message || e); }
     }
 
     // Emit real-time event for order update
