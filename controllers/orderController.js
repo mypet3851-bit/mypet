@@ -187,7 +187,8 @@ export const createOrder = async (req, res) => {
         price: catalogPrice, // store unmodified
         name: product.name,
         image: Array.isArray(product.images) && product.images.length ? product.images[0] : undefined,
-        size: hasSizes ? (sizeName || undefined) : undefined,
+        // Include legacy size only when not using explicit variantId
+        size: usingVariant ? undefined : (sizeName || undefined),
         // Persist optional color and generic variants if provided by client
         color: (typeof item.color === 'string' ? item.color : (item.color?.name || item.color?.code || undefined)),
         variants: Array.isArray(item.variants) ? item.variants.map(v => ({
