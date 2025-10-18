@@ -41,6 +41,7 @@ export const updateInventoryByProductColorSize = asyncHandler(async (req, res) =
   if (!inventory) {
     return res.status(StatusCodes.NOT_FOUND).json({ message: 'Inventory record not found' });
   }
+  try { await inventoryService.recomputeProductStock(productId); } catch {}
   res.status(StatusCodes.OK).json(inventory);
 });
 import asyncHandler from 'express-async-handler';
@@ -112,6 +113,7 @@ export const updateInventoryByVariant = asyncHandler(async (req, res) => {
     { new: true, runValidators: true }
   );
   if (!inv) return res.status(StatusCodes.NOT_FOUND).json({ message: 'Inventory record not found for variant in this warehouse' });
+  try { await inventoryService.recomputeProductStock(productId); } catch {}
   res.status(StatusCodes.OK).json(inv);
 });
 

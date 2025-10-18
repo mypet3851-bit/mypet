@@ -13,6 +13,10 @@ const flashSaleSchema = new mongoose.Schema({
   endDate: { type: Date, required: true },
   items: [flashSaleItemSchema],
   active: { type: Boolean, default: true },
+  // Pricing mode persistence: 'fixed' (per-item price) or 'percent' (global discount)
+  pricingMode: { type: String, enum: ['fixed', 'percent'], default: 'fixed' },
+  // When pricingMode === 'percent', apply this percentage across items (UI convenience; items.flashPrice remains the source of truth for checkout)
+  discountPercent: { type: Number, min: 0, max: 100 },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
 }, { timestamps: true });
 

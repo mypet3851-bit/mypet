@@ -30,6 +30,7 @@ import { validateProductData } from '../utils/validation.js';
 import { handleProductImages } from '../utils/imageHandler.js';
 import cloudinary from '../services/cloudinaryClient.js';
 import { cacheGet, cacheSet } from '../utils/cache/simpleCache.js';
+import { inventoryService } from '../services/inventoryService.js';
 // Currency conversion disabled for product storage/display; prices are stored and served as-is in store currency
 
 // Get all products
@@ -1139,6 +1140,43 @@ export const generateProductVariants = async (req, res) => {
 
     product.variants = nextVariants;
     await product.save();
+    // Optional: ensure each variant has an initial inventory row (0 qty) in a default warehouse
+    try {
+      let warehouse = await Warehouse.findOne({ name: 'Main Warehouse' });
+      if (!warehouse) {
+        try {
+          warehouse = await Warehouse.findOneAndUpdate(
+            { name: 'Main Warehouse' },
+            { $setOnInsert: { name: 'Main Warehouse' } },
+            { new: true, upsert: true }
+          );
+        } catch (err) {
+          try { warehouse = await Warehouse.findOne({ name: 'Main Warehouse' }); } catch {}
+        }
+      }
+      if (warehouse) {
+        // Create missing rows only
+        const fresh = await Product.findById(productId).select('variants');
+        for (const v of fresh?.variants || []) {
+          const exists = await Inventory.exists({ product: productId, variantId: v._id, warehouse: warehouse._id });
+          if (!exists) {
+            await new Inventory({
+              product: productId,
+              variantId: v._id,
+              quantity: Number(v.stock) || 0,
+              warehouse: warehouse._id,
+              location: warehouse.name,
+              lowStockThreshold: 5,
+              attributesSnapshot: Array.isArray(v.attributes) ? v.attributes : undefined
+            }).save();
+          }
+        }
+        // Recompute aggregates after ensuring inventory rows
+        try { await inventoryService.recomputeProductStock(productId); } catch {}
+      }
+    } catch (e) {
+      console.warn('generateProductVariants: ensure initial inventory rows skipped due to error', e?.message || e);
+    }
     const populated = await Product.findById(productId)
       .populate('variants.attributes.attribute')
       .populate('variants.attributes.value');
@@ -1199,6 +1237,8 @@ export const updateVariant = async (req, res) => {
           createdInitialInventory = true;
           // v.stock will be recomputed from inventory by hooks/service; set for immediate response UX
           v.stock = desired;
+          // Keep product and variant aggregates in sync immediately
+          try { await inventoryService.recomputeProductStock(id); } catch {}
         } catch (err) {
           // If a concurrent request created the inventory row, surface as a 409 conflict instead of 500
           const code = err && (err.code || err?.original?.code);
