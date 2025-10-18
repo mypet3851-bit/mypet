@@ -45,7 +45,20 @@ export async function deepseekTranslate(text, from, to, options = {}) {
 
   // Cache check (DB)
   const { getCachedTranslation, saveCachedTranslation } = await import('./translationCache.js');
-  const cached = await getCachedTranslation(text, from, to, contextKey).catch(() => null);
+  let cached = await getCachedTranslation(text, from, to, contextKey).catch(() => null);
+  const DBG = process.env.LOG_TRANSLATION_DEBUG === '1';
+  if (DBG && cached) {
+    // eslint-disable-next-line no-console
+    console.log(`[i18n] cache hit (ctx='${contextKey || '-'}') from='${from}' to='${to}' len=${String(text).length}`);
+  }
+  // Fallback to contextless cache to maximize reuse of existing entries
+  if (!cached && contextKey) {
+    cached = await getCachedTranslation(text, from, to, '').catch(() => null);
+    if (DBG && cached) {
+      // eslint-disable-next-line no-console
+      console.log(`[i18n] cache fallback hit (no ctx) from='${from}' to='${to}' len=${String(text).length}`);
+    }
+  }
   if (cached) return cached;
   const prompt = `You are a professional translator. Translate the following text from ${from} to ${to}. Preserve placeholders like {{name}} and HTML tags if present. Only return the translated text without quotes.
 
@@ -71,6 +84,10 @@ ${text}`;
     const txt = await res.text().catch(() => '');
     throw new Error(`DeepSeek API error ${res.status}: ${txt.slice(0,200)}`);
   }
+  if (DBG) {
+    // eslint-disable-next-line no-console
+    console.log(`[i18n] API call DeepSeek model='${MODEL}' from='${from}' to='${to}' ctx='${contextKey || '-'}' len=${String(text).length}`);
+  }
   const data = await res.json();
   const content = data?.choices?.[0]?.message?.content?.trim();
   if (!content) throw new Error('Empty translation result');
@@ -92,7 +109,18 @@ export async function deepseekTranslateBatch(items, from, to, options = {}) {
   const { contextKey } = options || {};
   // Pre-check cache for all items to reduce API calls
   const { getCachedTranslationBulk } = await import('./translationCache.js');
-  const cacheHits = await getCachedTranslationBulk(items.map(i => i.text), from, to, contextKey).catch(() => new Map());
+  const texts = items.map(i => i.text);
+  let cacheHits = await getCachedTranslationBulk(texts, from, to, contextKey).catch(() => new Map());
+  // Fallback to contextless cache for misses
+  if (contextKey) {
+    const missingTexts = texts.filter(t => !cacheHits.has(t));
+    if (missingTexts.length) {
+      const fallbackHits = await getCachedTranslationBulk(missingTexts, from, to, '').catch(() => new Map());
+      for (const [k, v] of fallbackHits.entries()) {
+        cacheHits.set(k, v);
+      }
+    }
+  }
   const results = [];
   for (const it of items) {
     try {
