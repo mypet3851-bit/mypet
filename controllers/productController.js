@@ -1166,23 +1166,50 @@ export const updateVariant = async (req, res) => {
     // allow setting stock here by creating an initial record in a default warehouse.
     let createdInitialInventory = false;
     if (stock !== undefined) {
-      const invRecords = await Inventory.find({ product: id, variantId });
+      const invExists = await Inventory.exists({ product: id, variantId });
       const desired = Math.max(0, Number(stock));
-      if (!invRecords.length) {
-        // Ensure a default warehouse exists
-        let warehouse = await Warehouse.findOne();
-        if (!warehouse) warehouse = await Warehouse.create({ name: 'Main Warehouse' });
-        await new Inventory({
-          product: id,
-          variantId,
-          quantity: desired,
-          warehouse: warehouse._id,
-          location: warehouse.name,
-          lowStockThreshold: 5
-        }).save();
-        createdInitialInventory = true;
-        // v.stock will be recomputed from inventory by hooks/service; set for immediate response UX
-        v.stock = desired;
+      if (!invExists) {
+        // Ensure a default warehouse exists (atomic upsert to avoid race-condition on concurrent calls)
+        let warehouse = await Warehouse.findOne({ name: 'Main Warehouse' });
+        if (!warehouse) {
+          try {
+            warehouse = await Warehouse.findOneAndUpdate(
+              { name: 'Main Warehouse' },
+              { $setOnInsert: { name: 'Main Warehouse' } },
+              { new: true, upsert: true }
+            );
+          } catch (err) {
+            // Handle potential duplicate key error if another request created it concurrently
+            try { warehouse = await Warehouse.findOne({ name: 'Main Warehouse' }); } catch {}
+            if (!warehouse) {
+              console.error('updateVariant: failed to ensure default warehouse', err);
+              return res.status(500).json({ message: 'Failed to ensure default warehouse' });
+            }
+          }
+        }
+        try {
+          await new Inventory({
+            product: id,
+            variantId,
+            quantity: desired,
+            warehouse: warehouse._id,
+            location: warehouse.name,
+            lowStockThreshold: 5
+          }).save();
+          createdInitialInventory = true;
+          // v.stock will be recomputed from inventory by hooks/service; set for immediate response UX
+          v.stock = desired;
+        } catch (err) {
+          // If a concurrent request created the inventory row, surface as a 409 conflict instead of 500
+          const code = err && (err.code || err?.original?.code);
+          if (code === 11000) {
+            return res.status(409).json({
+              message: 'Variant already has warehouse inventory. Use inventory endpoints to update quantities per warehouse.'
+            });
+          }
+          console.error('updateVariant: failed to create initial inventory', err);
+          return res.status(500).json({ message: 'Failed to create initial inventory' });
+        }
       } else {
         // If inventory already exists across warehouses, require dedicated inventory endpoints
         return res.status(409).json({
@@ -1197,6 +1224,7 @@ export const updateVariant = async (req, res) => {
     const updated = (populated && populated.variants ? populated.variants.find((x)=> x._id.toString()===variantId) : null);
     res.json(updated);
   } catch (e) {
+    console.error('updateVariant error', e);
     res.status(500).json({ message: 'Failed to update variant' });
   }
 };

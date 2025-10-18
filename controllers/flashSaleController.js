@@ -66,6 +66,8 @@ export const publicActiveList = async (req, res) => {
       name: s.name,
       startDate: s.startDate,
       endDate: s.endDate,
+      pricingMode: s.pricingMode || 'fixed',
+      discountPercent: s.discountPercent,
       items: (s.items || []).map(it => ({
         product: it.product,
         flashPrice: it.flashPrice,
@@ -97,6 +99,8 @@ export const publicGetById = async (req, res) => {
       name: s.name,
       startDate: s.startDate,
       endDate: s.endDate,
+      pricingMode: s.pricingMode || 'fixed',
+      discountPercent: s.discountPercent,
       items: (s.items || []).map((it) => ({
         product: it.product,
         flashPrice: it.flashPrice,
