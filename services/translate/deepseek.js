@@ -37,10 +37,16 @@ export function isDeepseekConfigured() {
  * @param {string} to Target language code (e.g., 'he')
  * @returns {Promise<string>} Translated text
  */
-export async function deepseekTranslate(text, from, to) {
+export async function deepseekTranslate(text, from, to, options = {}) {
   if (DB_ENABLED === false) throw new Error('DeepSeek disabled');
   const key = DB_KEY || process.env.DEEPSEEK_API_KEY;
   if (!key) throw new Error('DEEPSEEK_API_KEY missing');
+  const { contextKey = '' } = options || {};
+
+  // Cache check (DB)
+  const { getCachedTranslation, saveCachedTranslation } = await import('./translationCache.js');
+  const cached = await getCachedTranslation(text, from, to, contextKey).catch(() => null);
+  if (cached) return cached;
   const prompt = `You are a professional translator. Translate the following text from ${from} to ${to}. Preserve placeholders like {{name}} and HTML tags if present. Only return the translated text without quotes.
 
 Text:
@@ -68,6 +74,10 @@ ${text}`;
   const data = await res.json();
   const content = data?.choices?.[0]?.message?.content?.trim();
   if (!content) throw new Error('Empty translation result');
+  // Persist in cache (best-effort)
+  try {
+    await saveCachedTranslation(text, content, from, to, contextKey, { provider: 'deepseek', model: MODEL });
+  } catch {}
   return content;
 }
 
@@ -77,12 +87,21 @@ ${text}`;
  * @param {string} from
  * @param {string} to
  */
-export async function deepseekTranslateBatch(items, from, to) {
+export async function deepseekTranslateBatch(items, from, to, options = {}) {
   // For simplicity, translate sequentially to keep prompt quality high; could parallelize with Promise.allSettled if needed.
+  const { contextKey } = options || {};
+  // Pre-check cache for all items to reduce API calls
+  const { getCachedTranslationBulk } = await import('./translationCache.js');
+  const cacheHits = await getCachedTranslationBulk(items.map(i => i.text), from, to, contextKey).catch(() => new Map());
   const results = [];
   for (const it of items) {
     try {
-      const translated = await deepseekTranslate(it.text, from, to);
+      const hit = cacheHits.get(it.text);
+      if (hit) {
+        results.push({ id: it.id, text: hit });
+        continue;
+      }
+      const translated = await deepseekTranslate(it.text, from, to, { contextKey });
       results.push({ id: it.id, text: translated });
     } catch (e) {
       results.push({ id: it.id, error: e?.message || 'translate_failed' });
