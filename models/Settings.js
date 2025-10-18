@@ -240,6 +240,16 @@ const settingsSchema = new mongoose.Schema({
     enum: ['standard', 'compact', 'masonry', 'list', 'wide', 'gallery', 'carousel'],
     default: 'standard'
   },
+  
+  // Translations/AI settings (DeepSeek)
+  translations: {
+    deepseek: {
+      enabled: { type: Boolean, default: false },
+      apiKey: { type: String, default: '' }, // stored securely in DB; masked in API responses
+      apiUrl: { type: String, default: '' }, // optional override (falls back to env or default)
+      model: { type: String, default: '' }   // optional override (falls back to env default)
+    }
+  },
   // Product listing filter visibility toggles
   showColorFilter: { type: Boolean, default: true }, // allow hiding color facet from storefront
   

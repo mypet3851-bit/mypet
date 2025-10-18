@@ -1,8 +1,34 @@
 // DeepSeek translation service (uses OpenAI-compatible chat completions API)
 // Env: DEEPSEEK_API_KEY (required)
 
-const API_URL = process.env.DEEPSEEK_API_URL || 'https://api.deepseek.com/chat/completions';
-const MODEL = process.env.DEEPSEEK_MODEL || 'deepseek-chat';
+let API_URL = process.env.DEEPSEEK_API_URL || 'https://api.deepseek.com/chat/completions';
+let MODEL = process.env.DEEPSEEK_MODEL || 'deepseek-chat';
+let DB_KEY = null;
+let DB_ENABLED = null; // null = unknown/not set; false = explicitly disabled
+
+// Lazy-load DB settings for DeepSeek
+export async function loadDeepseekConfigFromDb() {
+  try {
+    const mod = await import('../../models/Settings.js');
+    const Settings = mod.default || mod;
+    const s = await Settings.findOne().select('translations').lean();
+    const ds = s?.translations?.deepseek;
+    if (ds) {
+      if (typeof ds.enabled !== 'undefined') DB_ENABLED = !!ds.enabled;
+      if (typeof ds.apiUrl === 'string' && ds.apiUrl.trim()) API_URL = ds.apiUrl.trim();
+      if (typeof ds.model === 'string' && ds.model.trim()) MODEL = ds.model.trim();
+      if (typeof ds.apiKey === 'string' && ds.apiKey.trim()) DB_KEY = ds.apiKey.trim();
+    }
+  } catch (e) {
+    // Ignore if Settings model not available early; fallback to env
+  }
+}
+
+// Expose a quick check for router guards
+export function isDeepseekConfigured() {
+  if (DB_ENABLED === false) return false;
+  return !!(DB_KEY || process.env.DEEPSEEK_API_KEY);
+}
 
 /**
  * Translate a single text using DeepSeek chat API.
@@ -12,7 +38,8 @@ const MODEL = process.env.DEEPSEEK_MODEL || 'deepseek-chat';
  * @returns {Promise<string>} Translated text
  */
 export async function deepseekTranslate(text, from, to) {
-  const key = process.env.DEEPSEEK_API_KEY;
+  if (DB_ENABLED === false) throw new Error('DeepSeek disabled');
+  const key = DB_KEY || process.env.DEEPSEEK_API_KEY;
   if (!key) throw new Error('DEEPSEEK_API_KEY missing');
   const prompt = `You are a professional translator. Translate the following text from ${from} to ${to}. Preserve placeholders like {{name}} and HTML tags if present. Only return the translated text without quotes.
 
