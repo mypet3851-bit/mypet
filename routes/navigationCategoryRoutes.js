@@ -45,23 +45,28 @@ router.get('/', async (req, res) => {
       .populate('slugGroups.categories', '_id name slug path')
       .sort('order');
     if (reqLang) {
-      // Localize names for populated Category refs
-      const localize = async (cat) => {
+      // Helper: schedule async work without delaying response
+      const schedule = (fn) => { try { Promise.resolve().then(fn).catch(() => {}); } catch {} };
+      // Localize names for populated Category refs without blocking
+      const localize = (cat) => {
         try {
           const nm = (cat?.name_i18n && (cat.name_i18n[reqLang] || cat.name_i18n.get?.(reqLang))) || null;
           if (nm) { cat.name = nm; return; }
-          if (allowAuto && cat?._id) {
-            const full = await Category.findById(cat._id);
-            if (full?.name) {
+          // Use existing populated name for immediate response
+          if (cat?.name) cat.name = cat.name;
+          if (allowAuto && cat?._id && cat?.name) {
+            schedule(async () => {
               try {
-                const tr = await deepseekTranslate(full.name, 'auto', reqLang);
-                const map = new Map(full.name_i18n || []);
-                map.set(reqLang, tr);
-                full.name_i18n = map;
-                await full.save().catch(() => {});
-                cat.name = tr;
+                const full = await Category.findById(cat._id);
+                if (full?.name) {
+                  const tr = await deepseekTranslate(full.name, 'auto', reqLang);
+                  const map = new Map(full.name_i18n || []);
+                  map.set(reqLang, tr);
+                  full.name_i18n = map;
+                  await full.save().catch(() => {});
+                }
               } catch {}
-            }
+            });
           }
         } catch {}
       };
@@ -70,15 +75,20 @@ router.get('/', async (req, res) => {
           // Localize navigation item name
           const navName = (nav?.name_i18n && (nav.name_i18n[reqLang] || nav.name_i18n.get?.(reqLang))) || null;
           if (navName) nav.name = navName;
-          else if (allowAuto && nav?.name) {
-            try {
-              const tr = await deepseekTranslate(nav.name, 'auto', reqLang);
-              const map = new Map(nav.name_i18n || []);
-              map.set(reqLang, tr);
-              nav.name_i18n = map;
-              await nav.save().catch(() => {});
-              nav.name = tr;
-            } catch {}
+          else {
+            // Immediate fallback: keep original name, schedule translation persistence
+            if (nav?.name) nav.name = nav.name;
+            if (allowAuto && nav?.name) {
+              schedule(async () => {
+                try {
+                  const tr = await deepseekTranslate(nav.name, 'auto', reqLang);
+                  const map = new Map(nav.name_i18n || []);
+                  map.set(reqLang, tr);
+                  nav.name_i18n = map;
+                  await nav.save().catch(() => {});
+                } catch {}
+              });
+            }
           }
 
           // Localize subCategories inline names
@@ -87,16 +97,19 @@ router.get('/', async (req, res) => {
               try {
                 const scName = (sc?.name_i18n && (sc.name_i18n[reqLang] || sc.name_i18n.get?.(reqLang))) || null;
                 if (scName) sc.name = scName;
-                else if (allowAuto && sc?.name) {
-                  try {
-                    const tr = await deepseekTranslate(sc.name, 'auto', reqLang);
-                    const map = new Map(sc.name_i18n || []);
-                    map.set(reqLang, tr);
-                    sc.name_i18n = map;
-                    // Persist by saving parent (embedded subdocument)
-                    await nav.save().catch(() => {});
-                    sc.name = tr;
-                  } catch {}
+                else {
+                  if (sc?.name) sc.name = sc.name;
+                  if (allowAuto && sc?.name) {
+                    schedule(async () => {
+                      try {
+                        const tr = await deepseekTranslate(sc.name, 'auto', reqLang);
+                        const map = new Map(sc.name_i18n || []);
+                        map.set(reqLang, tr);
+                        sc.name_i18n = map;
+                        await nav.save().catch(() => {});
+                      } catch {}
+                    });
+                  }
                 }
               } catch {}
             }
@@ -108,27 +121,31 @@ router.get('/', async (req, res) => {
               try {
                 const gTitle = (g?.title_i18n && (g.title_i18n[reqLang] || g.title_i18n.get?.(reqLang))) || null;
                 if (gTitle) g.title = gTitle;
-                else if (allowAuto && g?.title) {
-                  try {
-                    const tr = await deepseekTranslate(g.title, 'auto', reqLang);
-                    const map = new Map(g.title_i18n || []);
-                    map.set(reqLang, tr);
-                    g.title_i18n = map;
-                    await nav.save().catch(() => {});
-                    g.title = tr;
-                  } catch {}
+                else {
+                  if (g?.title) g.title = g.title;
+                  if (allowAuto && g?.title) {
+                    schedule(async () => {
+                      try {
+                        const tr = await deepseekTranslate(g.title, 'auto', reqLang);
+                        const map = new Map(g.title_i18n || []);
+                        map.set(reqLang, tr);
+                        g.title_i18n = map;
+                        await nav.save().catch(() => {});
+                      } catch {}
+                    });
+                  }
                 }
               } catch {}
             }
           }
 
           if (Array.isArray(nav.categories)) {
-            for (const c of nav.categories) await localize(c);
+            for (const c of nav.categories) localize(c);
           }
           if (Array.isArray(nav.slugGroups)) {
             for (const g of nav.slugGroups) {
               if (Array.isArray(g.categories)) {
-                for (const c of g.categories) await localize(c);
+                for (const c of g.categories) localize(c);
               }
             }
           }
