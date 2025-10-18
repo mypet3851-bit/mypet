@@ -652,9 +652,46 @@ router.post('/upload/header-icon/:key', adminAuth, upload.single('file'), async 
     let settings = await Settings.findOne();
     if (!settings) settings = new Settings();
 
-    const publicUrl = `/uploads/${req.file.filename}`;
+    // Default to local uploads path
+    let finalUrl = `/uploads/${req.file.filename}`;
+    const hasCloud = await hasCloudinaryCredentials();
+
+    // Prefer Cloudinary when configured
+    if (hasCloud) {
+      try {
+        await ensureCloudinaryConfig();
+        const uploadResult = await cloudinary.uploader.upload(path.join(uploadDir, req.file.filename), {
+          folder: `settings/header-icons/${key}`,
+          resource_type: 'image',
+          use_filename: true,
+          unique_filename: false,
+          overwrite: true
+        });
+        if (uploadResult?.secure_url) {
+          finalUrl = uploadResult.secure_url;
+          try { fs.unlinkSync(path.join(uploadDir, req.file.filename)); } catch {}
+        }
+      } catch (cloudErr) {
+        console.warn('[header-icon] Cloudinary upload failed, keeping local file:', cloudErr.message);
+      }
+    }
+
+    // If no Cloudinary configured, inline as data URI so it persists across restarts
+    if (!hasCloud) {
+      try {
+        const filePath = path.join(uploadDir, req.file.filename);
+        const buf = fs.readFileSync(filePath);
+        const b64 = buf.toString('base64');
+        const mime = req.file.mimetype || 'image/png';
+        finalUrl = `data:${mime};base64,${b64}`;
+        try { fs.unlinkSync(filePath); } catch {}
+      } catch (inlineErr) {
+        console.warn('[header-icon] Failed to inline image, using relative path:', inlineErr.message);
+      }
+    }
+
     settings.headerIconAssets = settings.headerIconAssets || {};
-    settings.headerIconAssets[key] = publicUrl;
+    settings.headerIconAssets[key] = finalUrl;
     settings.markModified('headerIconAssets');
     await settings.save();
 
@@ -662,14 +699,17 @@ router.post('/upload/header-icon/:key', adminAuth, upload.single('file'), async 
     try {
       const broadcast = req.app.get('broadcastToClients');
       if (typeof broadcast === 'function') {
-        broadcast({
-          type: 'settings_updated',
-          data: { headerIconAssets: settings.headerIconAssets }
-        });
+        // Ensure absolute URL if still relative
+        const val = settings.headerIconAssets[key];
+        const absVal = /^data:|^https?:/i.test(val) ? val : toAbsolute(req, val);
+        const payload = { ...(settings.headerIconAssets || {}) };
+        payload[key] = absVal;
+        broadcast({ type: 'settings_updated', data: { headerIconAssets: payload } });
       }
     } catch {}
 
-    res.json({ key, url: publicUrl });
+    const responseUrl = /^data:|^https?:/i.test(finalUrl) ? finalUrl : toAbsolute(req, finalUrl);
+    res.json({ key, url: responseUrl, stored: hasCloud ? 'cloudinary' : 'inline' });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
