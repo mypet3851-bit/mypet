@@ -67,6 +67,61 @@ router.get('/', async (req, res) => {
       };
       for (const nav of categories) {
         try {
+          // Localize navigation item name
+          const navName = (nav?.name_i18n && (nav.name_i18n[reqLang] || nav.name_i18n.get?.(reqLang))) || null;
+          if (navName) nav.name = navName;
+          else if (allowAuto && nav?.name) {
+            try {
+              const tr = await deepseekTranslate(nav.name, 'auto', reqLang);
+              const map = new Map(nav.name_i18n || []);
+              map.set(reqLang, tr);
+              nav.name_i18n = map;
+              await nav.save().catch(() => {});
+              nav.name = tr;
+            } catch {}
+          }
+
+          // Localize subCategories inline names
+          if (Array.isArray(nav.subCategories)) {
+            for (const sc of nav.subCategories) {
+              try {
+                const scName = (sc?.name_i18n && (sc.name_i18n[reqLang] || sc.name_i18n.get?.(reqLang))) || null;
+                if (scName) sc.name = scName;
+                else if (allowAuto && sc?.name) {
+                  try {
+                    const tr = await deepseekTranslate(sc.name, 'auto', reqLang);
+                    const map = new Map(sc.name_i18n || []);
+                    map.set(reqLang, tr);
+                    sc.name_i18n = map;
+                    // Persist by saving parent (embedded subdocument)
+                    await nav.save().catch(() => {});
+                    sc.name = tr;
+                  } catch {}
+                }
+              } catch {}
+            }
+          }
+
+          // Localize group titles
+          if (Array.isArray(nav.slugGroups)) {
+            for (const g of nav.slugGroups) {
+              try {
+                const gTitle = (g?.title_i18n && (g.title_i18n[reqLang] || g.title_i18n.get?.(reqLang))) || null;
+                if (gTitle) g.title = gTitle;
+                else if (allowAuto && g?.title) {
+                  try {
+                    const tr = await deepseekTranslate(g.title, 'auto', reqLang);
+                    const map = new Map(g.title_i18n || []);
+                    map.set(reqLang, tr);
+                    g.title_i18n = map;
+                    await nav.save().catch(() => {});
+                    g.title = tr;
+                  } catch {}
+                }
+              } catch {}
+            }
+          }
+
           if (Array.isArray(nav.categories)) {
             for (const c of nav.categories) await localize(c);
           }
@@ -264,6 +319,26 @@ router.get('/:id([0-9a-fA-F]{24})/groups', async (req, res) => {
           }
         } catch {}
       };
+      // Localize group titles
+      if (Array.isArray(doc.slugGroups)) {
+        for (const g of doc.slugGroups) {
+          try {
+            const gTitle = (g?.title_i18n && (g.title_i18n[reqLang] || g.title_i18n.get?.(reqLang))) || null;
+            if (gTitle) g.title = gTitle;
+            else if (allowAuto && g?.title) {
+              try {
+                const tr = await deepseekTranslate(g.title, 'auto', reqLang);
+                const map = new Map(g.title_i18n || []);
+                map.set(reqLang, tr);
+                g.title_i18n = map;
+                await doc.save().catch(() => {});
+                g.title = tr;
+              } catch {}
+            }
+          } catch {}
+        }
+      }
+
       for (const g of (doc.slugGroups || [])) {
         if (Array.isArray(g.categories)) {
           for (const c of g.categories) await localize(c);
@@ -365,7 +440,24 @@ router.get('/group/by-slug/:groupSlug', async (req, res) => {
       .populate('slugGroups.categories', '_id name slug path');
     if (!doc) return res.status(404).json({ message: 'Group not found' });
     const grp = (doc.slugGroups || []).find(g => g.slug === req.params.groupSlug);
-    if (reqLang && grp && Array.isArray(grp.categories)) {
+    if (reqLang && grp) {
+      // Localize group title
+      try {
+        const gTitle = (grp?.title_i18n && (grp.title_i18n[reqLang] || grp.title_i18n.get?.(reqLang))) || null;
+        if (gTitle) grp.title = gTitle;
+        else if (allowAuto && grp?.title) {
+          try {
+            const tr = await deepseekTranslate(grp.title, 'auto', reqLang);
+            const map = new Map(grp.title_i18n || []);
+            map.set(reqLang, tr);
+            grp.title_i18n = map;
+            await doc.save().catch(() => {});
+            grp.title = tr;
+          } catch {}
+        }
+      } catch {}
+
+      if (Array.isArray(grp.categories)) {
       const localize = async (cat) => {
         try {
           const nm = (cat?.name_i18n && (cat.name_i18n[reqLang] || cat.name_i18n.get?.(reqLang))) || null;
@@ -385,7 +477,8 @@ router.get('/group/by-slug/:groupSlug', async (req, res) => {
           }
         } catch {}
       };
-      for (const c of grp.categories) await localize(c);
+        for (const c of grp.categories) await localize(c);
+      }
     }
     res.json({ navigationId: doc._id, group: grp });
   } catch (error) {

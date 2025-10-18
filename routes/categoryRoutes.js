@@ -8,7 +8,8 @@ import {
   deleteCategory,
   reorderCategories,
   getSubcategories,
-  getCategoryTree
+  getCategoryTree,
+  translateAllCategories
 } from '../controllers/categoryController.js';
 
 const router = express.Router();
@@ -34,5 +35,7 @@ router.post('/', adminAuth, createCategory);
 router.put('/reorder', adminAuth, reorderCategories);
 router.put('/:id([0-9a-fA-F]{24})', adminAuth, updateCategory);
 router.delete('/:id([0-9a-fA-F]{24})', adminAuth, deleteCategory);
+// Backfill translations for categories: POST /api/categories/translate?to=ar
+router.post('/translate', adminAuth, translateAllCategories);
 
 export default router;
