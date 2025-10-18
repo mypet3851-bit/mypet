@@ -5,12 +5,16 @@ import InventoryHistory from '../models/InventoryHistory.js';
 import { StatusCodes } from 'http-status-codes';
 import { ApiError } from '../utils/ApiError.js';
 import { realTimeEventService } from './realTimeEventService.js';
+import Settings from '../models/Settings.js';
 
 class InventoryService {
-  // Reserve items for an order across warehouses. Throws if insufficient stock.
+  // Reserve items for an order across warehouses. Throws if insufficient stock unless allowNegativeStock.
   // items: [{ product, quantity, variantId? , size?, color? }]
   async reserveItems(items, userId, session = null) {
     if (!Array.isArray(items) || !items.length) return;
+    const settings = await Settings.findOne().lean();
+    const invCfg = settings?.inventory || {};
+    const allowNegative = !!invCfg.allowNegativeStock;
     const affectedProducts = new Set();
     for (const it of items) {
       const { product, quantity } = it;
@@ -26,7 +30,7 @@ class InventoryService {
       const invQuery = Inventory.find({ ...baseFilter }).sort({ quantity: -1 });
       const invs = session ? await invQuery.session(session) : await invQuery;
       const totalAvail = invs.reduce((s, x) => s + (Number(x.quantity) || 0), 0);
-      if (totalAvail < quantity) {
+      if (!allowNegative && totalAvail < quantity) {
         throw new ApiError(StatusCodes.BAD_REQUEST, `Insufficient stock for product ${product}${usingVariant ? ' variant' : ''}. Available: ${totalAvail}, requested: ${quantity}`);
       }
 
@@ -34,10 +38,23 @@ class InventoryService {
       let remain = quantity;
       for (const inv of invs) {
         if (remain <= 0) break;
-        const take = Math.min(remain, inv.quantity);
+        const take = Math.min(remain, allowNegative ? remain : inv.quantity);
         inv.quantity -= take;
         remain -= take;
         if (session) await inv.save({ session }); else await inv.save();
+      }
+      // If still remaining and negatives allowed, create or use a synthetic negative bucket on the first inventory row
+      if (remain > 0 && allowNegative) {
+        if (invs.length) {
+          const inv = invs[0];
+          inv.quantity -= remain; // go negative
+          if (session) await inv.save({ session }); else await inv.save();
+        } else {
+          // No inventory rows exist yet; create a placeholder row with negative quantity (requires a warehouse).
+          // Choose any warehouse is not possible without context; instead, throw a targeted error suggesting to create a row.
+          throw new ApiError(StatusCodes.BAD_REQUEST, 'No inventory rows found to record negative stock. Create at least one inventory entry for this item to allow negative stock.');
+        }
+        remain = 0;
       }
 
       // History record
@@ -55,6 +72,39 @@ class InventoryService {
     for (const pid of affectedProducts) {
       await this.#updateProductStock(pid);
     }
+  }
+
+  // Increase back stock for items (used on cancel or return depending on settings)
+  async incrementItems(items, userId, reason = 'Manual increase', session = null) {
+    if (!Array.isArray(items) || !items.length) return;
+    const affectedProducts = new Set();
+    for (const it of items) {
+      const { product, quantity } = it;
+      if (!product || !quantity || quantity <= 0) {
+        throw new ApiError(StatusCodes.BAD_REQUEST, 'Invalid increment item');
+      }
+      const usingVariant = !!it.variantId;
+      const baseFilter = usingVariant
+        ? { product, variantId: it.variantId }
+        : { product, size: it.size, color: it.color };
+      const invQuery = Inventory.find({ ...baseFilter }).sort({ quantity: 1 }); // smallest first
+      const invs = session ? await invQuery.session(session) : await invQuery;
+      let remain = quantity;
+      for (const inv of invs) {
+        if (remain <= 0) break;
+        const add = remain;
+        inv.quantity += add;
+        remain -= add;
+        if (session) await inv.save({ session }); else await inv.save();
+      }
+      if (remain > 0) {
+        // If no rows existed, we cannot create without size/color/warehouse context in this generic method.
+        // Let caller use addInventory to create missing rows explicitly.
+      }
+      await this.#createHistoryRecord({ product, type: 'increase', quantity, reason, user: userId });
+      affectedProducts.add(String(product));
+    }
+    for (const pid of affectedProducts) await this.#updateProductStock(pid);
   }
   // Move stock between warehouses
   async moveStockBetweenWarehouses({ product, size, color, variantId, quantity, fromWarehouse, toWarehouse, userId, reason }) {

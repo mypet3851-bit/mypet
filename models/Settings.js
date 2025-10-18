@@ -311,6 +311,18 @@ settingsSchema.add({
   }
 });
 
+// Inventory management configuration
+settingsSchema.add({
+  inventory: {
+    autoDecrementOnOrder: { type: Boolean, default: true },
+    autoIncrementOnCancel: { type: Boolean, default: true },
+    autoIncrementOnReturn: { type: Boolean, default: true },
+    allowNegativeStock: { type: Boolean, default: false },
+    reserveOnCheckout: { type: Boolean, default: true },
+    reservationTTLMinutes: { type: Number, default: 15, min: 1, max: 1440 }
+  }
+});
+
 // Mobile app bottom tab bar icon configuration (admin configurable)
 // Each tab can have optional active/inactive icon URLs (absolute, /uploads, or data URI)
 // Center button supports a single icon (when set, overrides gradient text)
