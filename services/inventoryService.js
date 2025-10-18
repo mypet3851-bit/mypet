@@ -1,4 +1,5 @@
 import WarehouseMovement from '../models/WarehouseMovement.js';
+import Warehouse from '../models/Warehouse.js';
 import Inventory from '../models/Inventory.js';
 import Product from '../models/Product.js';
 import InventoryHistory from '../models/InventoryHistory.js';
@@ -239,8 +240,38 @@ class InventoryService {
         if (!data.size) throw new ApiError(StatusCodes.BAD_REQUEST, 'Size is required');
         if (!data.color) throw new ApiError(StatusCodes.BAD_REQUEST, 'Color is required');
       }
+      // Validate identifiers shape early for better messages
+      const isObjectId = (v) => typeof v === 'string' && /^[0-9a-fA-F]{24}$/.test(v);
+      if (!isObjectId(String(data.product))) {
+        throw new ApiError(StatusCodes.BAD_REQUEST, 'Invalid product id');
+      }
+      if (usingVariant && !isObjectId(String(data.variantId))) {
+        throw new ApiError(StatusCodes.BAD_REQUEST, 'Invalid variant id');
+      }
+      // Resolve warehouse: if not provided and there is no multi-warehouse setup, default to Main (create if needed)
       if (!data.warehouse) {
-        throw new ApiError(StatusCodes.BAD_REQUEST, 'Warehouse is required');
+        try {
+          let warehouses = await Warehouse.find({});
+          if (!warehouses || warehouses.length === 0) {
+            const created = await Warehouse.findOneAndUpdate(
+              { name: 'Main Warehouse' },
+              { $setOnInsert: { name: 'Main Warehouse' } },
+              { new: true, upsert: true }
+            );
+            data.warehouse = created?._id;
+          } else if (warehouses.length === 1) {
+            data.warehouse = warehouses[0]._id;
+          } else {
+            throw new ApiError(StatusCodes.BAD_REQUEST, 'Warehouse is required when multiple warehouses exist');
+          }
+        } catch (e) {
+          if (!(data.warehouse)) {
+            throw new ApiError(StatusCodes.BAD_REQUEST, 'Warehouse is required');
+          }
+        }
+      }
+      if (!isObjectId(String(data.warehouse))) {
+        throw new ApiError(StatusCodes.BAD_REQUEST, 'Invalid warehouse id');
       }
       if (data.quantity === undefined || data.quantity === null || data.quantity < 0) {
         throw new ApiError(StatusCodes.BAD_REQUEST, 'Valid quantity is required');
@@ -314,7 +345,7 @@ class InventoryService {
 
       // Handle other errors
       console.error('Error adding inventory:', error);
-      throw new ApiError(StatusCodes.INTERNAL_SERVER_ERROR, 'Internal server error while adding inventory');
+      throw new ApiError(StatusCodes.INTERNAL_SERVER_ERROR, error?.message || 'Internal server error while adding inventory');
     }
   }
 
