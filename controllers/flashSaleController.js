@@ -3,7 +3,14 @@ import { getStoreCurrency } from '../services/storeCurrencyService.js';
 
 export const listAdmin = async (req, res) => {
   try {
-    const sales = await FlashSale.find().sort({ startDate: -1 });
+    const sales = await FlashSale.find()
+      .sort({ startDate: -1 })
+      .populate({
+        path: 'items.product',
+        // Provide minimal fields needed by admin UI to render base price and thumbnail
+        select: 'name images colors attributeImages price originalPrice'
+      })
+      .lean();
     try { const c = await getStoreCurrency(); res.set('X-Store-Currency', c); } catch {}
     res.json(sales);
   } catch (e) {
