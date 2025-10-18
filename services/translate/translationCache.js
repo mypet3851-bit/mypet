@@ -51,11 +51,28 @@ export async function saveCachedTranslation(sourceText, translatedText, from, to
     hash,
     provider: meta?.provider || 'deepseek',
     model: meta?.model || '',
-    usageCount: 1,
+    // usageCount is incremented via $inc to avoid double counting on insert
+    usageCount: 0,
     lastUsedAt: new Date()
   };
   try {
-    await Translation.updateOne({ from: doc.from, to: doc.to, hash: doc.hash }, { $setOnInsert: doc, $set: { lastUsedAt: new Date() }, $inc: { usageCount: 1 } }, { upsert: true });
+    // Ensure important fields are updated if the doc already exists
+    await Translation.updateOne(
+      { from: doc.from, to: doc.to, hash: doc.hash },
+      {
+        $setOnInsert: doc,
+        $set: {
+          translatedText: translatedText,
+          provider: doc.provider,
+          model: doc.model,
+          contextKey: doc.contextKey,
+          sourceText: sourceText,
+          lastUsedAt: new Date()
+        },
+        $inc: { usageCount: 1 }
+      },
+      { upsert: true }
+    );
   } catch (e) {
     // ignore duplicates race conditions
   }
