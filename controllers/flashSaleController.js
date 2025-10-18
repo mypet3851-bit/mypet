@@ -1,5 +1,7 @@
 import FlashSale from '../models/FlashSale.js';
+import Product from '../models/Product.js';
 import { getStoreCurrency } from '../services/storeCurrencyService.js';
+import { deepseekTranslate, isDeepseekConfigured } from '../services/translate/deepseek.js';
 
 export const listAdmin = async (req, res) => {
   try {
@@ -50,6 +52,8 @@ export const remove = async (req, res) => {
 
 export const publicActiveList = async (req, res) => {
   try {
+    const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
+    const allowAutoTranslate = isDeepseekConfigured();
     const now = new Date();
     const sales = await FlashSale.find({ active: true, startDate: { $lte: now }, endDate: { $gte: now } })
       .sort({ startDate: 1 })
@@ -60,20 +64,47 @@ export const publicActiveList = async (req, res) => {
       })
       .lean();
 
-    // Map to shape expected by mobile (while keeping flexible)
-    const out = sales.map(s => ({
-      _id: s._id,
-      name: s.name,
-      startDate: s.startDate,
-      endDate: s.endDate,
-      pricingMode: s.pricingMode || 'fixed',
-      discountPercent: s.discountPercent,
-      items: (s.items || []).map(it => ({
-        product: it.product,
-        flashPrice: it.flashPrice,
-        quantityLimit: it.quantityLimit,
-        order: it.order
-      }))
+    // Localize embedded products (name) if lang provided; persist missing translations when DeepSeek configured
+    const out = await Promise.all(sales.map(async (s) => {
+      const items = await Promise.all((s.items || []).map(async (it) => {
+        const p = it.product;
+        if (p && reqLang) {
+          try {
+            const pDoc = await Product.findById(p._id).select('name description name_i18n description_i18n');
+            if (pDoc) {
+              const nm = (pDoc.name_i18n && (typeof pDoc.name_i18n.get === 'function' ? pDoc.name_i18n.get(reqLang) : pDoc.name_i18n[reqLang])) || null;
+              if (nm) {
+                p.name = nm;
+              } else if (allowAutoTranslate && typeof pDoc.name === 'string' && pDoc.name.trim()) {
+                try {
+                  const tr = await deepseekTranslate(pDoc.name, 'auto', reqLang);
+                  const map = new Map(pDoc.name_i18n || []);
+                  map.set(reqLang, tr);
+                  pDoc.name_i18n = map;
+                  p.name = tr;
+                  try { await pDoc.save(); } catch {}
+                } catch {}
+              }
+            }
+          } catch {}
+        }
+        return {
+          product: p,
+          flashPrice: it.flashPrice,
+          quantityLimit: it.quantityLimit,
+          order: it.order
+        };
+      }));
+
+      return {
+        _id: s._id,
+        name: s.name,
+        startDate: s.startDate,
+        endDate: s.endDate,
+        pricingMode: s.pricingMode || 'fixed',
+        discountPercent: s.discountPercent,
+        items
+      };
     }));
     try { const c = await getStoreCurrency(); res.set('X-Store-Currency', c); } catch {}
     res.json(out);
@@ -85,6 +116,8 @@ export const publicActiveList = async (req, res) => {
 // Public: get a specific active flash sale by id (only returns if currently active)
 export const publicGetById = async (req, res) => {
   try {
+    const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
+    const allowAutoTranslate = isDeepseekConfigured();
     const { id } = req.params;
     const now = new Date();
     const s = await FlashSale.findOne({ _id: id, active: true, startDate: { $lte: now }, endDate: { $gte: now } })
@@ -94,6 +127,36 @@ export const publicGetById = async (req, res) => {
       })
       .lean();
     if (!s) return res.status(404).json({ message: 'Flash sale not found or not active' });
+    const items = await Promise.all((s.items || []).map(async (it) => {
+      const p = it.product;
+      if (p && reqLang) {
+        try {
+          const pDoc = await Product.findById(p._id).select('name description name_i18n description_i18n');
+          if (pDoc) {
+            const nm = (pDoc.name_i18n && (typeof pDoc.name_i18n.get === 'function' ? pDoc.name_i18n.get(reqLang) : pDoc.name_i18n[reqLang])) || null;
+            if (nm) {
+              p.name = nm;
+            } else if (allowAutoTranslate && typeof pDoc.name === 'string' && pDoc.name.trim()) {
+              try {
+                const tr = await deepseekTranslate(pDoc.name, 'auto', reqLang);
+                const map = new Map(pDoc.name_i18n || []);
+                map.set(reqLang, tr);
+                pDoc.name_i18n = map;
+                p.name = tr;
+                try { await pDoc.save(); } catch {}
+              } catch {}
+            }
+          }
+        } catch {}
+      }
+      return {
+        product: p,
+        flashPrice: it.flashPrice,
+        quantityLimit: it.quantityLimit,
+        order: it.order,
+      };
+    }));
+
     const out = {
       _id: s._id,
       name: s.name,
@@ -101,12 +164,7 @@ export const publicGetById = async (req, res) => {
       endDate: s.endDate,
       pricingMode: s.pricingMode || 'fixed',
       discountPercent: s.discountPercent,
-      items: (s.items || []).map((it) => ({
-        product: it.product,
-        flashPrice: it.flashPrice,
-        quantityLimit: it.quantityLimit,
-        order: it.order,
-      })),
+      items,
     };
     try { const c = await getStoreCurrency(); res.set('X-Store-Currency', c); } catch {}
     res.json(out);
