@@ -48,6 +48,7 @@ import asyncHandler from 'express-async-handler';
 import { inventoryService } from '../services/inventoryService.js';
 import { StatusCodes } from 'http-status-codes';
 import mongoose from 'mongoose';
+import Warehouse from '../models/Warehouse.js';
 
 export const getInventory = asyncHandler(async (req, res) => {
   console.log('getInventory controller called');
@@ -103,18 +104,57 @@ export const addInventory = asyncHandler(async (req, res) => {
 
 // Update inventory by variantId and warehouse
 export const updateInventoryByVariant = asyncHandler(async (req, res) => {
-  const { productId, variantId, warehouseId, quantity } = req.body || {};
-  if (!productId || !variantId || !warehouseId || typeof quantity !== 'number') {
-    return res.status(StatusCodes.BAD_REQUEST).json({ message: 'productId, variantId, warehouseId, and quantity are required' });
+  let { productId, variantId, warehouseId, quantity } = req.body || {};
+  const isObjectId = (v) => typeof v === 'string' && /^[0-9a-fA-F]{24}$/.test(v);
+  if (!productId || !variantId || typeof quantity !== 'number') {
+    return res.status(StatusCodes.BAD_REQUEST).json({ message: 'productId, variantId, and quantity are required' });
   }
-  const inv = await Inventory.findOneAndUpdate(
-    { product: productId, variantId, warehouse: warehouseId },
-    { quantity },
-    { new: true, runValidators: true }
-  );
-  if (!inv) return res.status(StatusCodes.NOT_FOUND).json({ message: 'Inventory record not found for variant in this warehouse' });
-  try { await inventoryService.recomputeProductStock(productId); } catch {}
-  res.status(StatusCodes.OK).json(inv);
+  // Default to Main Warehouse when not multi-warehouse and no warehouseId provided
+  if (!warehouseId) {
+    const warehouses = await Warehouse.find({});
+    if (!warehouses || warehouses.length === 0) {
+      const main = await Warehouse.findOneAndUpdate(
+        { name: 'Main Warehouse' },
+        { $setOnInsert: { name: 'Main Warehouse' } },
+        { new: true, upsert: true }
+      );
+      warehouseId = String(main._id);
+    } else if (warehouses.length === 1) {
+      warehouseId = String(warehouses[0]._id);
+    } else {
+      return res.status(StatusCodes.BAD_REQUEST).json({ message: 'warehouseId is required when multiple warehouses exist' });
+    }
+  }
+  if (!isObjectId(productId) || !isObjectId(variantId) || !isObjectId(warehouseId)) {
+    return res.status(StatusCodes.BAD_REQUEST).json({ message: 'Invalid productId, variantId, or warehouseId' });
+  }
+  if (!Number.isFinite(quantity) || quantity < 0) {
+    return res.status(StatusCodes.BAD_REQUEST).json({ message: 'Quantity must be a non-negative number' });
+  }
+
+  try {
+    // Upsert only when quantity > 0 to avoid creating empty rows; otherwise require existing record
+    const inv = await Inventory.findOneAndUpdate(
+      { product: productId, variantId, warehouse: warehouseId },
+      { $set: { quantity } },
+      { new: true, runValidators: true, upsert: quantity > 0 }
+    );
+    if (!inv) {
+      return res.status(StatusCodes.NOT_FOUND).json({ message: 'Inventory record not found for variant in this warehouse' });
+    }
+    try { await inventoryService.recomputeProductStock(productId); } catch {}
+    return res.status(StatusCodes.OK).json(inv);
+  } catch (err) {
+    // Handle common cast/validation errors explicitly
+    if (err?.name === 'CastError') {
+      return res.status(StatusCodes.BAD_REQUEST).json({ message: 'Invalid identifier provided' });
+    }
+    if (err?.name === 'ValidationError') {
+      return res.status(StatusCodes.BAD_REQUEST).json({ message: 'Validation error updating inventory' });
+    }
+    console.error('updateInventoryByVariant error', err);
+    return res.status(StatusCodes.INTERNAL_SERVER_ERROR).json({ message: 'Failed to update variant inventory' });
+  }
 });
 
 export const getLowStockItems = asyncHandler(async (req, res) => {

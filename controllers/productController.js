@@ -1319,11 +1319,38 @@ export const bulkUpdateVariants = async (req, res) => {
 export const deleteVariant = async (req, res) => {
   try {
     const { id, variantId } = req.params;
+    // Validate ObjectIds early to avoid cast errors surfacing as 500s
+    const isObjectId = (v) => typeof v === 'string' && /^[0-9a-fA-F]{24}$/.test(v);
+    if (!isObjectId(id) || !isObjectId(variantId)) {
+      return res.status(400).json({ message: 'Invalid product or variant id' });
+    }
+
     const product = await Product.findById(id);
     if (!product) return res.status(404).json({ message: 'Product not found' });
     const v = (product.variants || []).id(variantId);
     if (!v) return res.status(404).json({ message: 'Variant not found' });
-    v.remove();
+
+    // Do not allow hard delete when warehouse inventory rows exist for this variant
+    try {
+      const invCount = await Inventory.countDocuments({ product: id, variantId });
+      if (invCount > 0) {
+        return res.status(409).json({
+          message: 'Cannot delete variant because it has inventory entries in one or more warehouses. Use inventory endpoints to move/delete stock or set quantity to 0, or disable the variant instead.'
+        });
+      }
+    } catch (checkErr) {
+      console.warn('deleteVariant: inventory check failed', checkErr?.message || checkErr);
+    }
+
+    // Remove the subdocument and save product
+    if (typeof v.remove === 'function') {
+      v.remove();
+    } else if (typeof v.deleteOne === 'function') {
+      await v.deleteOne();
+      product.variants = (product.variants || []).filter((vv) => String(vv._id) !== String(variantId));
+    } else {
+      product.variants = (product.variants || []).filter((vv) => String(vv._id) !== String(variantId));
+    }
     await product.save();
     // Return updated variants (populated) so client can refresh list
     const populated = await Product.findById(id)
@@ -1332,11 +1359,12 @@ export const deleteVariant = async (req, res) => {
       .populate('variants.attributes.value');
     res.json(populated?.variants || []);
   } catch (e) {
+    console.error('deleteVariant error', e);
     res.status(500).json({ message: 'Failed to delete variant' });
   }
 };
 
-// Get images for a specific attribute value on a product
+ 
 export const getAttributeValueImages = async (req, res) => {
   try {
     const { id } = req.params;
