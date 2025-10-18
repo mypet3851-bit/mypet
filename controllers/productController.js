@@ -1140,35 +1140,45 @@ export const generateProductVariants = async (req, res) => {
 
     product.variants = nextVariants;
     await product.save();
-    // Optional: ensure each variant has an initial inventory row (0 qty) in a default warehouse
+    // Optional: ensure each variant has initial inventory rows (0 qty) in all warehouses
     try {
-      let warehouse = await Warehouse.findOne({ name: 'Main Warehouse' });
-      if (!warehouse) {
+      let warehouses = await Warehouse.find({});
+      if (!warehouses || warehouses.length === 0) {
+        // Ensure at least one default warehouse exists
         try {
-          warehouse = await Warehouse.findOneAndUpdate(
+          const created = await Warehouse.findOneAndUpdate(
             { name: 'Main Warehouse' },
             { $setOnInsert: { name: 'Main Warehouse' } },
             { new: true, upsert: true }
           );
+          warehouses = created ? [created] : [];
         } catch (err) {
-          try { warehouse = await Warehouse.findOne({ name: 'Main Warehouse' }); } catch {}
+          const existing = await Warehouse.find({});
+          warehouses = existing;
         }
       }
-      if (warehouse) {
-        // Create missing rows only
+      if (warehouses && warehouses.length) {
+        // Create missing rows only across all warehouses with zero quantity
         const fresh = await Product.findById(productId).select('variants');
         for (const v of fresh?.variants || []) {
-          const exists = await Inventory.exists({ product: productId, variantId: v._id, warehouse: warehouse._id });
-          if (!exists) {
-            await new Inventory({
-              product: productId,
-              variantId: v._id,
-              quantity: Number(v.stock) || 0,
-              warehouse: warehouse._id,
-              location: warehouse.name,
-              lowStockThreshold: 5,
-              attributesSnapshot: Array.isArray(v.attributes) ? v.attributes : undefined
-            }).save();
+          for (const w of warehouses) {
+            const exists = await Inventory.exists({ product: productId, variantId: v._id, warehouse: w._id });
+            if (!exists) {
+              try {
+                await new Inventory({
+                  product: productId,
+                  variantId: v._id,
+                  quantity: 0,
+                  warehouse: w._id,
+                  location: w.name,
+                  lowStockThreshold: 5,
+                  attributesSnapshot: Array.isArray(v.attributes) ? v.attributes : undefined
+                }).save();
+              } catch (err) {
+                // Ignore duplicate key errors due to race conditions
+                if (!(err && (err.code === 11000))) throw err;
+              }
+            }
           }
         }
         // Recompute aggregates after ensuring inventory rows
@@ -1207,49 +1217,52 @@ export const updateVariant = async (req, res) => {
       const invExists = await Inventory.exists({ product: id, variantId });
       const desired = Math.max(0, Number(stock));
       if (!invExists) {
-        // Ensure a default warehouse exists (atomic upsert to avoid race-condition on concurrent calls)
-        let warehouse = await Warehouse.findOne({ name: 'Main Warehouse' });
-        if (!warehouse) {
+        // Ensure inventory rows exist for all warehouses; assign desired qty to default (or first) warehouse, others zero
+        let warehouses = await Warehouse.find({});
+        if (!warehouses || warehouses.length === 0) {
           try {
-            warehouse = await Warehouse.findOneAndUpdate(
+            const createdWh = await Warehouse.findOneAndUpdate(
               { name: 'Main Warehouse' },
               { $setOnInsert: { name: 'Main Warehouse' } },
               { new: true, upsert: true }
             );
-          } catch (err) {
-            // Handle potential duplicate key error if another request created it concurrently
-            try { warehouse = await Warehouse.findOne({ name: 'Main Warehouse' }); } catch {}
-            if (!warehouse) {
-              console.error('updateVariant: failed to ensure default warehouse', err);
-              return res.status(500).json({ message: 'Failed to ensure default warehouse' });
+            warehouses = createdWh ? [createdWh] : [];
+          } catch (e) {
+            warehouses = await Warehouse.find({});
+          }
+        }
+        if (!warehouses || warehouses.length === 0) {
+          console.error('updateVariant: no warehouses available to create initial inventory');
+          return res.status(500).json({ message: 'No warehouses available to create initial inventory' });
+        }
+        const main = warehouses.find(w => String(w.name).toLowerCase() === 'main warehouse') || warehouses[0];
+        for (const w of warehouses) {
+          const qty = String(w._id) === String(main._id) ? desired : 0;
+          const exists = await Inventory.exists({ product: id, variantId, warehouse: w._id });
+          if (!exists) {
+            try {
+              await new Inventory({
+                product: id,
+                variantId,
+                quantity: qty,
+                warehouse: w._id,
+                location: w.name,
+                lowStockThreshold: 5
+              }).save();
+            } catch (err) {
+              // Ignore duplicate key errors; a concurrent creator may have inserted it
+              if (!(err && (err.code === 11000))) throw err;
             }
+          } else if (qty > 0) {
+            // If a row exists for the main warehouse, ensure it reflects the desired quantity
+            await Inventory.findOneAndUpdate({ product: id, variantId, warehouse: w._id }, { quantity: qty }, { new: true });
           }
         }
-        try {
-          await new Inventory({
-            product: id,
-            variantId,
-            quantity: desired,
-            warehouse: warehouse._id,
-            location: warehouse.name,
-            lowStockThreshold: 5
-          }).save();
-          createdInitialInventory = true;
-          // v.stock will be recomputed from inventory by hooks/service; set for immediate response UX
-          v.stock = desired;
-          // Keep product and variant aggregates in sync immediately
-          try { await inventoryService.recomputeProductStock(id); } catch {}
-        } catch (err) {
-          // If a concurrent request created the inventory row, surface as a 409 conflict instead of 500
-          const code = err && (err.code || err?.original?.code);
-          if (code === 11000) {
-            return res.status(409).json({
-              message: 'Variant already has warehouse inventory. Use inventory endpoints to update quantities per warehouse.'
-            });
-          }
-          console.error('updateVariant: failed to create initial inventory', err);
-          return res.status(500).json({ message: 'Failed to create initial inventory' });
-        }
+        createdInitialInventory = true;
+        // v.stock will be recomputed from inventory by hooks/service; set for immediate response UX
+        v.stock = desired;
+        // Keep product and variant aggregates in sync immediately
+        try { await inventoryService.recomputeProductStock(id); } catch {}
       } else {
         // If inventory already exists across warehouses, require dedicated inventory endpoints
         return res.status(409).json({
