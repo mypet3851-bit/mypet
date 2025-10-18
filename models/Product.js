@@ -10,6 +10,17 @@ const productSchema = new mongoose.Schema({
     type: String,
     required: [true, 'Product description is required']
   },
+  // Localized fields (per-language overrides). Keys are language codes like 'ar', 'he', 'en'.
+  name_i18n: {
+    type: Map,
+    of: String,
+    default: undefined
+  },
+  description_i18n: {
+    type: Map,
+    of: String,
+    default: undefined
+  },
   price: {
     type: Number,
     required: [true, 'Product price is required'],
