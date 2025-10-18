@@ -101,6 +101,16 @@ router.get('/', async (req, res) => {
       };
       delete obj.googleAuth.clientSecret;
     }
+    // Translations (DeepSeek): mask secret
+    if (obj.translations && obj.translations.deepseek) {
+      obj.translations = obj.translations || {};
+      obj.translations.deepseek = {
+        enabled: !!obj.translations.deepseek.enabled,
+        apiKey: obj.translations.deepseek.apiKey ? '***' : '',
+        apiUrl: obj.translations.deepseek.apiUrl || '',
+        model: obj.translations.deepseek.model || ''
+      };
+    }
     // Normalize favicon (and optionally logo) to absolute so other-origins (Netlify) can load it
     try {
   if (obj.favicon) obj.favicon = toAbsolute(req, obj.favicon);
@@ -149,6 +159,51 @@ router.get('/', async (req, res) => {
     res.json(obj);
   } catch (error) {
     res.status(500).json({ message: error.message });
+  }
+});
+
+// Get DeepSeek translation config (admin only for full detail sans secret value)
+router.get('/translations/deepseek', adminAuth, async (req, res) => {
+  try {
+    let settings = await Settings.findOne();
+    if (!settings) settings = await Settings.create({});
+    const ds = settings.translations?.deepseek || { enabled: false, apiKey: '', apiUrl: '', model: '' };
+    res.json({
+      enabled: !!ds.enabled,
+      apiKey: ds.apiKey ? '***' : '',
+      apiUrl: ds.apiUrl || '',
+      model: ds.model || ''
+    });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+});
+
+// Update DeepSeek translation config (admin)
+router.put('/translations/deepseek', adminAuth, async (req, res) => {
+  try {
+    let settings = await Settings.findOne().sort({ updatedAt: -1 });
+    if (!settings) settings = new Settings();
+    settings.translations = settings.translations || { deepseek: { enabled: false, apiKey: '', apiUrl: '', model: '' } };
+    const incoming = req.body || {};
+    const prevKey = settings.translations.deepseek?.apiKey || '';
+    const next = {
+      enabled: typeof incoming.enabled === 'undefined' ? !!settings.translations.deepseek?.enabled : !!incoming.enabled,
+      apiKey: typeof incoming.apiKey === 'string' ? (incoming.apiKey === '***' ? prevKey : incoming.apiKey.trim()) : (settings.translations.deepseek?.apiKey || ''),
+      apiUrl: typeof incoming.apiUrl === 'string' ? incoming.apiUrl.trim() : (settings.translations.deepseek?.apiUrl || ''),
+      model: typeof incoming.model === 'string' ? incoming.model.trim() : (settings.translations.deepseek?.model || '')
+    };
+    settings.translations.deepseek = next;
+    try { settings.markModified('translations'); } catch {}
+    await settings.save();
+    // Attempt to refresh in-memory DeepSeek config so changes take effect without restart
+    try {
+      const { loadDeepseekConfigFromDb } = await import('../services/translate/deepseek.js');
+      await loadDeepseekConfigFromDb();
+    } catch {}
+    res.json({ enabled: next.enabled, apiKey: next.apiKey ? '***' : '', apiUrl: next.apiUrl, model: next.model });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
   }
 });
 

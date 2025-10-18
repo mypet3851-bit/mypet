@@ -68,6 +68,8 @@ import formRoutes from './routes/formRoutes.js';
 import flashSaleRoutes from './routes/flashSaleRoutes.js';
 import bundleOfferRoutes from './routes/bundleOfferRoutes.js';
 import attributeRoutes from './routes/attributeRoutes.js';
+// Lazy import function to warm DeepSeek config from DB
+import { loadDeepseekConfigFromDb } from './services/translate/deepseek.js';
 
 // Path Setup
 const __filename = fileURLToPath(import.meta.url);
@@ -480,6 +482,14 @@ const startServer = async () => {
 
   // Start real-time services after everything is initialized
   import('./services/realTimeEventService.js');
+
+  // Warm DeepSeek translation config from DB (if configured)
+  try {
+    await loadDeepseekConfigFromDb();
+    console.log('[startup] DeepSeek translation config loaded');
+  } catch (e) {
+    console.warn('[startup] DeepSeek config load skipped:', e?.message || e);
+  }
 
   server.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);

@@ -1,13 +1,15 @@
 import express from 'express';
-import { deepseekTranslate, deepseekTranslateBatch } from '../services/translate/deepseek.js';
+import { deepseekTranslate, deepseekTranslateBatch, isDeepseekConfigured } from '../services/translate/deepseek.js';
 
 const router = express.Router();
 
 // Guard: block if key missing
 router.use((req, res, next) => {
-  if (!process.env.DEEPSEEK_API_KEY) {
-    return res.status(503).json({ message: 'translation_unavailable' });
-  }
+  try {
+    if (!isDeepseekConfigured()) {
+      return res.status(503).json({ message: 'translation_unavailable' });
+    }
+  } catch {}
   next();
 });
 
