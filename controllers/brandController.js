@@ -1,5 +1,6 @@
 import asyncHandler from 'express-async-handler';
 import Brand from '../models/Brand.js';
+import { deepseekTranslate } from '../services/translate/deepseek.js';
 
 function slugify(input) {
   return String(input || '')
@@ -12,12 +13,44 @@ function slugify(input) {
 }
 
 export const listBrands = asyncHandler(async (req, res) => {
+  const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
+  const allowAuto = process.env.ALLOW_RUNTIME_PRODUCT_TRANSLATE === 'true';
   const brands = await Brand.find().sort({ order: 1, createdAt: 1 });
+  if (reqLang) {
+    for (const b of brands) {
+      const nm = (b.name_i18n && typeof b.name_i18n.get === 'function') ? b.name_i18n.get(reqLang) : (b.name_i18n ? b.name_i18n[reqLang] : undefined);
+      if (nm) b.name = nm; else if (allowAuto && b.name) {
+        try { const tr = await deepseekTranslate(b.name, 'auto', reqLang); const map = new Map(b.name_i18n || []); map.set(reqLang, tr); b.name_i18n = map; b.name = tr; await b.save(); } catch {}
+      }
+      if (b.label) {
+        const lbl = (b.label_i18n && typeof b.label_i18n.get === 'function') ? b.label_i18n.get(reqLang) : (b.label_i18n ? b.label_i18n[reqLang] : undefined);
+        if (lbl) b.label = lbl; else if (allowAuto) {
+          try { const trl = await deepseekTranslate(b.label, 'auto', reqLang); const mapl = new Map(b.label_i18n || []); mapl.set(reqLang, trl); b.label_i18n = mapl; b.label = trl; await b.save(); } catch {}
+        }
+      }
+    }
+  }
   res.json(brands);
 });
 
 export const listActiveBrands = asyncHandler(async (req, res) => {
+  const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
+  const allowAuto = process.env.ALLOW_RUNTIME_PRODUCT_TRANSLATE === 'true';
   const brands = await Brand.find({ isActive: true }).sort({ order: 1, createdAt: 1 });
+  if (reqLang) {
+    for (const b of brands) {
+      const nm = (b.name_i18n && typeof b.name_i18n.get === 'function') ? b.name_i18n.get(reqLang) : (b.name_i18n ? b.name_i18n[reqLang] : undefined);
+      if (nm) b.name = nm; else if (allowAuto && b.name) {
+        try { const tr = await deepseekTranslate(b.name, 'auto', reqLang); const map = new Map(b.name_i18n || []); map.set(reqLang, tr); b.name_i18n = map; b.name = tr; await b.save(); } catch {}
+      }
+      if (b.label) {
+        const lbl = (b.label_i18n && typeof b.label_i18n.get === 'function') ? b.label_i18n.get(reqLang) : (b.label_i18n ? b.label_i18n[reqLang] : undefined);
+        if (lbl) b.label = lbl; else if (allowAuto) {
+          try { const trl = await deepseekTranslate(b.label, 'auto', reqLang); const mapl = new Map(b.label_i18n || []); mapl.set(reqLang, trl); b.label_i18n = mapl; b.label = trl; await b.save(); } catch {}
+        }
+      }
+    }
+  }
   res.json(brands);
 });
 
@@ -68,7 +101,22 @@ export const reorderBrands = asyncHandler(async (req, res) => {
 export const getBrandBySlug = asyncHandler(async (req, res) => {
   const { slug } = req.params;
   if (!slug) return res.status(400).json({ message: 'Slug is required' });
+  const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
+  const allowAuto = process.env.ALLOW_RUNTIME_PRODUCT_TRANSLATE === 'true';
   const brand = await Brand.findOne({ slug: String(slug).toLowerCase() });
   if (!brand) return res.status(404).json({ message: 'Brand not found' });
-  res.json(brand);
+  const obj = brand.toObject();
+  if (reqLang) {
+    const nm = (brand.name_i18n && typeof brand.name_i18n.get === 'function') ? brand.name_i18n.get(reqLang) : (obj?.name_i18n ? obj.name_i18n[reqLang] : undefined);
+    if (nm) obj.name = nm; else if (allowAuto && obj.name) {
+      try { const tr = await deepseekTranslate(obj.name, 'auto', reqLang); const map = new Map(brand.name_i18n || []); map.set(reqLang, tr); brand.name_i18n = map; obj.name = tr; await brand.save(); } catch {}
+    }
+    if (obj.label) {
+      const lbl = (brand.label_i18n && typeof brand.label_i18n.get === 'function') ? brand.label_i18n.get(reqLang) : (obj?.label_i18n ? obj.label_i18n[reqLang] : undefined);
+      if (lbl) obj.label = lbl; else if (allowAuto) {
+        try { const trl = await deepseekTranslate(obj.label, 'auto', reqLang); const mapl = new Map(brand.label_i18n || []); mapl.set(reqLang, trl); brand.label_i18n = mapl; obj.label = trl; await brand.save(); } catch {}
+      }
+    }
+  }
+  res.json(obj);
 });

@@ -31,6 +31,7 @@ import { handleProductImages } from '../utils/imageHandler.js';
 import cloudinary from '../services/cloudinaryClient.js';
 import { cacheGet, cacheSet } from '../utils/cache/simpleCache.js';
 import { inventoryService } from '../services/inventoryService.js';
+import { deepseekTranslate, deepseekTranslateBatch } from '../services/translate/deepseek.js';
 // Currency conversion disabled for product storage/display; prices are stored and served as-is in store currency
 
 // Get all products
@@ -117,6 +118,7 @@ async function buildProductQuery(params) {
 
 export const getProducts = async (req, res) => {
   try {
+    const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
     // Allow category to be provided as slug or name (not just ObjectId) just like filters endpoint.
     // Also: if a non-existent category slug/name is supplied, return an empty list instead of all products.
     let forceEmpty = false;
@@ -176,11 +178,49 @@ export const getProducts = async (req, res) => {
       .populate({ path: 'reviews.user', select: 'name email image' })
       .sort({ isFeatured: -1, order: 1, createdAt: -1 });
 
+    const allowAutoTranslate = process.env.ALLOW_RUNTIME_PRODUCT_TRANSLATE === 'true';
     const productsWithInventory = await Promise.all(
       products.map(async (product) => {
         const inventory = await Inventory.find({ product: product._id });
         const productObj = product.toObject();
         productObj.inventory = inventory;
+        // Localize name/description if requested and available
+        if (reqLang) {
+          try {
+            const nm = productObj.name_i18n?.get?.(reqLang) || (productObj.name_i18n && productObj.name_i18n[reqLang]);
+            const desc = productObj.description_i18n?.get?.(reqLang) || (productObj.description_i18n && productObj.description_i18n[reqLang]);
+            if (nm) productObj.name = nm;
+            if (desc) productObj.description = desc;
+            // Optionally auto-translate and persist when missing
+            if ((!nm || !desc) && allowAutoTranslate) {
+              const pDoc = await Product.findById(productObj._id);
+              if (pDoc) {
+                let changed = false;
+                if (!nm && typeof pDoc.name === 'string' && pDoc.name.trim()) {
+                  try {
+                    const tr = await deepseekTranslate(pDoc.name, 'auto', reqLang);
+                    const map = new Map(pDoc.name_i18n || []);
+                    map.set(reqLang, tr);
+                    pDoc.name_i18n = map;
+                    productObj.name = tr;
+                    changed = true;
+                  } catch {}
+                }
+                if (!desc && typeof pDoc.description === 'string' && pDoc.description.trim()) {
+                  try {
+                    const trd = await deepseekTranslate(pDoc.description, 'auto', reqLang);
+                    const mapd = new Map(pDoc.description_i18n || []);
+                    mapd.set(reqLang, trd);
+                    pDoc.description_i18n = mapd;
+                    productObj.description = trd;
+                    changed = true;
+                  } catch {}
+                }
+                if (changed) { try { await pDoc.save(); } catch {} }
+              }
+            }
+          } catch {}
+        }
         return productObj;
       })
     );
@@ -328,6 +368,7 @@ export const getProductFilters = async (req, res) => {
 export const getProduct = async (req, res) => {
   try {
   // Currency query param ignored; no conversion performed
+    const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
     
     const product = await Product.findById(req.params.id)
       .populate('category')
@@ -354,7 +395,40 @@ export const getProduct = async (req, res) => {
     const productObj = product.toObject();
     productObj.inventory = inventory;
 
-    // No runtime currency conversion
+    // Localize name/description if requested and available
+    if (reqLang) {
+      try {
+        const nm = productObj.name_i18n?.get?.(reqLang) || (productObj.name_i18n && productObj.name_i18n[reqLang]);
+        const desc = productObj.description_i18n?.get?.(reqLang) || (productObj.description_i18n && productObj.description_i18n[reqLang]);
+        if (nm) productObj.name = nm;
+        if (desc) productObj.description = desc;
+        // Optionally auto-translate and persist when missing
+        if ((!nm || !desc) && process.env.ALLOW_RUNTIME_PRODUCT_TRANSLATE === 'true') {
+          let changed = false;
+          if (!nm && typeof product.name === 'string' && product.name.trim()) {
+            try {
+              const tr = await deepseekTranslate(product.name, 'auto', reqLang);
+              const map = new Map(product.name_i18n || []);
+              map.set(reqLang, tr);
+              product.name_i18n = map;
+              productObj.name = tr;
+              changed = true;
+            } catch {}
+          }
+          if (!desc && typeof product.description === 'string' && product.description.trim()) {
+            try {
+              const trd = await deepseekTranslate(product.description, 'auto', reqLang);
+              const mapd = new Map(product.description_i18n || []);
+              mapd.set(reqLang, trd);
+              product.description_i18n = mapd;
+              productObj.description = trd;
+              changed = true;
+            } catch {}
+          }
+          if (changed) { try { await product.save(); } catch {} }
+        }
+      } catch {}
+    }
 
     res.json(productObj);
   } catch (error) {
@@ -1566,5 +1640,84 @@ export const bulkCreateProducts = async (req, res) => {
   } catch (error) {
     console.error('Error in bulkCreateProducts:', error);
     res.status(500).json({ message: 'Failed to bulk create products' });
+  }
+};
+
+// Translate and persist product fields (name/description) into i18n maps
+// POST /api/products/:id/translate
+// body: { to: 'ar'|'he'|'en'|..., fields?: ['name','description'] }
+export const translateProductFields = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { to, fields } = req.body || {};
+    if (!to || typeof to !== 'string') {
+      return res.status(400).json({ message: 'Missing target language "to"' });
+    }
+    const allowed = new Set(['name', 'description']);
+    const targets = Array.isArray(fields) && fields.length ? fields.filter(f => allowed.has(f)) : ['name', 'description'];
+    const product = await Product.findById(id);
+    if (!product) return res.status(404).json({ message: 'Product not found' });
+
+    const updates = {};
+    for (const field of targets) {
+      const src = product[field];
+      if (typeof src !== 'string' || !src.trim()) continue;
+      try {
+        const translated = await deepseekTranslate(src, 'auto', to);
+        const mapField = field + '_i18n';
+        if (!updates[mapField]) updates[mapField] = new Map(product[mapField] || []);
+        updates[mapField].set(to, translated);
+      } catch (e) {
+        return res.status(502).json({ message: `Translation failed for ${field}`, error: e?.message || 'translate_failed' });
+      }
+    }
+    // Apply updates
+    Object.entries(updates).forEach(([k, v]) => {
+      product[k] = v;
+    });
+    await product.save();
+    res.json({ message: 'Translated', product });
+  } catch (e) {
+    console.error('translateProductFields error', e);
+    res.status(500).json({ message: 'Failed to translate product' });
+  }
+};
+
+// Batch translate many products
+// POST /api/products/translate/batch
+// body: { ids: string[], to: string, fields?: ['name','description'] }
+export const batchTranslateProducts = async (req, res) => {
+  try {
+    const { ids, to, fields } = req.body || {};
+    if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ message: 'ids[] required' });
+    if (!to || typeof to !== 'string') return res.status(400).json({ message: 'Missing target language "to"' });
+    const allowed = new Set(['name', 'description']);
+    const targets = Array.isArray(fields) && fields.length ? fields.filter(f => allowed.has(f)) : ['name', 'description'];
+
+    const products = await Product.find({ _id: { $in: ids } }).select('name description name_i18n description_i18n');
+    const out = [];
+
+    for (const p of products) {
+      const updates = {};
+      for (const field of targets) {
+        const src = p[field];
+        if (typeof src !== 'string' || !src.trim()) continue;
+        try {
+          const translated = await deepseekTranslate(src, 'auto', to);
+          const mapField = field + '_i18n';
+          if (!updates[mapField]) updates[mapField] = new Map(p[mapField] || []);
+          updates[mapField].set(to, translated);
+        } catch (e) {
+          out.push({ id: p._id, field, status: 'failed', error: e?.message || 'translate_failed' });
+        }
+      }
+      Object.entries(updates).forEach(([k, v]) => { p[k] = v; });
+      await p.save();
+      out.push({ id: p._id, status: 'ok' });
+    }
+    res.json({ results: out });
+  } catch (e) {
+    console.error('batchTranslateProducts error', e);
+    res.status(500).json({ message: 'Failed to batch translate products' });
   }
 };

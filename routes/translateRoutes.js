@@ -1,16 +1,35 @@
 import express from 'express';
+import { deepseekTranslate, deepseekTranslateBatch } from '../services/translate/deepseek.js';
 
-// Minimal translation endpoint placeholder.
-// Accepts { text, to, from } and echoes back text. This avoids 404s from mobile app
-// and can be upgraded later to call a translation service.
 const router = express.Router();
 
+// Guard: block if key missing
+router.use((req, res, next) => {
+  if (!process.env.DEEPSEEK_API_KEY) {
+    return res.status(503).json({ message: 'translation_unavailable' });
+  }
+  next();
+});
+
+// POST /api/translate
+// Body options:
+// { text: string, from: 'en', to: 'he' }
+// { items: [{id,text}], from, to }
 router.post('/', async (req, res) => {
   try {
-    const text = typeof req.body?.text === 'string' ? req.body.text : '';
-    // Optional: simple identity mapping; in future integrate translation provider here.
-    return res.json({ text });
+    const { text, items, from = 'en', to = 'he' } = req.body || {};
+    if (Array.isArray(items) && items.length) {
+      const normalized = items.map((it, i) => ({ id: it?.id || String(i), text: String(it?.text || '') }));
+      const out = await deepseekTranslateBatch(normalized, String(from), String(to));
+      return res.json({ items: out });
+    }
+    if (typeof text === 'string') {
+      const translated = await deepseekTranslate(text, String(from), String(to));
+      return res.json({ text: translated });
+    }
+    return res.status(400).json({ message: 'bad_request' });
   } catch (e) {
+    console.error('[translate] error', e?.message || e);
     return res.status(500).json({ message: 'translate_failed' });
   }
 });

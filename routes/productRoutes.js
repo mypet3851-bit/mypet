@@ -27,7 +27,7 @@ import {
   verifyReview,
   deleteReview
 } from '../controllers/reviewController.js';
-import { updateProductImages, generateProductVariants, updateVariant, bulkUpdateVariants, getAttributeValueImages, setAttributeValueImages, deleteVariant } from '../controllers/productController.js';
+import { updateProductImages, generateProductVariants, updateVariant, bulkUpdateVariants, getAttributeValueImages, setAttributeValueImages, deleteVariant, translateProductFields, batchTranslateProducts } from '../controllers/productController.js';
 
 const router = express.Router();
 
@@ -50,6 +50,9 @@ router.get('/:id', getProduct);
 // Protected routes (admin only)
 router.post('/', adminAuth, createProduct);
 router.post('/bulk', adminAuth, bulkCreateProducts);
+// Translation endpoints
+router.post('/translate/batch', adminAuth, batchTranslateProducts);
+router.post('/:id/translate', adminAuth, translateProductFields);
 // Put static route before dynamic ones
 router.put('/featured/reorder', adminAuth, reorderFeaturedProducts);
 router.put('/:id', adminAuth, updateProduct);

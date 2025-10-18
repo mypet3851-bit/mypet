@@ -1,12 +1,39 @@
 import Category from '../models/Category.js';
 import Product from '../models/Product.js';
+import { deepseekTranslate } from '../services/translate/deepseek.js';
 
 // Get all categories
 export const getAllCategories = async (req, res) => {
   try {
+    const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
+    const allowAuto = process.env.ALLOW_RUNTIME_PRODUCT_TRANSLATE === 'true';
     // Optional: asTree=true to return nested structure, otherwise flat list
     const asTree = String(req.query.asTree || '').toLowerCase() === 'true';
     const categories = await Category.find().sort({ depth: 1, order: 1, name: 1 }).lean();
+    // Localize inline (optionally persistence if allowed)
+    if (reqLang) {
+      for (const c of categories) {
+        try {
+          const nm = c.name_i18n?.[reqLang];
+          const desc = c.description_i18n?.[reqLang];
+          if (nm) c.name = nm;
+          if (desc) c.description = desc;
+          if ((!nm || !desc) && allowAuto) {
+            const doc = await Category.findById(c._id);
+            if (doc) {
+              let changed = false;
+              if (!nm && doc.name) {
+                try { const tr = await deepseekTranslate(doc.name, 'auto', reqLang); const map = new Map(doc.name_i18n || []); map.set(reqLang, tr); doc.name_i18n = map; c.name = tr; changed = true; } catch {}
+              }
+              if (!desc && doc.description) {
+                try { const trd = await deepseekTranslate(doc.description, 'auto', reqLang); const mapd = new Map(doc.description_i18n || []); mapd.set(reqLang, trd); doc.description_i18n = mapd; c.description = trd; changed = true; } catch {}
+              }
+              if (changed) { try { await doc.save(); } catch {} }
+            }
+          }
+        } catch {}
+      }
+    }
     if (!asTree) return res.json(categories);
 
     // Build tree
@@ -35,11 +62,30 @@ export const getAllCategories = async (req, res) => {
 // Get single category
 export const getCategory = async (req, res) => {
   try {
+    const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
+    const allowAuto = process.env.ALLOW_RUNTIME_PRODUCT_TRANSLATE === 'true';
     const category = await Category.findById(req.params.id);
     if (!category) {
       return res.status(404).json({ message: 'Category not found' });
     }
-    res.json(category);
+    const obj = category.toObject();
+    if (reqLang) {
+      const nm = obj.name_i18n?.[reqLang] || category.name_i18n?.get?.(reqLang);
+      const desc = obj.description_i18n?.[reqLang] || category.description_i18n?.get?.(reqLang);
+      if (nm) obj.name = nm;
+      if (desc) obj.description = desc;
+      if ((!nm || !desc) && allowAuto) {
+        let changed = false;
+        if (!nm && category.name) {
+          try { const tr = await deepseekTranslate(category.name, 'auto', reqLang); const map = new Map(category.name_i18n || []); map.set(reqLang, tr); category.name_i18n = map; obj.name = tr; changed = true; } catch {}
+        }
+        if (!desc && category.description) {
+          try { const trd = await deepseekTranslate(category.description, 'auto', reqLang); const mapd = new Map(category.description_i18n || []); mapd.set(reqLang, trd); category.description_i18n = mapd; obj.description = trd; changed = true; } catch {}
+        }
+        if (changed) { try { await category.save(); } catch {} }
+      }
+    }
+    res.json(obj);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -208,7 +254,28 @@ export const getSubcategories = async (req, res) => {
   try {
     const parentId = req.params.parentId === 'root' ? null : req.params.parentId;
     const filter = parentId ? { parent: parentId } : { parent: null };
-    const list = await Category.find(filter).sort({ order: 1, name: 1 });
+    const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
+    const allowAuto = process.env.ALLOW_RUNTIME_PRODUCT_TRANSLATE === 'true';
+    const list = await Category.find(filter).sort({ order: 1, name: 1 }).lean();
+    if (reqLang) {
+      for (const c of list) {
+        try {
+          const nm = c.name_i18n?.[reqLang];
+          const desc = c.description_i18n?.[reqLang];
+          if (nm) c.name = nm;
+          if (desc) c.description = desc;
+          if ((!nm || !desc) && allowAuto) {
+            const doc = await Category.findById(c._id);
+            if (doc) {
+              let changed = false;
+              if (!nm && doc.name) { try { const tr = await deepseekTranslate(doc.name, 'auto', reqLang); const map = new Map(doc.name_i18n || []); map.set(reqLang, tr); doc.name_i18n = map; c.name = tr; changed = true; } catch {} }
+              if (!desc && doc.description) { try { const trd = await deepseekTranslate(doc.description, 'auto', reqLang); const mapd = new Map(doc.description_i18n || []); mapd.set(reqLang, trd); doc.description_i18n = mapd; c.description = trd; changed = true; } catch {} }
+              if (changed) { try { await doc.save(); } catch {} }
+            }
+          }
+        } catch {}
+      }
+    }
     res.json(list);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -218,7 +285,28 @@ export const getSubcategories = async (req, res) => {
 // Get the full category tree starting from root
 export const getCategoryTree = async (req, res) => {
   try {
+    const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
+    const allowAuto = process.env.ALLOW_RUNTIME_PRODUCT_TRANSLATE === 'true';
     const categories = await Category.find().sort({ depth: 1, order: 1, name: 1 }).lean();
+    if (reqLang) {
+      for (const c of categories) {
+        try {
+          const nm = c.name_i18n?.[reqLang];
+          const desc = c.description_i18n?.[reqLang];
+          if (nm) c.name = nm;
+          if (desc) c.description = desc;
+          if ((!nm || !desc) && allowAuto) {
+            const doc = await Category.findById(c._id);
+            if (doc) {
+              let changed = false;
+              if (!nm && doc.name) { try { const tr = await deepseekTranslate(doc.name, 'auto', reqLang); const map = new Map(doc.name_i18n || []); map.set(reqLang, tr); doc.name_i18n = map; c.name = tr; changed = true; } catch {} }
+              if (!desc && doc.description) { try { const trd = await deepseekTranslate(doc.description, 'auto', reqLang); const mapd = new Map(doc.description_i18n || []); mapd.set(reqLang, trd); doc.description_i18n = mapd; c.description = trd; changed = true; } catch {} }
+              if (changed) { try { await doc.save(); } catch {} }
+            }
+          }
+        } catch {}
+      }
+    }
     const byId = new Map(categories.map(c => [String(c._id), { ...c, children: [] }]));
     const roots = [];
     for (const cat of byId.values()) {
