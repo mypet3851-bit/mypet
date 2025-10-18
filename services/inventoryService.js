@@ -7,22 +7,80 @@ import { ApiError } from '../utils/ApiError.js';
 import { realTimeEventService } from './realTimeEventService.js';
 
 class InventoryService {
-  // Move stock between warehouses
-  async moveStockBetweenWarehouses({ product, size, color, quantity, fromWarehouse, toWarehouse, userId, reason }) {
-    if (!product || !size || !color || !fromWarehouse || !toWarehouse || !userId || !quantity || quantity <= 0) {
-      throw new ApiError(StatusCodes.BAD_REQUEST, 'All fields are required and quantity must be > 0');
+  // Reserve items for an order across warehouses. Throws if insufficient stock.
+  // items: [{ product, quantity, variantId? , size?, color? }]
+  async reserveItems(items, userId, session = null) {
+    if (!Array.isArray(items) || !items.length) return;
+    const affectedProducts = new Set();
+    for (const it of items) {
+      const { product, quantity } = it;
+      if (!product || !quantity || quantity <= 0) {
+        throw new ApiError(StatusCodes.BAD_REQUEST, 'Invalid reservation item');
+      }
+      const usingVariant = !!it.variantId;
+      const baseFilter = usingVariant
+        ? { product, variantId: it.variantId }
+        : { product, size: it.size, color: it.color };
+
+      // Load inventories sorted by quantity desc
+      const invQuery = Inventory.find({ ...baseFilter }).sort({ quantity: -1 });
+      const invs = session ? await invQuery.session(session) : await invQuery;
+      const totalAvail = invs.reduce((s, x) => s + (Number(x.quantity) || 0), 0);
+      if (totalAvail < quantity) {
+        throw new ApiError(StatusCodes.BAD_REQUEST, `Insufficient stock for product ${product}${usingVariant ? ' variant' : ''}. Available: ${totalAvail}, requested: ${quantity}`);
+      }
+
+      // Decrement across inventories greedily
+      let remain = quantity;
+      for (const inv of invs) {
+        if (remain <= 0) break;
+        const take = Math.min(remain, inv.quantity);
+        inv.quantity -= take;
+        remain -= take;
+        if (session) await inv.save({ session }); else await inv.save();
+      }
+
+      // History record
+      await this.#createHistoryRecord({
+        product,
+        type: 'decrease',
+        quantity,
+        reason: 'Order reservation',
+        user: userId
+      });
+      affectedProducts.add(String(product));
     }
 
+    // Recompute product and variant stocks
+    for (const pid of affectedProducts) {
+      await this.#updateProductStock(pid);
+    }
+  }
+  // Move stock between warehouses
+  async moveStockBetweenWarehouses({ product, size, color, variantId, quantity, fromWarehouse, toWarehouse, userId, reason }) {
+    if (!product || !fromWarehouse || !toWarehouse || !userId || !quantity || quantity <= 0) {
+      throw new ApiError(StatusCodes.BAD_REQUEST, 'All fields are required and quantity must be > 0');
+    }
+    if (!variantId && (!size || !color)) {
+      throw new ApiError(StatusCodes.BAD_REQUEST, 'Either variantId or both size and color are required');
+    }
+
+    const baseQuery = variantId
+      ? { product, variantId, warehouse: fromWarehouse }
+      : { product, size, color, warehouse: fromWarehouse };
     // Find source inventory
-    const sourceInv = await Inventory.findOne({ product, size, color, warehouse: fromWarehouse });
+    const sourceInv = await Inventory.findOne(baseQuery);
     if (!sourceInv || sourceInv.quantity < quantity) {
       throw new ApiError(StatusCodes.BAD_REQUEST, 'Insufficient stock in source warehouse');
     }
 
     // Find or create destination inventory
-    let destInv = await Inventory.findOne({ product, size, color, warehouse: toWarehouse });
+    let destQuery = variantId
+      ? { product, variantId, warehouse: toWarehouse }
+      : { product, size, color, warehouse: toWarehouse };
+    let destInv = await Inventory.findOne(destQuery);
     if (!destInv) {
-      destInv = new Inventory({ product, size, color, warehouse: toWarehouse, quantity: 0 });
+      destInv = new Inventory({ product, size, color, variantId, warehouse: toWarehouse, quantity: 0 });
     }
 
     // Update quantities
@@ -44,7 +102,7 @@ class InventoryService {
     });
 
     // Optionally, update product total stock if needed
-    await this.#updateProductStock(product);
+  await this.#updateProductStock(product);
 
     return { from: sourceInv, to: destInv };
   }
@@ -120,11 +178,11 @@ class InventoryService {
       if (!data.product) {
         throw new ApiError(StatusCodes.BAD_REQUEST, 'Product is required');
       }
-      if (!data.size) {
-        throw new ApiError(StatusCodes.BAD_REQUEST, 'Size is required');
-      }
-      if (!data.color) {
-        throw new ApiError(StatusCodes.BAD_REQUEST, 'Color is required');
+      // Allow either variantId OR size+color combo
+      const usingVariant = !!data.variantId;
+      if (!usingVariant) {
+        if (!data.size) throw new ApiError(StatusCodes.BAD_REQUEST, 'Size is required');
+        if (!data.color) throw new ApiError(StatusCodes.BAD_REQUEST, 'Color is required');
       }
       if (!data.warehouse) {
         throw new ApiError(StatusCodes.BAD_REQUEST, 'Warehouse is required');
@@ -134,19 +192,38 @@ class InventoryService {
       }
 
       // Check if inventory item already exists for this product/size/color combination
-      const existingInventory = await Inventory.findOne({
-        product: data.product,
-        size: data.size,
-        color: data.color,
-        warehouse: data.warehouse
-      });
+      const existingInventory = await Inventory.findOne(
+        usingVariant
+          ? { product: data.product, variantId: data.variantId, warehouse: data.warehouse }
+          : { product: data.product, size: data.size, color: data.color, warehouse: data.warehouse }
+      );
 
       if (existingInventory) {
         throw new ApiError(StatusCodes.BAD_REQUEST, 
-          `Inventory already exists for this product, size (${data.size}), and color (${data.color}) combination. Please update the existing inventory instead.`);
+          usingVariant
+            ? 'Inventory already exists for this product variant in this warehouse. Please update the existing inventory instead.'
+            : `Inventory already exists for this product, size (${data.size}), and color (${data.color}) combination in this warehouse. Please update the existing inventory instead.`);
       }
 
-      const inventory = new Inventory(data);
+      // If variant path, optionally attach attribute snapshot for quick reference
+      let attributesSnapshot = undefined;
+      if (usingVariant) {
+        const prod = await Product.findById(data.product).select('variants');
+        const v = prod?.variants?.id?.(data.variantId);
+        if (v && Array.isArray(v.attributes)) attributesSnapshot = v.attributes;
+      }
+
+      const inventory = new Inventory({
+        product: data.product,
+        variantId: data.variantId,
+        size: usingVariant ? undefined : data.size,
+        color: usingVariant ? undefined : data.color,
+        quantity: data.quantity,
+        warehouse: data.warehouse,
+        location: data.location,
+        lowStockThreshold: data.lowStockThreshold ?? 5,
+        attributesSnapshot
+      });
       const savedInventory = await inventory.save();
       
       // Update product total stock
@@ -262,8 +339,38 @@ class InventoryService {
   async #updateProductStock(productId) {
     try {
       const inventoryItems = await Inventory.find({ product: productId });
-      const totalStock = inventoryItems.reduce((sum, item) => sum + item.quantity, 0);
-      await Product.findByIdAndUpdate(productId, { stock: totalStock });
+      const totalStock = inventoryItems.reduce((sum, item) => sum + (Number(item.quantity) || 0), 0);
+
+      // Update variant stocks by summing inventory by variantId
+      const perVariant = new Map();
+      for (const item of inventoryItems) {
+        if (item.variantId) {
+          const key = String(item.variantId);
+          perVariant.set(key, (perVariant.get(key) || 0) + (Number(item.quantity) || 0));
+        }
+      }
+
+      const product = await Product.findById(productId);
+      if (product) {
+        if (Array.isArray(product.variants) && product.variants.length) {
+          for (const v of product.variants) {
+            const key = String(v._id);
+            if (perVariant.has(key)) {
+              v.stock = perVariant.get(key);
+            }
+          }
+          // Recompute product stock as sum of variant stocks for consistency
+          const sumVariants = product.variants.reduce((s, v) => s + (Number(v.stock) || 0), 0);
+          product.stock = sumVariants;
+        } else {
+          // No variants: use total inventory sum
+          product.stock = totalStock;
+        }
+        await product.save();
+      } else {
+        // Fallback: update stock field directly if product not loaded
+        await Product.findByIdAndUpdate(productId, { stock: totalStock });
+      }
     } catch (error) {
       throw new ApiError(StatusCodes.INTERNAL_SERVER_ERROR, 'Error updating product stock');
     }
