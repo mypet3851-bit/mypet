@@ -8,6 +8,11 @@ import { realTimeEventService } from './realTimeEventService.js';
 import Settings from '../models/Settings.js';
 
 class InventoryService {
+  // Public: force recomputation of product and per-variant stock totals
+  async recomputeProductStock(productId) {
+    return this.#updateProductStock(productId);
+  }
+
   // Reserve items for an order across warehouses. Throws if insufficient stock unless allowNegativeStock.
   // items: [{ product, quantity, variantId? , size?, color? }]
   async reserveItems(items, userId, session = null) {
