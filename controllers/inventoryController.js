@@ -1,5 +1,5 @@
 export const moveStockBetweenWarehouses = asyncHandler(async (req, res) => {
-  const { product, size, color, quantity, fromWarehouse, toWarehouse, reason } = req.body;
+  const { product, size, color, variantId, quantity, fromWarehouse, toWarehouse, reason } = req.body;
   const userId = req.user?._id;
   if (!userId) {
     return res.status(StatusCodes.UNAUTHORIZED).json({ message: 'User required' });
@@ -9,6 +9,7 @@ export const moveStockBetweenWarehouses = asyncHandler(async (req, res) => {
       product,
       size,
       color,
+      variantId,
       quantity,
       fromWarehouse,
       toWarehouse,
@@ -23,13 +24,17 @@ export const moveStockBetweenWarehouses = asyncHandler(async (req, res) => {
 // Update inventory by product, color, and size
 import Inventory from '../models/Inventory.js';
 export const updateInventoryByProductColorSize = asyncHandler(async (req, res) => {
-  const { productId, color, size } = req.body;
+  const { productId, color, size, variantId } = req.body;
   const { quantity } = req.body;
-  if (!productId || !color || !size || typeof quantity !== 'number') {
-    return res.status(StatusCodes.BAD_REQUEST).json({ message: 'productId, color, size, and quantity are required' });
+  if (!productId || typeof quantity !== 'number') {
+    return res.status(StatusCodes.BAD_REQUEST).json({ message: 'productId and quantity are required' });
   }
+  if (!variantId && (!color || !size)) {
+    return res.status(StatusCodes.BAD_REQUEST).json({ message: 'Provide either variantId or both color and size' });
+  }
+  const query = variantId ? { product: productId, variantId } : { product: productId, color, size };
   const inventory = await Inventory.findOneAndUpdate(
-    { product: productId, color, size },
+    query,
     { quantity },
     { new: true, runValidators: true }
   );
@@ -41,6 +46,7 @@ export const updateInventoryByProductColorSize = asyncHandler(async (req, res) =
 import asyncHandler from 'express-async-handler';
 import { inventoryService } from '../services/inventoryService.js';
 import { StatusCodes } from 'http-status-codes';
+import mongoose from 'mongoose';
 
 export const getInventory = asyncHandler(async (req, res) => {
   console.log('getInventory controller called');
@@ -54,6 +60,17 @@ export const getInventory = asyncHandler(async (req, res) => {
 export const getProductInventory = asyncHandler(async (req, res) => {
   const inventory = await inventoryService.getProductInventory(req.params.productId);
   res.status(StatusCodes.OK).json(inventory);
+});
+
+// Get summarized stock per variant for a product
+export const getVariantStockSummary = asyncHandler(async (req, res) => {
+  const { productId } = req.params;
+  const results = await Inventory.aggregate([
+    { $match: { product: new mongoose.Types.ObjectId(productId) } },
+    { $group: { _id: { variantId: '$variantId' }, quantity: { $sum: '$quantity' } } },
+    { $project: { _id: 0, variantId: '$_id.variantId', quantity: 1 } }
+  ]).allowDiskUse(false);
+  res.status(StatusCodes.OK).json(results);
 });
 
 export const updateInventory = asyncHandler(async (req, res) => {
@@ -81,6 +98,21 @@ export const addInventory = asyncHandler(async (req, res) => {
   
   const inventory = await inventoryService.addInventory(req.body, req.user._id);
   res.status(StatusCodes.CREATED).json(inventory);
+});
+
+// Update inventory by variantId and warehouse
+export const updateInventoryByVariant = asyncHandler(async (req, res) => {
+  const { productId, variantId, warehouseId, quantity } = req.body || {};
+  if (!productId || !variantId || !warehouseId || typeof quantity !== 'number') {
+    return res.status(StatusCodes.BAD_REQUEST).json({ message: 'productId, variantId, warehouseId, and quantity are required' });
+  }
+  const inv = await Inventory.findOneAndUpdate(
+    { product: productId, variantId, warehouse: warehouseId },
+    { quantity },
+    { new: true, runValidators: true }
+  );
+  if (!inv) return res.status(StatusCodes.NOT_FOUND).json({ message: 'Inventory record not found for variant in this warehouse' });
+  res.status(StatusCodes.OK).json(inv);
 });
 
 export const getLowStockItems = asyncHandler(async (req, res) => {

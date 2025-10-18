@@ -1162,12 +1162,40 @@ export const updateVariant = async (req, res) => {
     if (barcode !== undefined) v.barcode = barcode;
     if (price !== undefined) v.price = Number(price);
     if (originalPrice !== undefined) v.originalPrice = Number(originalPrice);
-    if (stock !== undefined) v.stock = Math.max(0, Number(stock));
+    // Stock handling: prefer inventory as source of truth. If no inventory exists yet for this variant,
+    // allow setting stock here by creating an initial record in a default warehouse.
+    let createdInitialInventory = false;
+    if (stock !== undefined) {
+      const invRecords = await Inventory.find({ product: id, variantId });
+      const desired = Math.max(0, Number(stock));
+      if (!invRecords.length) {
+        // Ensure a default warehouse exists
+        let warehouse = await Warehouse.findOne();
+        if (!warehouse) warehouse = await Warehouse.create({ name: 'Main Warehouse' });
+        await new Inventory({
+          product: id,
+          variantId,
+          quantity: desired,
+          warehouse: warehouse._id,
+          location: warehouse.name,
+          lowStockThreshold: 5
+        }).save();
+        createdInitialInventory = true;
+        // v.stock will be recomputed from inventory by hooks/service; set for immediate response UX
+        v.stock = desired;
+      } else {
+        // If inventory already exists across warehouses, require dedicated inventory endpoints
+        return res.status(409).json({
+          message: 'Variant already has warehouse inventory. Use inventory endpoints to update quantities per warehouse.'
+        });
+      }
+    }
     if (Array.isArray(images)) v.images = images.filter((i)=> typeof i === 'string' && i.trim());
     if (isActive !== undefined) v.isActive = !!isActive;
     await product.save();
     const populated = await Product.findById(id).select('variants').populate('variants.attributes.attribute').populate('variants.attributes.value');
-    res.json((populated && populated.variants ? populated.variants.find((x)=> x._id.toString()===variantId) : null));
+    const updated = (populated && populated.variants ? populated.variants.find((x)=> x._id.toString()===variantId) : null);
+    res.json(updated);
   } catch (e) {
     res.status(500).json({ message: 'Failed to update variant' });
   }

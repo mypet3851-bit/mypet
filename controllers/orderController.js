@@ -139,7 +139,7 @@ export const createOrder = async (req, res) => {
       console.warn('MongoDB transactions not supported in current environment; proceeding without transaction. Reason:', txnErr?.message || txnErr);
     }
 
-    // Calculate total and validate stock
+  // Calculate total and validate stock
     // We now treat catalog product.price as already expressed in the chosen store currency.
     // Previous implementation multiplied by an exchangeRate (assuming a USD base) which caused inflated totals
     // when catalog prices were already in the display currency. We set exchangeRate=1 for backward compatibility.
@@ -148,6 +148,7 @@ export const createOrder = async (req, res) => {
     const exchangeRate = 1; // No runtime FX conversion; prices stored as-is
     const stockUpdates = []; // Track stock updates for rollback
 
+  const reservationItems = [];
   for (const item of items) {
       const baseProductQuery = Product.findById(item.product);
       const product = useTransaction ? await baseProductQuery.session(session) : await baseProductQuery;
@@ -164,31 +165,13 @@ export const createOrder = async (req, res) => {
       }
 
       const sizeName = item.size;
-      const hasSizes = Array.isArray(product.sizes) && product.sizes.length > 0;
-
-      if (sizeName && hasSizes) {
-        const sizeIndex = product.sizes.findIndex((s) => s.name === sizeName);
-        if (sizeIndex === -1) {
-          if (session.inTransaction()) await session.abortTransaction();
-          return res.status(400).json({ message: `Size '${sizeName}' not found for product ${product.name}` });
-        }
-        const available = Number(product.sizes[sizeIndex].stock) || 0;
-        if (available < qty) {
-          if (session.inTransaction()) await session.abortTransaction();
-          return res.status(400).json({ message: `Insufficient stock for ${product.name} (size: ${sizeName}). Available: ${available}, Requested: ${qty}` });
-        }
-        // Decrement size stock
-        product.sizes[sizeIndex].stock = available - qty;
-      } else {
-        // No size specified, check main stock
-        const mainStock = Number(product.stock) || 0;
-        if (mainStock < qty) {
-          if (session.inTransaction()) await session.abortTransaction();
-          return res.status(400).json({ message: `Insufficient stock for ${product.name}. Available: ${mainStock}, Requested: ${qty}` });
-        }
-        // Decrement main stock
-        product.stock = mainStock - qty;
-      }
+      const usingVariant = !!item.variantId;
+      // Prepare reservation to be executed after validating all items
+      reservationItems.push({
+        product: product._id,
+        quantity: qty,
+        ...(usingVariant ? { variantId: item.variantId } : { size: sizeName, color: item.color?.name || item.color || 'Default' })
+      });
 
       // Use catalog price directly (already in store currency)
       const catalogPrice = Number(product.price);
@@ -217,20 +200,12 @@ export const createOrder = async (req, res) => {
         sku: (typeof item.sku === 'string' ? item.sku : undefined)
       });
 
-      // Track stock update for this product
-      stockUpdates.push({
-        productId: product._id,
-        originalStock: Number(product.stock) || 0,
-        newStock: Number(product.stock) || 0 // This value is informational; actual inventory handled elsewhere
-      });
-
-      // Persist product stock changes
-      if (useTransaction) {
-        await product.save({ session });
-      } else {
-        await product.save();
-      }
+      // Track stock update note (no direct product mutation here; inventory service will update totals)
+      stockUpdates.push({ productId: product._id });
     }
+
+    // Reserve inventory across warehouses for all items atomically
+    await inventoryService.reserveItems(reservationItems, req.user?._id, useTransaction ? session : null);
 
     // Save or update recipient in Recipient collection
     const recipientQuery = {

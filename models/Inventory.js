@@ -6,13 +6,20 @@ const inventorySchema = new mongoose.Schema({
     ref: 'Product',
     required: true
   },
+  // Optional reference to a product variant (subdocument _id inside Product.variants)
+  // When present, size/color become optional and can be omitted.
+  variantId: {
+    type: mongoose.Schema.Types.ObjectId,
+    required: false,
+    index: true
+  },
   size: {
     type: String,
-    required: true
+    required: false
   },
   color: {
     type: String,
-    required: true
+    required: false
   },
   quantity: {
     type: Number,
@@ -32,6 +39,13 @@ const inventorySchema = new mongoose.Schema({
   location: {
     type: String
   },
+  // Snapshot of variant attributes for quick display (denormalized, optional)
+  attributesSnapshot: [{
+    attribute: { type: mongoose.Schema.Types.ObjectId, ref: 'Attribute' },
+    value: { type: mongoose.Schema.Types.ObjectId, ref: 'AttributeValue' },
+    textValue: { type: String },
+    numberValue: { type: Number }
+  }],
   status: {
     type: String,
     enum: ['in_stock', 'low_stock', 'out_of_stock'],
@@ -45,8 +59,17 @@ const inventorySchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Compound index for efficient querying
-inventorySchema.index({ product: 1, size: 1, color: 1 }, { unique: true });
+// Indexes
+// 1) Unique per product+variant+warehouse when variantId is set
+inventorySchema.index(
+  { product: 1, variantId: 1, warehouse: 1 },
+  { unique: true, partialFilterExpression: { variantId: { $type: 'objectId' } } }
+);
+// 2) Backward-compat: unique per product+size+color+warehouse when variantId is NOT set
+inventorySchema.index(
+  { product: 1, size: 1, color: 1, warehouse: 1 },
+  { unique: true, partialFilterExpression: { variantId: { $exists: false } } }
+);
 
 // Update status based on quantity
 inventorySchema.pre('save', function(next) {
