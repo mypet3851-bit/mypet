@@ -15,18 +15,18 @@ router.use((req, res, next) => {
 
 // POST /api/translate
 // Body options:
-// { text: string, from: 'en', to: 'he' }
-// { items: [{id,text}], from, to }
+// { text: string, from: 'en', to: 'he', contextKey?: string }
+// { items: [{id,text}], from, to, contextKey?: string }
 router.post('/', async (req, res) => {
   try {
-    const { text, items, from = 'en', to = 'he' } = req.body || {};
+    const { text, items, from = 'en', to = 'he', contextKey = '' } = req.body || {};
     if (Array.isArray(items) && items.length) {
       const normalized = items.map((it, i) => ({ id: it?.id || String(i), text: String(it?.text || '') }));
-      const out = await deepseekTranslateBatch(normalized, String(from), String(to));
+      const out = await deepseekTranslateBatch(normalized, String(from), String(to), { contextKey: String(contextKey || '') });
       return res.json({ items: out });
     }
     if (typeof text === 'string') {
-      const translated = await deepseekTranslate(text, String(from), String(to));
+      const translated = await deepseekTranslate(text, String(from), String(to), { contextKey: String(contextKey || '') });
       return res.json({ text: translated });
     }
     return res.status(400).json({ message: 'bad_request' });
