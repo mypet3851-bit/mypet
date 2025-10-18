@@ -166,11 +166,15 @@ export const createOrder = async (req, res) => {
 
       const sizeName = item.size;
       const usingVariant = !!item.variantId;
+      const fallbackColor = (typeof item.color === 'string' ? item.color : (item.color?.name || item.color?.code)) || undefined;
       // Prepare reservation to be executed after validating all items
+      // Include size/color as fallback even for variant-based items to match legacy inventory rows if present
       reservationItems.push({
         product: product._id,
         quantity: qty,
-        ...(usingVariant ? { variantId: item.variantId } : { size: sizeName, color: item.color?.name || item.color || 'Default' })
+        ...(usingVariant ? { variantId: item.variantId } : {}),
+        ...(sizeName ? { size: sizeName } : {}),
+        ...(fallbackColor ? { color: fallbackColor } : {})
       });
 
       // Use catalog price directly (already in store currency)
@@ -208,7 +212,9 @@ export const createOrder = async (req, res) => {
     // Inventory settings control: reserve/decrement on order placement if enabled
     let invCfg = null;
     try { invCfg = (await Settings.findOne())?.inventory || null; } catch {}
-    const shouldDecrementNow = !!(invCfg?.reserveOnCheckout || invCfg?.autoDecrementOnOrder);
+  // Default to decrementing now when settings absent (safer default for most stores)
+  const hasExplicitCfg = invCfg && (Object.prototype.hasOwnProperty.call(invCfg, 'reserveOnCheckout') || Object.prototype.hasOwnProperty.call(invCfg, 'autoDecrementOnOrder'));
+  const shouldDecrementNow = hasExplicitCfg ? !!(invCfg?.reserveOnCheckout || invCfg?.autoDecrementOnOrder) : true;
     if (shouldDecrementNow) {
       // Reserve (decrement) inventory across warehouses for all items atomically
       await inventoryService.reserveItems(reservationItems, req.user?._id, useTransaction ? session : null);
@@ -687,7 +693,8 @@ export const updateOrderStatus = async (req, res) => {
     // Inventory configuration driven stock adjustments
     let invCfg = null;
     try { invCfg = (await Settings.findOne())?.inventory || null; } catch {}
-    const decrementedAtOrder = !!(invCfg?.reserveOnCheckout || invCfg?.autoDecrementOnOrder);
+  const hasCfg = invCfg && (Object.prototype.hasOwnProperty.call(invCfg, 'reserveOnCheckout') || Object.prototype.hasOwnProperty.call(invCfg, 'autoDecrementOnOrder'));
+  const decrementedAtOrder = hasCfg ? !!(invCfg?.reserveOnCheckout || invCfg?.autoDecrementOnOrder) : true;
     const shouldDecrementOnDelivery = !decrementedAtOrder;
 
     // Build items array in variant-aware form
