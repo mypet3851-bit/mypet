@@ -191,10 +191,36 @@ export const updateInventoryByVariant = asyncHandler(async (req, res) => {
   try {
     // Normalize to ObjectId strings (Mongoose will cast but we keep consistent logs)
     const filter = { product: productId, variantId, warehouse: warehouseId };
+    // Build $setOnInsert with attributesSnapshot when available to improve display in UI
+    let setOnInsert = { product: productId, variantId, warehouse: warehouseId };
+    try {
+      // If this combination doesn't exist yet, attempt to derive attributesSnapshot from Product.variants
+      const exists = await Inventory.findOne(filter).lean();
+      if (!exists) {
+        const prod = await Product.findById(productId).select('variants.attributes').lean();
+        const v = Array.isArray(prod?.variants)
+          ? prod.variants.find(x => String(x?._id) === String(variantId))
+          : null;
+        if (v && Array.isArray(v.attributes) && v.attributes.length) {
+          setOnInsert = {
+            ...setOnInsert,
+            attributesSnapshot: v.attributes.map((a) => ({
+              attribute: a?.attribute,
+              value: a?.value,
+              textValue: a?.textValue,
+              numberValue: a?.numberValue
+            }))
+          };
+        }
+      }
+    } catch (snapErr) {
+      // Non-fatal: proceed without snapshot
+      try { console.warn('[inventory][by-variant] snapshot build failed:', snapErr?.message || snapErr); } catch {}
+    }
     // Use $setOnInsert to satisfy required fields when upserting a new row
     const update = {
       $set: { quantity },
-      $setOnInsert: { product: productId, variantId, warehouse: warehouseId }
+      $setOnInsert: setOnInsert
     };
     const options = { new: true, runValidators: true, upsert: quantity > 0, setDefaultsOnInsert: true };
     // Upsert only when quantity > 0 to avoid creating empty rows; otherwise require existing record
