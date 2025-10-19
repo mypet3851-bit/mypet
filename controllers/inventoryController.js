@@ -49,6 +49,7 @@ import { inventoryService } from '../services/inventoryService.js';
 import { StatusCodes } from 'http-status-codes';
 import mongoose from 'mongoose';
 import Warehouse from '../models/Warehouse.js';
+import Product from '../models/Product.js';
 
 export const getInventory = asyncHandler(async (req, res) => {
   console.log('getInventory controller called');
@@ -136,6 +137,29 @@ export const updateInventoryByVariant = asyncHandler(async (req, res) => {
   }
   if (!Number.isFinite(quantity) || quantity < 0) {
     return res.status(StatusCodes.BAD_REQUEST).json({ message: 'Quantity must be a non-negative number' });
+  }
+
+  // Strong validation: ensure product, variant, and warehouse exist to avoid opaque 500s later
+  try {
+    const [productDoc, warehouseDoc] = await Promise.all([
+      Product.findById(productId).select('variants').lean(),
+      Warehouse.findById(warehouseId).lean()
+    ]);
+    if (!productDoc) {
+      return res.status(StatusCodes.NOT_FOUND).json({ message: 'Product not found' });
+    }
+    const variantBelongs = Array.isArray(productDoc.variants)
+      ? productDoc.variants.some(v => String(v?._id) === String(variantId))
+      : false;
+    if (!variantBelongs) {
+      return res.status(StatusCodes.BAD_REQUEST).json({ message: 'Variant does not belong to the specified product' });
+    }
+    if (!warehouseDoc) {
+      return res.status(StatusCodes.NOT_FOUND).json({ message: 'Warehouse not found' });
+    }
+  } catch (preErr) {
+    console.error('[inventory][by-variant] pre-validation error', preErr);
+    return res.status(StatusCodes.BAD_REQUEST).json({ message: 'Invalid request data for variant inventory update' });
   }
 
   try {
