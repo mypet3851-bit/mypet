@@ -212,29 +212,57 @@ export const updateInventoryByVariant = asyncHandler(async (req, res) => {
     if (err?.name === 'ValidationError') {
       return res.status(StatusCodes.BAD_REQUEST).json({ message: 'Validation error updating inventory' });
     }
-    if (err?.code === 11000) {
-      // Attempt automatic reconciliation of duplicate rows for this combination
+    const isDup = (err?.code === 11000) || String(err?.message || '').includes('E11000');
+    if (isDup) {
+      // Attempt automatic reconciliation of duplicate rows for this combination by
+      // deterministically keeping the most recently updated row and deleting extras.
       try {
-        const filter = { product: productId, variantId, warehouse: warehouseId };
-        const dups = await Inventory.find(filter).sort({ updatedAt: -1 });
-        if (Array.isArray(dups) && dups.length) {
+        const pid = new mongoose.Types.ObjectId(productId);
+        const vid = new mongoose.Types.ObjectId(variantId);
+        const wid = new mongoose.Types.ObjectId(warehouseId);
+        const filter = { product: pid, variantId: vid, warehouse: wid };
+        // Fetch duplicates (if any)
+        const dups = await Inventory.find(filter).sort({ updatedAt: -1, _id: -1 });
+        if (Array.isArray(dups) && dups.length > 0) {
           const keep = dups[0];
           const extras = dups.slice(1).map(d => d._id).filter(Boolean);
           if (extras.length) {
-            try { await Inventory.deleteMany({ _id: { $in: extras } }); } catch {}
+            try {
+              await Inventory.deleteMany({ _id: { $in: extras } });
+              console.warn('[inventory][by-variant] removed duplicate rows:', extras.map(String));
+            } catch (delErr) {
+              console.error('[inventory][by-variant] failed deleting duplicate rows', delErr);
+            }
           }
-          // Set requested quantity on the surviving row
+          // Ensure the surviving document reflects the requested quantity
           try {
             keep.quantity = quantity;
             await keep.save();
-          } catch {}
+          } catch (saveErr) {
+            console.error('[inventory][by-variant] failed saving survivor after dedupe', saveErr);
+          }
           try { await inventoryService.recomputeProductStock(productId); } catch {}
           return res.status(StatusCodes.OK).json(keep);
+        }
+        // If we did not find rows (race condition), retry the original update once without upsert
+        try {
+          const retry = await Inventory.findOneAndUpdate(
+            filter,
+            { $set: { quantity }, $setOnInsert: { product: pid, variantId: vid, warehouse: wid } },
+            { new: true, runValidators: true, upsert: quantity > 0, setDefaultsOnInsert: true }
+          );
+          if (retry) {
+            try { await inventoryService.recomputeProductStock(productId); } catch {}
+            return res.status(StatusCodes.OK).json(retry);
+          }
+        } catch (retryErr) {
+          console.error('[inventory][by-variant] retry after dedupe failed', retryErr);
         }
       } catch (reconcileErr) {
         console.error('[inventory][by-variant] duplicate reconcile failed', reconcileErr);
       }
-      return res.status(StatusCodes.BAD_REQUEST).json({ message: 'Duplicate inventory row exists for this product variant and warehouse' });
+      // If reconciliation failed for any reason, return 409 (conflict) with a clear message
+      return res.status(StatusCodes.CONFLICT).json({ message: 'Duplicate inventory row exists for this product variant and warehouse. Please try again.' });
     }
     console.error('updateInventoryByVariant error', err);
     // Surface a more specific message if available to help diagnose in admin UI (without leaking stack traces)
