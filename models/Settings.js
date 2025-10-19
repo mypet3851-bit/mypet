@@ -312,6 +312,14 @@ const settingsSchema = new mongoose.Schema({
   timestamps: true
 });
 
+// Accessibility feature toggles
+settingsSchema.add({
+  a11y: {
+    // Controls visibility of the floating "Read page" button in the storefront
+    showReadPageButton: { type: Boolean, default: true }
+  }
+});
+
 // Cloudinary credentials (server-side use only). Do NOT expose secrets via public GET.
 settingsSchema.add({
   cloudinary: {
@@ -337,6 +345,12 @@ settingsSchema.add({
 // Each tab can have optional active/inactive icon URLs (absolute, /uploads, or data URI)
 // Center button supports a single icon (when set, overrides gradient text)
 settingsSchema.add({
+  // Mobile Home header (top overlay/compact) icon visibility
+  mobileHomeHeader: {
+    showMessages: { type: Boolean, default: true },
+    showCalendar: { type: Boolean, default: true }
+  },
+
   mobileTabBar: {
     home: {
       active: { type: String, default: '' },
@@ -855,6 +869,15 @@ settingsSchema.statics.createDefaultSettings = async function() {
       // Ensure googleAuth exists
       if (!settings.googleAuth) {
         updateData.googleAuth = { enabled: false, clientId: '' };
+        needsUpdate = true;
+      }
+
+      // Ensure a11y object and showReadPageButton exists (default true)
+      if (!settings.a11y || typeof settings.a11y.showReadPageButton === 'undefined') {
+        updateData.a11y = {
+          ...(settings.a11y || {}),
+          showReadPageButton: true
+        };
         needsUpdate = true;
       }
 
