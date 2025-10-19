@@ -125,7 +125,33 @@ export const updateInventoryByVariant = asyncHandler(async (req, res) => {
       } else if (warehouses.length === 1) {
         warehouseId = String(warehouses[0]._id);
       } else {
-        return res.status(StatusCodes.BAD_REQUEST).json({ message: 'warehouseId is required when multiple warehouses exist' });
+        // Multiple warehouses exist.
+        // 1) Respect DEFAULT_WAREHOUSE_ID if valid and exists
+        const isObjectId = (v) => typeof v === 'string' && /^[0-9a-fA-F]{24}$/.test(v);
+        const envId = process.env.DEFAULT_WAREHOUSE_ID;
+        if (envId && isObjectId(envId)) {
+          const exists = warehouses.find(w => String(w._id) === envId);
+          if (exists) {
+            warehouseId = envId;
+          }
+        }
+        // 2) Otherwise try DEFAULT_WAREHOUSE_NAME
+        if (!warehouseId) {
+          const envName = process.env.DEFAULT_WAREHOUSE_NAME;
+          if (envName) {
+            const found = warehouses.find(w => String(w?.name || '').toLowerCase() === String(envName).toLowerCase());
+            if (found) warehouseId = String(found._id);
+          }
+        }
+        // 3) Otherwise try a conventional fallback "Main Warehouse"
+        if (!warehouseId) {
+          const main = warehouses.find(w => String(w?.name || '').toLowerCase() === 'main warehouse');
+          if (main && main._id) warehouseId = String(main._id);
+        }
+        // 4) If still none, require explicit selection
+        if (!warehouseId) {
+          return res.status(StatusCodes.BAD_REQUEST).json({ message: 'warehouseId is required when multiple warehouses exist' });
+        }
       }
     } catch (e) {
       console.error('[inventory][by-variant] warehouse resolution error', e);
