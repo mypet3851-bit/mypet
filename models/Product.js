@@ -199,7 +199,9 @@ const productSchema = new mongoose.Schema({
   }]
   ,
   // Variant combinations generated from selected attributes (e.g., Red + M + Cotton)
+  // Each variant is a subdocument with its own ObjectId (_id) that is different from the product _id
   variants: [{
+    _id: { type: mongoose.Schema.Types.ObjectId, auto: true },
     sku: { type: String, trim: true },
     barcode: { type: String, trim: true },
     price: { type: Number, min: 0 }, // optional override; falls back to product.price

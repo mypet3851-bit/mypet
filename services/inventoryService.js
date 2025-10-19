@@ -37,7 +37,17 @@ class InventoryService {
       const invs = session ? await invQuery.session(session) : await invQuery;
       const totalAvail = invs.reduce((s, x) => s + (Number(x.quantity) || 0), 0);
       if (!allowNegative && totalAvail < quantity) {
-        throw new ApiError(StatusCodes.BAD_REQUEST, `Insufficient stock for product ${product}${usingVariant ? ' variant' : ''}. Available: ${totalAvail}, requested: ${quantity}`);
+        // Use human-friendly product name (and note if it's a variant) instead of raw id
+        let displayName = 'product';
+        try {
+          const pdoc = await Product.findById(product).select('name').lean();
+          if (pdoc?.name) displayName = pdoc.name;
+        } catch {}
+        const variantHint = usingVariant ? ' (variant)' : '';
+        throw new ApiError(
+          StatusCodes.BAD_REQUEST,
+          `Insufficient stock for ${displayName}${variantHint}. Available: ${totalAvail}, requested: ${quantity}`
+        );
       }
 
       // Decrement across inventories greedily
