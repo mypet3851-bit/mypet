@@ -75,8 +75,9 @@ import { loadDeepseekConfigFromDb } from './services/translate/deepseek.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Environment Variables
+// Environment Variables: load project/.env first, then server/.env to override
 dotenv.config({ path: path.resolve(__dirname, '../.env') });
+dotenv.config({ path: path.resolve(__dirname, './.env'), override: true });
 
 const app = express();
 
