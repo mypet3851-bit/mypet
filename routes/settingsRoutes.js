@@ -475,9 +475,20 @@ router.put('/', settingsWriteGuard, async (req, res) => {
       if (Object.prototype.hasOwnProperty.call(req.body, 'headerIconAssets')) {
         try { settings.markModified('headerIconAssets'); } catch {}
       }
+      // Mobile home header toggles (messages/calendar)
+      if (Object.prototype.hasOwnProperty.call(req.body, 'mobileHomeHeader')) {
+        settings.mobileHomeHeader = { ...(settings.mobileHomeHeader || {}), ...req.body.mobileHomeHeader };
+        try { settings.markModified('mobileHomeHeader'); } catch {}
+      }
       // Simple boolean toggles
       if (Object.prototype.hasOwnProperty.call(req.body, 'showColorFilter')) {
         settings.showColorFilter = !!req.body.showColorFilter;
+      }
+
+      // Accessibility toggles
+      if (req.body.a11y && typeof req.body.a11y === 'object') {
+        settings.a11y = { ...(settings.a11y || {}), ...req.body.a11y };
+        try { settings.markModified('a11y'); } catch {}
       }
     }
 
@@ -548,6 +559,8 @@ router.put('/', settingsWriteGuard, async (req, res) => {
             scrollTopTextColor: settings.scrollTopTextColor,
             scrollTopHoverBgColor: settings.scrollTopHoverBgColor,
             scrollTopPingColor: settings.scrollTopPingColor,
+            // Accessibility feature toggles
+            a11y: settings.a11y,
             // SEO fields
             siteTitle: settings.siteTitle,
             siteDescription: settings.siteDescription,
@@ -623,6 +636,8 @@ router.put('/', settingsWriteGuard, async (req, res) => {
     if (typeof savedObj.addressLink === 'undefined') {
       savedObj.addressLink = '';
     }
+    // Ensure a11y object exists in response
+    if (!savedObj.a11y) savedObj.a11y = { showReadPageButton: true };
     res.json(savedObj);
   } catch (error) {
   console.error('[Settings PUT] Error:', error);
