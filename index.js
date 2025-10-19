@@ -442,6 +442,28 @@ const startServer = async () => {
     return;
   }
 
+  // Ensure Inventory indexes are in sync (drops outdated indexes and creates new ones)
+  try {
+    const Inventory = (await import('./models/Inventory.js')).default;
+    // This will create indexes defined in the schema and drop any not present
+    const syncRes = await Inventory.syncIndexes();
+    console.log('[startup][indexes] Inventory.syncIndexes() done:', syncRes);
+    // As a safety net, explicitly drop legacy index if it still exists (from pre-variant era)
+    try {
+      const idxList = await mongoose.connection.db.collection('inventories').indexes();
+      const legacyIdx = idxList.find(i => i.name === 'product_1_size_1_color_1');
+      if (legacyIdx) {
+        await mongoose.connection.db.collection('inventories').dropIndex('product_1_size_1_color_1');
+        console.warn('[startup][indexes] Dropped legacy index product_1_size_1_color_1');
+      }
+    } catch (dropErr) {
+      // Non-fatal; continue
+      console.warn('[startup][indexes] Legacy index drop check failed:', dropErr?.message || dropErr);
+    }
+  } catch (idxErr) {
+    console.warn('[startup][indexes] Inventory index sync skipped/failed:', idxErr?.message || idxErr);
+  }
+
   // Initialize default data after database connection is established
   try {
     // Import and run data initialization
