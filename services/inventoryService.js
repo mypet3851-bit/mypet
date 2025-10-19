@@ -435,27 +435,32 @@ class InventoryService {
           perVariant.set(key, (perVariant.get(key) || 0) + (Number(item.quantity) || 0));
         }
       }
-
-      const product = await Product.findById(productId);
-      if (product) {
-        if (Array.isArray(product.variants) && product.variants.length) {
-          for (const v of product.variants) {
-            const key = String(v._id);
-            if (perVariant.has(key)) {
-              v.stock = perVariant.get(key);
+      // Read product variants lean to avoid creating a Mongoose document (and its validations)
+      const productLean = await Product.findById(productId).select('variants').lean();
+      if (productLean && Array.isArray(productLean.variants) && productLean.variants.length) {
+        // Prepare bulk updates to set each variant's stock explicitly (missing entries -> 0)
+        const bulkOps = [];
+        let sumVariants = 0;
+        for (const v of productLean.variants) {
+          const vid = String(v._id);
+          const qty = perVariant.get(vid) || 0;
+          sumVariants += (Number(qty) || 0);
+          bulkOps.push({
+            updateOne: {
+              filter: { _id: productId, 'variants._id': v._id },
+              update: { $set: { 'variants.$.stock': qty } },
+              upsert: false
             }
-          }
-          // Recompute product stock as sum of variant stocks for consistency
-          const sumVariants = product.variants.reduce((s, v) => s + (Number(v.stock) || 0), 0);
-          product.stock = sumVariants;
-        } else {
-          // No variants: use total inventory sum
-          product.stock = totalStock;
+          });
         }
-        await product.save();
+        if (bulkOps.length) {
+          try { await Product.bulkWrite(bulkOps, { ordered: false }); } catch (e) { /* tolerate partial failures */ }
+        }
+        // Update product total stock as sum of variant stocks
+        await Product.updateOne({ _id: productId }, { $set: { stock: sumVariants } }, { runValidators: false });
       } else {
-        // Fallback: update stock field directly if product not loaded
-        await Product.findByIdAndUpdate(productId, { stock: totalStock });
+        // No variants array: use total inventory sum directly
+        await Product.updateOne({ _id: productId }, { $set: { stock: totalStock } }, { runValidators: false });
       }
     } catch (error) {
       throw new ApiError(StatusCodes.INTERNAL_SERVER_ERROR, 'Error updating product stock');
