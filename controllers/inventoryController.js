@@ -112,18 +112,23 @@ export const updateInventoryByVariant = asyncHandler(async (req, res) => {
   }
   // Default to Main Warehouse when not multi-warehouse and no warehouseId provided
   if (!warehouseId) {
-    const warehouses = await Warehouse.find({});
-    if (!warehouses || warehouses.length === 0) {
-      const main = await Warehouse.findOneAndUpdate(
-        { name: 'Main Warehouse' },
-        { $setOnInsert: { name: 'Main Warehouse' } },
-        { new: true, upsert: true }
-      );
-      warehouseId = String(main._id);
-    } else if (warehouses.length === 1) {
-      warehouseId = String(warehouses[0]._id);
-    } else {
-      return res.status(StatusCodes.BAD_REQUEST).json({ message: 'warehouseId is required when multiple warehouses exist' });
+    try {
+      const warehouses = await Warehouse.find({});
+      if (!warehouses || warehouses.length === 0) {
+        const main = await Warehouse.findOneAndUpdate(
+          { name: 'Main Warehouse' },
+          { $setOnInsert: { name: 'Main Warehouse' } },
+          { new: true, upsert: true }
+        );
+        warehouseId = String(main._id);
+      } else if (warehouses.length === 1) {
+        warehouseId = String(warehouses[0]._id);
+      } else {
+        return res.status(StatusCodes.BAD_REQUEST).json({ message: 'warehouseId is required when multiple warehouses exist' });
+      }
+    } catch (e) {
+      console.error('[inventory][by-variant] warehouse resolution error', e);
+      return res.status(StatusCodes.BAD_REQUEST).json({ message: 'Unable to resolve warehouse. Please select a warehouse and try again.' });
     }
   }
   if (!isObjectId(productId) || !isObjectId(variantId) || !isObjectId(warehouseId)) {
@@ -161,7 +166,9 @@ export const updateInventoryByVariant = asyncHandler(async (req, res) => {
       return res.status(StatusCodes.BAD_REQUEST).json({ message: 'Duplicate inventory row exists for this product variant and warehouse' });
     }
     console.error('updateInventoryByVariant error', err);
-    return res.status(StatusCodes.INTERNAL_SERVER_ERROR).json({ message: 'Failed to update variant inventory' });
+    // Surface a more specific message if available to help diagnose in admin UI (without leaking stack traces)
+    const msg = (err && (err.message || err.reason)) ? String(err.message || err.reason) : 'Failed to update variant inventory';
+    return res.status(StatusCodes.INTERNAL_SERVER_ERROR).json({ message: msg });
   }
 });
 
