@@ -176,6 +176,8 @@ class InventoryService {
     try {
       const inventory = await Inventory.find()
         .populate('product', 'name images')
+        .populate({ path: 'attributesSnapshot.attribute', select: 'name' })
+        .populate({ path: 'attributesSnapshot.value', select: 'value' })
         .sort({ 'product.name': 1, size: 1, color: 1 });
       return inventory;
     } catch (error) {
@@ -187,6 +189,8 @@ class InventoryService {
     try {
       const inventory = await Inventory.find({ product: productId })
         .populate('product', 'name images')
+        .populate({ path: 'attributesSnapshot.attribute', select: 'name' })
+        .populate({ path: 'attributesSnapshot.value', select: 'value' })
         .sort('size color');
       return inventory;
     } catch (error) {
