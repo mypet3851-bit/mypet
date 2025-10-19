@@ -36,23 +36,8 @@ router.post('/announcement-icon', adminAuth, upload.single('file'), (req, res, n
 	next();
 }, async (req, res, next) => {
 	try {
-		// Delegate to common handler
-		await uploadProductImage(req, {
-			json: (payload) => {
-				try {
-					// Ensure url uses server-exposed /api/uploads for client consumption
-					let url = payload?.url || '';
-					if (typeof url === 'string') {
-						if (/^\/uploads\//.test(url)) {
-							url = `/api${url}`;
-						}
-					}
-					res.json({ ...payload, url });
-				} catch {
-					res.json(payload);
-				}
-			}
-		}, next);
+		// Delegate to common handler; respond directly with its payload
+		await uploadProductImage(req, res, next);
 	} catch (e) {
 		next(e);
 	}
