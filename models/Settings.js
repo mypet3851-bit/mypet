@@ -96,6 +96,11 @@ const settingsSchema = new mongoose.Schema({
     type: String,
     default: '#ffffff' // White
   },
+  // Footer-specific text color (overrides default text color within footer)
+  footerTextColor: {
+    type: String,
+    default: ''
+  },
   // New Arrivals page (mobile-specific theming)
   newArrivalsMobileHeadingColor: { type: String, default: '' }, // e.g. '#ffffff'
   newArrivalsMobileTextColor: { type: String, default: '' }, // e.g. '#e5e7eb'

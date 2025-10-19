@@ -30,6 +30,17 @@ const footerSettingsSchema = new mongoose.Schema({
     instagram: String,
     youtube: String
   },
+  // Optional app store badges (images and links)
+  appBadges: {
+    android: {
+      imageUrl: { type: String, default: '' },
+      linkUrl: { type: String, default: '' }
+    },
+    ios: {
+      imageUrl: { type: String, default: '' },
+      linkUrl: { type: String, default: '' }
+    }
+  },
   newsletter: {
     title: {
       type: String,
