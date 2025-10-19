@@ -18,9 +18,11 @@ router.get('/product/:productId', adminAuth, getProductInventory);
 router.get('/product/:productId/variants/summary', adminAuth, getVariantStockSummary);
 router.get('/low-stock', adminAuth, getLowStockItems);
 router.post('/', adminAuth, addInventory);
-router.put('/:id', adminAuth, updateInventory);
+// IMPORTANT: Register specific routes BEFORE generic param routes like '/:id'
 // Update inventory quantity for a specific variant in a warehouse
 router.put('/by-variant', adminAuth, updateInventoryByVariant);
+// Generic update by inventory document id (must come after specific PUTs)
+router.put('/:id', adminAuth, updateInventory);
 router.post('/bulk', adminAuth, bulkUpdateInventory);
 
 // Analytics endpoints
