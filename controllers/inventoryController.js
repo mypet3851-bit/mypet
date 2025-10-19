@@ -187,6 +187,27 @@ export const updateInventoryByVariant = asyncHandler(async (req, res) => {
       return res.status(StatusCodes.BAD_REQUEST).json({ message: 'Validation error updating inventory' });
     }
     if (err?.code === 11000) {
+      // Attempt automatic reconciliation of duplicate rows for this combination
+      try {
+        const filter = { product: productId, variantId, warehouse: warehouseId };
+        const dups = await Inventory.find(filter).sort({ updatedAt: -1 });
+        if (Array.isArray(dups) && dups.length) {
+          const keep = dups[0];
+          const extras = dups.slice(1).map(d => d._id).filter(Boolean);
+          if (extras.length) {
+            try { await Inventory.deleteMany({ _id: { $in: extras } }); } catch {}
+          }
+          // Set requested quantity on the surviving row
+          try {
+            keep.quantity = quantity;
+            await keep.save();
+          } catch {}
+          try { await inventoryService.recomputeProductStock(productId); } catch {}
+          return res.status(StatusCodes.OK).json(keep);
+        }
+      } catch (reconcileErr) {
+        console.error('[inventory][by-variant] duplicate reconcile failed', reconcileErr);
+      }
       return res.status(StatusCodes.BAD_REQUEST).json({ message: 'Duplicate inventory row exists for this product variant and warehouse' });
     }
     console.error('updateInventoryByVariant error', err);
