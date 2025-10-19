@@ -105,6 +105,7 @@ export const addInventory = asyncHandler(async (req, res) => {
 // Update inventory by variantId and warehouse
 export const updateInventoryByVariant = asyncHandler(async (req, res) => {
   let { productId, variantId, warehouseId, quantity } = req.body || {};
+  try { console.log('[inventory][by-variant] body', JSON.stringify(req.body)); } catch {}
   const isObjectId = (v) => typeof v === 'string' && /^[0-9a-fA-F]{24}$/.test(v);
   if (!productId || !variantId || typeof quantity !== 'number') {
     return res.status(StatusCodes.BAD_REQUEST).json({ message: 'productId, variantId, and quantity are required' });
@@ -133,12 +134,16 @@ export const updateInventoryByVariant = asyncHandler(async (req, res) => {
   }
 
   try {
+    // Normalize to ObjectId strings (Mongoose will cast but we keep consistent logs)
+    const filter = { product: productId, variantId, warehouse: warehouseId };
+    // Use $setOnInsert to satisfy required fields when upserting a new row
+    const update = {
+      $set: { quantity },
+      $setOnInsert: { product: productId, variantId, warehouse: warehouseId }
+    };
+    const options = { new: true, runValidators: true, upsert: quantity > 0, setDefaultsOnInsert: true };
     // Upsert only when quantity > 0 to avoid creating empty rows; otherwise require existing record
-    const inv = await Inventory.findOneAndUpdate(
-      { product: productId, variantId, warehouse: warehouseId },
-      { $set: { quantity } },
-      { new: true, runValidators: true, upsert: quantity > 0 }
-    );
+    const inv = await Inventory.findOneAndUpdate(filter, update, options);
     if (!inv) {
       return res.status(StatusCodes.NOT_FOUND).json({ message: 'Inventory record not found for variant in this warehouse' });
     }
@@ -151,6 +156,9 @@ export const updateInventoryByVariant = asyncHandler(async (req, res) => {
     }
     if (err?.name === 'ValidationError') {
       return res.status(StatusCodes.BAD_REQUEST).json({ message: 'Validation error updating inventory' });
+    }
+    if (err?.code === 11000) {
+      return res.status(StatusCodes.BAD_REQUEST).json({ message: 'Duplicate inventory row exists for this product variant and warehouse' });
     }
     console.error('updateInventoryByVariant error', err);
     return res.status(StatusCodes.INTERNAL_SERVER_ERROR).json({ message: 'Failed to update variant inventory' });
