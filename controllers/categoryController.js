@@ -1,12 +1,109 @@
 import Category from '../models/Category.js';
 import Product from '../models/Product.js';
+import { deepseekTranslate, deepseekTranslateBatch, isDeepseekConfigured } from '../services/translate/deepseek.js';
+
+// Helper: localize a category object in-place for a given language
+function localizeCategoryInPlace(cat, lang) {
+  const nm = cat?.name_i18n?.[lang] ?? cat?.name_i18n?.get?.(lang);
+  const desc = cat?.description_i18n?.[lang] ?? cat?.description_i18n?.get?.(lang);
+  if (nm) cat.name = nm;
+  if (desc) cat.description = desc;
+}
+
+// Helper: batch translate and persist missing category name/description for a target lang
+async function translateAndPersistCategories(categories, lang, allowAuto) {
+  if (!lang) return;
+  // First, apply existing localized values without any external calls
+  for (const c of categories) localizeCategoryInPlace(c, lang);
+  if (!allowAuto) return; // don't auto-translate if disabled
+
+  const t0 = Date.now();
+  const NAME_CTX = 'Category.name';
+  const DESC_CTX = 'Category.description';
+
+  // Collect unique texts that are still missing
+  const needNameMap = new Map(); // text -> array of category indices
+  const needDescMap = new Map();
+  categories.forEach((c, idx) => {
+    const hasName = !!(c?.name_i18n?.[lang]);
+    const hasDesc = !!(c?.description_i18n?.[lang]);
+    if (!hasName && c?.name) {
+      const key = String(c.name);
+      const arr = needNameMap.get(key) || [];
+      arr.push(idx);
+      needNameMap.set(key, arr);
+    }
+    if (!hasDesc && c?.description) {
+      const key = String(c.description);
+      const arr = needDescMap.get(key) || [];
+      arr.push(idx);
+      needDescMap.set(key, arr);
+    }
+  });
+
+  const ops = [];
+
+  // Translate names
+  if (needNameMap.size) {
+    const items = Array.from(needNameMap.keys()).map(text => ({ id: text, text }));
+    const results = await deepseekTranslateBatch(items, 'auto', lang, { contextKey: NAME_CTX });
+    for (const r of results) {
+      if (!r?.text) continue;
+      const idxs = needNameMap.get(r.id) || [];
+      for (const i of idxs) {
+        categories[i].name = r.text; // reflect immediately in response
+        // persist using dot-path for Map
+        ops.push({
+          updateOne: {
+            filter: { _id: categories[i]._id },
+            update: { $set: { [`name_i18n.${lang}`]: r.text } },
+          }
+        });
+      }
+    }
+  }
+
+  // Translate descriptions
+  if (needDescMap.size) {
+    const items = Array.from(needDescMap.keys()).map(text => ({ id: text, text }));
+    const results = await deepseekTranslateBatch(items, 'auto', lang, { contextKey: DESC_CTX });
+    for (const r of results) {
+      if (!r?.text) continue;
+      const idxs = needDescMap.get(r.id) || [];
+      for (const i of idxs) {
+        categories[i].description = r.text; // reflect immediately in response
+        ops.push({
+          updateOne: {
+            filter: { _id: categories[i]._id },
+            update: { $set: { [`description_i18n.${lang}`]: r.text } },
+          }
+        });
+      }
+    }
+  }
+
+  // Persist in one batch to avoid N queries
+  if (ops.length) {
+    try { await Category.bulkWrite(ops, { ordered: false }); } catch {}
+  }
+
+  if (process.env.LOG_TRANSLATION_TIMING === '1') {
+    // Optional quick timing log
+    // eslint-disable-next-line no-console
+    console.log(`category i18n lang=${lang} translated=${ops.length} in ${Date.now()-t0}ms (cats=${categories.length})`);
+  }
+}
 
 // Get all categories
 export const getAllCategories = async (req, res) => {
   try {
+    const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
+    const allowAuto = isDeepseekConfigured();
     // Optional: asTree=true to return nested structure, otherwise flat list
     const asTree = String(req.query.asTree || '').toLowerCase() === 'true';
     const categories = await Category.find().sort({ depth: 1, order: 1, name: 1 }).lean();
+    // Localize and, if enabled, auto-translate missing fields in batch
+    if (reqLang) await translateAndPersistCategories(categories, reqLang, allowAuto);
     if (!asTree) return res.json(categories);
 
     // Build tree
@@ -35,11 +132,45 @@ export const getAllCategories = async (req, res) => {
 // Get single category
 export const getCategory = async (req, res) => {
   try {
+    const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
+    const allowAuto = isDeepseekConfigured();
     const category = await Category.findById(req.params.id);
     if (!category) {
       return res.status(404).json({ message: 'Category not found' });
     }
-    res.json(category);
+    const obj = category.toObject();
+    if (reqLang) {
+      const nm = obj.name_i18n?.[reqLang] || category.name_i18n?.get?.(reqLang);
+      const desc = obj.description_i18n?.[reqLang] || category.description_i18n?.get?.(reqLang);
+      if (nm) obj.name = nm;
+      if (desc) obj.description = desc;
+      if ((!nm || !desc) && allowAuto) {
+        const NAME_CTX = 'Category.name';
+        const DESC_CTX = 'Category.description';
+        let changed = false;
+        if (!nm && category.name) {
+          try {
+            const tr = await deepseekTranslate(category.name, 'auto', reqLang, { contextKey: NAME_CTX });
+            const path = `name_i18n.${reqLang}`;
+            await Category.updateOne({ _id: category._id }, { $set: { [path]: tr } }).catch(() => {});
+            obj.name = tr; changed = true;
+          } catch {}
+        }
+        if (!desc && category.description) {
+          try {
+            const trd = await deepseekTranslate(category.description, 'auto', reqLang, { contextKey: DESC_CTX });
+            const path = `description_i18n.${reqLang}`;
+            await Category.updateOne({ _id: category._id }, { $set: { [path]: trd } }).catch(() => {});
+            obj.description = trd; changed = true;
+          } catch {}
+        }
+        if (changed && process.env.LOG_TRANSLATION_TIMING === '1') {
+          // eslint-disable-next-line no-console
+          console.log(`category ${category._id} translated on-demand for lang=${reqLang}`);
+        }
+      }
+    }
+    res.json(obj);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -208,7 +339,10 @@ export const getSubcategories = async (req, res) => {
   try {
     const parentId = req.params.parentId === 'root' ? null : req.params.parentId;
     const filter = parentId ? { parent: parentId } : { parent: null };
-    const list = await Category.find(filter).sort({ order: 1, name: 1 });
+    const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
+    const allowAuto = isDeepseekConfigured();
+    const list = await Category.find(filter).sort({ order: 1, name: 1 }).lean();
+    if (reqLang) await translateAndPersistCategories(list, reqLang, allowAuto);
     res.json(list);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -218,7 +352,10 @@ export const getSubcategories = async (req, res) => {
 // Get the full category tree starting from root
 export const getCategoryTree = async (req, res) => {
   try {
+    const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
+    const allowAuto = isDeepseekConfigured();
     const categories = await Category.find().sort({ depth: 1, order: 1, name: 1 }).lean();
+    if (reqLang) await translateAndPersistCategories(categories, reqLang, allowAuto);
     const byId = new Map(categories.map(c => [String(c._id), { ...c, children: [] }]));
     const roots = [];
     for (const cat of byId.values()) {
@@ -235,6 +372,49 @@ export const getCategoryTree = async (req, res) => {
     };
     sortRec(roots);
     res.json(roots);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Admin: backfill translations for all categories into a target language
+export const translateAllCategories = async (req, res) => {
+  try {
+    const to = typeof req.query.to === 'string' ? req.query.to.trim() : '';
+    if (!to) return res.status(400).json({ message: 'Missing target language (?to=ar|he|... )' });
+    if (!isDeepseekConfigured()) return res.status(400).json({ message: 'DeepSeek translation is not configured/enabled' });
+
+    const categories = await Category.find();
+    let translatedCount = 0;
+    let skipped = 0;
+    let failed = 0;
+
+    for (const c of categories) {
+      let changed = false;
+      try {
+        const nameHas = c.name_i18n?.get?.(to) || (c.name_i18n && c.name_i18n[to]);
+        const descHas = c.description_i18n?.get?.(to) || (c.description_i18n && c.description_i18n[to]);
+        if (!nameHas && typeof c.name === 'string' && c.name.trim()) {
+          try {
+            const tr = await deepseekTranslate(c.name, 'auto', to);
+            if (c.name_i18n && typeof c.name_i18n.set === 'function') c.name_i18n.set(to, tr);
+            else { const map = new Map(c.name_i18n || []); map.set(to, tr); c.name_i18n = map; }
+            changed = true;
+          } catch { /* ignore per-item error */ }
+        }
+        if (!descHas && typeof c.description === 'string' && c.description.trim()) {
+          try {
+            const trd = await deepseekTranslate(c.description, 'auto', to);
+            if (c.description_i18n && typeof c.description_i18n.set === 'function') c.description_i18n.set(to, trd);
+            else { const mapd = new Map(c.description_i18n || []); mapd.set(to, trd); c.description_i18n = mapd; }
+            changed = true;
+          } catch { /* ignore per-item error */ }
+        }
+        if (changed) { await c.save().catch(() => {}); translatedCount++; } else { skipped++; }
+      } catch { failed++; }
+    }
+
+    return res.json({ message: 'Category translations complete', translated: translatedCount, skipped, failed, total: categories.length, lang: to });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

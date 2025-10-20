@@ -139,7 +139,7 @@ export const createOrder = async (req, res) => {
       console.warn('MongoDB transactions not supported in current environment; proceeding without transaction. Reason:', txnErr?.message || txnErr);
     }
 
-    // Calculate total and validate stock
+  // Calculate total and validate stock
     // We now treat catalog product.price as already expressed in the chosen store currency.
     // Previous implementation multiplied by an exchangeRate (assuming a USD base) which caused inflated totals
     // when catalog prices were already in the display currency. We set exchangeRate=1 for backward compatibility.
@@ -148,7 +148,8 @@ export const createOrder = async (req, res) => {
     const exchangeRate = 1; // No runtime FX conversion; prices stored as-is
     const stockUpdates = []; // Track stock updates for rollback
 
-    for (const item of items) {
+  const reservationItems = [];
+  for (const item of items) {
       const baseProductQuery = Product.findById(item.product);
       const product = useTransaction ? await baseProductQuery.session(session) : await baseProductQuery;
 
@@ -164,31 +165,17 @@ export const createOrder = async (req, res) => {
       }
 
       const sizeName = item.size;
-      const hasSizes = Array.isArray(product.sizes) && product.sizes.length > 0;
-
-      if (sizeName && hasSizes) {
-        const sizeIndex = product.sizes.findIndex((s) => s.name === sizeName);
-        if (sizeIndex === -1) {
-          if (session.inTransaction()) await session.abortTransaction();
-          return res.status(400).json({ message: `Size '${sizeName}' not found for product ${product.name}` });
-        }
-        const available = Number(product.sizes[sizeIndex].stock) || 0;
-        if (available < qty) {
-          if (session.inTransaction()) await session.abortTransaction();
-          return res.status(400).json({ message: `Insufficient stock for ${product.name} (size: ${sizeName}). Available: ${available}, Requested: ${qty}` });
-        }
-        // Decrement size stock
-        product.sizes[sizeIndex].stock = available - qty;
-      } else {
-        // No size specified, check main stock
-        const mainStock = Number(product.stock) || 0;
-        if (mainStock < qty) {
-          if (session.inTransaction()) await session.abortTransaction();
-          return res.status(400).json({ message: `Insufficient stock for ${product.name}. Available: ${mainStock}, Requested: ${qty}` });
-        }
-        // Decrement main stock
-        product.stock = mainStock - qty;
-      }
+      const usingVariant = !!item.variantId;
+      const fallbackColor = (typeof item.color === 'string' ? item.color : (item.color?.name || item.color?.code)) || undefined;
+      // Prepare reservation to be executed after validating all items
+      // Include size/color as fallback even for variant-based items to match legacy inventory rows if present
+      reservationItems.push({
+        product: product._id,
+        quantity: qty,
+        ...(usingVariant ? { variantId: item.variantId } : {}),
+        ...(sizeName ? { size: sizeName } : {}),
+        ...(fallbackColor ? { color: fallbackColor } : {})
+      });
 
       // Use catalog price directly (already in store currency)
       const catalogPrice = Number(product.price);
@@ -204,22 +191,33 @@ export const createOrder = async (req, res) => {
         price: catalogPrice, // store unmodified
         name: product.name,
         image: Array.isArray(product.images) && product.images.length ? product.images[0] : undefined,
-        size: hasSizes ? (sizeName || undefined) : undefined
+        // Include legacy size only when not using explicit variantId
+        size: usingVariant ? undefined : (sizeName || undefined),
+        // Persist optional color and generic variants if provided by client
+        color: (typeof item.color === 'string' ? item.color : (item.color?.name || item.color?.code || undefined)),
+        variants: Array.isArray(item.variants) ? item.variants.map(v => ({
+          attributeId: v.attributeId || v.attribute || undefined,
+          attributeName: v.attributeName || v.name || undefined,
+          valueId: v.valueId || v.value || undefined,
+          valueName: v.valueName || v.valueLabel || v.label || undefined
+        })) : undefined,
+        variantId: (item.variantId ? String(item.variantId) : undefined),
+        sku: (typeof item.sku === 'string' ? item.sku : undefined)
       });
 
-      // Track stock update for this product
-      stockUpdates.push({
-        productId: product._id,
-        originalStock: Number(product.stock) || 0,
-        newStock: Number(product.stock) || 0 // This value is informational; actual inventory handled elsewhere
-      });
+      // Track stock update note (no direct product mutation here; inventory service will update totals)
+      stockUpdates.push({ productId: product._id });
+    }
 
-      // Persist product stock changes
-      if (useTransaction) {
-        await product.save({ session });
-      } else {
-        await product.save();
-      }
+    // Inventory settings control: reserve/decrement on order placement if enabled
+    let invCfg = null;
+    try { invCfg = (await Settings.findOne())?.inventory || null; } catch {}
+  // Default to decrementing now when settings absent (safer default for most stores)
+  const hasExplicitCfg = invCfg && (Object.prototype.hasOwnProperty.call(invCfg, 'reserveOnCheckout') || Object.prototype.hasOwnProperty.call(invCfg, 'autoDecrementOnOrder'));
+  const shouldDecrementNow = hasExplicitCfg ? !!(invCfg?.reserveOnCheckout || invCfg?.autoDecrementOnOrder) : true;
+    if (shouldDecrementNow) {
+      // Reserve (decrement) inventory across warehouses for all items atomically
+      await inventoryService.reserveItems(reservationItems, req.user?._id, useTransaction ? session : null);
     }
 
     // Save or update recipient in Recipient collection
@@ -467,6 +465,14 @@ export const createOrder = async (req, res) => {
     // Attempt auto-dispatch to delivery company if configuration enables it.
     let autoDispatchResult = null;
     try {
+      // Guard against long waits to keep API responsive
+      const AUTO_DISPATCH_TIMEOUT_MS = Number(process.env.AUTO_DISPATCH_TIMEOUT_MS || 8000);
+      const withTimeout = (p) => new Promise((resolve) => {
+        let settled = false;
+        const t = setTimeout(() => { if (!settled) { settled = true; resolve({ timeout: true }); } }, AUTO_DISPATCH_TIMEOUT_MS);
+        p.then((v) => { if (!settled) { settled = true; clearTimeout(t); resolve(v); } })
+         .catch((e) => { if (!settled) { settled = true; clearTimeout(t); resolve({ error: e }); } });
+      });
       // Find an active delivery company with autoDispatchOnOrderCreate enabled.
       const autoCompany = await DeliveryCompany.findOne({ isActive: true, autoDispatchOnOrderCreate: true }).sort('-isDefault');
       if (autoCompany) {
@@ -480,7 +486,14 @@ export const createOrder = async (req, res) => {
             const mappingCheck = validateRequiredMappings(savedOrder.toObject(), autoCompany.toObject());
             if (mappingCheck.ok) {
               const deliveryFee = savedOrder.shippingFee || savedOrder.deliveryFee || 0;
-              const { trackingNumber, providerResponse, providerStatus } = await sendToCompany(savedOrder.toObject(), autoCompany.toObject(), { deliveryFee });
+              const dispatchAttempt = withTimeout(sendToCompany(savedOrder.toObject(), autoCompany.toObject(), { deliveryFee }));
+              const dispatchResult = await dispatchAttempt;
+              if (dispatchResult?.timeout) {
+                autoDispatchResult = { success: false, reason: 'TIMEOUT' };
+              } else if (dispatchResult?.error) {
+                throw dispatchResult.error;
+              } else {
+                const { trackingNumber, providerResponse, providerStatus } = dispatchResult;
               savedOrder.deliveryCompany = autoCompany._id;
               savedOrder.deliveryStatus = mapStatus(autoCompany, providerStatus || 'assigned');
               savedOrder.deliveryTrackingNumber = trackingNumber;
@@ -496,6 +509,7 @@ export const createOrder = async (req, res) => {
                 status: savedOrder.deliveryStatus,
                 providerStatus: providerStatus || 'assigned'
               };
+              }
             } else {
               autoDispatchResult = { success: false, reason: 'MISSING_MAPPINGS', missing: mappingCheck.missing };
             }
@@ -526,6 +540,22 @@ export const createOrder = async (req, res) => {
         deliveryStatus: savedOrder.deliveryStatus || null,
         deliveryTrackingNumber: savedOrder.deliveryTrackingNumber || savedOrder.trackingNumber || null,
         autoDispatch: autoDispatchResult,
+        // Provide core fields so clients can render order details without another fetch
+        items: Array.isArray(savedOrder.items) ? savedOrder.items.map(it => ({
+          product: it.product,
+          name: it.name,
+          image: it.image,
+          quantity: it.quantity,
+          price: it.price,
+          size: it.size,
+          color: it.color,
+          variants: it.variants,
+          variantId: it.variantId,
+          sku: it.sku
+        })) : [],
+        shippingAddress: savedOrder.shippingAddress,
+        paymentMethod: savedOrder.paymentMethod,
+        createdAt: savedOrder.createdAt,
         totalWithShipping: (() => {
           const base = savedOrder.totalAmount || 0;
           const ship = savedOrder.shippingFee || savedOrder.deliveryFee || 0;
@@ -625,6 +655,26 @@ export const getAllOrders = async (req, res) => {
   }
 };
 
+// Get a single order by ID (public: used for guest checkout "View Order")
+// Returns basic order details with populated product refs. You may tighten access later (e.g., token + ownership check).
+export const getOrderPublic = async (req, res) => {
+  try {
+    const order = await Order.findById(req.params.id)
+      .populate('items.product');
+    if (!order) return res.status(404).json({ message: 'Order not found' });
+    const obj = order.toObject({ virtuals: true });
+    const response = {
+      ...obj,
+      effectiveShippingFee: obj.effectiveShippingFee ?? (obj.shippingFee || obj.deliveryFee || 0),
+      totalWithShipping: obj.totalWithShipping ?? ((obj.totalAmount || 0) + (obj.shippingFee || obj.deliveryFee || 0))
+    };
+    res.json({ order: response });
+  } catch (error) {
+    console.error('Error fetching order by id:', error);
+    res.status(500).json({ message: 'Failed to load order', error: error?.message });
+  }
+};
+
 // Update order status
 export const updateOrderStatus = async (req, res) => {
   try {
@@ -640,20 +690,33 @@ export const updateOrderStatus = async (req, res) => {
     order.status = status;
     await order.save();
 
-    // Only auto-decrement inventory if status is first set to 'delivered' (or 'fulfilled')
-    if ((status === 'delivered' || status === 'fulfilled') && prevStatus !== status) {
-      for (const item of order.items) {
-        // Find inventory record for product, size, color
-        const inv = await Inventory.findOne({
-          product: item.product,
-          size: item.size || '',
-          color: item.color || ''
-        });
-        if (inv) {
-          const newQty = Math.max(0, inv.quantity - item.quantity);
-          await inventoryService.updateInventory(inv._id, newQty, req.user?._id || null);
-        }
-      }
+    // Inventory configuration driven stock adjustments
+    let invCfg = null;
+    try { invCfg = (await Settings.findOne())?.inventory || null; } catch {}
+  const hasCfg = invCfg && (Object.prototype.hasOwnProperty.call(invCfg, 'reserveOnCheckout') || Object.prototype.hasOwnProperty.call(invCfg, 'autoDecrementOnOrder'));
+  const decrementedAtOrder = hasCfg ? !!(invCfg?.reserveOnCheckout || invCfg?.autoDecrementOnOrder) : true;
+    const shouldDecrementOnDelivery = !decrementedAtOrder;
+
+    // Build items array in variant-aware form
+    const asInventoryItems = (items) => items.map(it => ({
+      product: it.product,
+      quantity: it.quantity,
+      ...(it.variantId ? { variantId: it.variantId } : { size: it.size, color: it.color })
+    }));
+
+    // Auto-decrement when delivered if not already decremented earlier
+    if ((status === 'delivered' || status === 'fulfilled') && prevStatus !== status && shouldDecrementOnDelivery) {
+      try { await inventoryService.reserveItems(asInventoryItems(order.items), req.user?._id || null); } catch (e) { console.warn('Delivery decrement failed:', e?.message || e); }
+    }
+
+    // Auto-increment on cancel if it was decremented earlier
+    if (status === 'cancelled' && prevStatus !== status && invCfg?.autoIncrementOnCancel && decrementedAtOrder) {
+      try { await inventoryService.incrementItems(asInventoryItems(order.items), req.user?._id || null, 'Order cancelled'); } catch (e) { console.warn('Cancel increment failed:', e?.message || e); }
+    }
+
+    // Auto-increment on returned
+    if (status === 'returned' && prevStatus !== status && invCfg?.autoIncrementOnReturn) {
+      try { await inventoryService.incrementItems(asInventoryItems(order.items), req.user?._id || null, 'Order returned'); } catch (e) { console.warn('Return increment failed:', e?.message || e); }
     }
 
     // Emit real-time event for order update
