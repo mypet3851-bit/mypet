@@ -5,13 +5,6 @@ const footerSettingsSchema = new mongoose.Schema({
     type: String,
     default: 'Discover luxury fashion that combines timeless elegance with modern style.'
   },
-  // Localized content
-  description_i18n: { type: Map, of: String, default: undefined },
-  // Optional background image URL for the footer
-  backgroundImage: {
-    type: String,
-    default: ''
-  },
   address: {
     type: String,
     default: '123 Fashion Street, NY 10001'
@@ -30,39 +23,23 @@ const footerSettingsSchema = new mongoose.Schema({
     instagram: String,
     youtube: String
   },
-  // Optional app store badges (images and links)
-  appBadges: {
-    android: {
-      imageUrl: { type: String, default: '' },
-      linkUrl: { type: String, default: '' }
-    },
-    ios: {
-      imageUrl: { type: String, default: '' },
-      linkUrl: { type: String, default: '' }
-    }
-  },
   newsletter: {
     title: {
       type: String,
       default: 'Join Our Newsletter'
     },
-    title_i18n: { type: Map, of: String, default: undefined },
     subtitle: {
       type: String,
       default: 'Subscribe to get special offers, free giveaways, and exclusive deals.'
     },
-    subtitle_i18n: { type: Map, of: String, default: undefined },
     placeholder: {
       type: String,
       default: 'Enter your email'
     },
-    placeholder_i18n: { type: Map, of: String, default: undefined },
     buttonText: {
       type: String,
       default: 'Subscribe'
     }
-    ,
-    buttonText_i18n: { type: Map, of: String, default: undefined }
   }
 }, {
   timestamps: true

@@ -10,9 +10,6 @@ const categorySchema = new mongoose.Schema({
     type: String,
     trim: true
   },
-  // Localized fields (maps lang -> text)
-  name_i18n: { type: Map, of: String, default: undefined },
-  description_i18n: { type: Map, of: String, default: undefined },
   image: {
     type: String,
     required: [true, 'Category image is required']

@@ -10,17 +10,6 @@ const productSchema = new mongoose.Schema({
     type: String,
     required: [true, 'Product description is required']
   },
-  // Localized fields (per-language overrides). Keys are language codes like 'ar', 'he', 'en'.
-  name_i18n: {
-    type: Map,
-    of: String,
-    default: undefined
-  },
-  description_i18n: {
-    type: Map,
-    of: String,
-    default: undefined
-  },
   price: {
     type: Number,
     required: [true, 'Product price is required'],
@@ -187,43 +176,6 @@ const productSchema = new mongoose.Schema({
     // Extra notes / how to measure text
     note: { type: String }
   }
-  ,
-  // Generic attributes assigned to this product (e.g., Color, Size, Material)
-  attributes: [{
-    attribute: { type: mongoose.Schema.Types.ObjectId, ref: 'Attribute', required: true },
-    // For select/multiselect types, link to predefined values
-    values: [{ type: mongoose.Schema.Types.ObjectId, ref: 'AttributeValue' }],
-    // For freeform types (text/number), allow inline value
-    textValue: { type: String },
-    numberValue: { type: Number }
-  }]
-  ,
-  // Variant combinations generated from selected attributes (e.g., Red + M + Cotton)
-  // Each variant is a subdocument with its own ObjectId (_id) that is different from the product _id
-  variants: [{
-    _id: { type: mongoose.Schema.Types.ObjectId, auto: true },
-    sku: { type: String, trim: true },
-    barcode: { type: String, trim: true },
-    price: { type: Number, min: 0 }, // optional override; falls back to product.price
-    originalPrice: { type: Number, min: 0 },
-    stock: { type: Number, min: 0, default: 0 },
-    images: [{ type: String }],
-    isActive: { type: Boolean, default: true },
-    // The defining combination for this variant
-    attributes: [{
-      attribute: { type: mongoose.Schema.Types.ObjectId, ref: 'Attribute', required: true },
-      value: { type: mongoose.Schema.Types.ObjectId, ref: 'AttributeValue' },
-      textValue: { type: String },
-      numberValue: { type: Number }
-    }]
-  }]
-  ,
-  // Images associated with specific attribute values for this product (e.g., images for Color=Red)
-  attributeImages: [{
-    attribute: { type: mongoose.Schema.Types.ObjectId, ref: 'Attribute', required: true },
-    value: { type: mongoose.Schema.Types.ObjectId, ref: 'AttributeValue', required: true },
-    images: [{ type: String }]
-  }]
 }, {
   timestamps: true,
   toJSON: { virtuals: true },
@@ -250,10 +202,7 @@ productSchema.pre('save', function(next) {
 // Recompute aggregate stock from nested colors.sizes each save
 productSchema.pre('save', function(next) {
   // If legacy variant data exists, derive stock from nested sizes; otherwise keep provided stock untouched.
-  if (Array.isArray(this.variants) && this.variants.length > 0) {
-    const total = this.variants.reduce((sum, v) => sum + (Number(v?.stock) || 0), 0);
-    this.stock = total;
-  } else if (this.colors && this.colors.length > 0) {
+  if (this.colors && this.colors.length > 0) {
     const total = this.colors.reduce((sum, color) => {
       if (color && Array.isArray(color.sizes) && color.sizes.length) {
         return sum + color.sizes.reduce((s, sz) => s + (Number(sz.stock) || 0), 0);

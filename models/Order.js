@@ -28,20 +28,7 @@ const orderSchema = new mongoose.Schema({
     },
     name: String,
     image: String,
-    size: String, // Added for size-specific stock tracking
-    // Optional color for inventory and display (store human-readable name or code)
-    color: String,
-    // Generic variant selections (attribute/value pairs) for display and analytics
-    // Keep schema flexible to avoid tight coupling to attribute models
-    variants: [{
-      attributeId: { type: String }, // optional id as string
-      attributeName: { type: String },
-      valueId: { type: String }, // optional id as string
-      valueName: { type: String }
-    }],
-    // Exact variant reference when applicable (e.g., product.variants[])
-    variantId: { type: String },
-    sku: { type: String }
+    size: String // Added for size-specific stock tracking
   }],
   totalAmount: {
     type: Number,

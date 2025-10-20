@@ -41,11 +41,8 @@ import deliveryRoutes from './routes/deliveryRoutes.js';
 import currencyRoutes from './routes/currencyRoutes.js';
 import footerRoutes from './routes/footerRoutes.js';
 import announcementRoutes from './routes/announcementRoutes.js';
-import announcementMobileRoutes from './routes/announcementMobileRoutes.js';
-import announcementWebRoutes from './routes/announcementWebRoutes.js';
 import backgroundRoutes from './routes/backgroundRoutes.js';
 import bannerRoutes from './routes/bannerRoutes.js';
-import mobileBannerRoutes from './routes/mobileBannerRoutes.js';
 import inventoryRoutes from './routes/inventoryRoutes.js';
 import warehouseRoutes from './routes/warehouseRoutes.js';
 import giftCardRoutes from './routes/giftCardRoutes.js';
@@ -62,23 +59,13 @@ import cloudinaryRoutes from './routes/cloudinaryRoutes.js';
 import paypalRoutes from './routes/paypalRoutes.js';
 import legalRoutes from './routes/legalRoutes.js';
 import uploadRoutes from './routes/uploadRoutes.js';
-import pageRoutes from './routes/pageRoutes.js';
-import translateRoutes from './routes/translateRoutes.js';
-import formRoutes from './routes/formRoutes.js';
-import flashSaleRoutes from './routes/flashSaleRoutes.js';
-import bundleOfferRoutes from './routes/bundleOfferRoutes.js';
-import attributeRoutes from './routes/attributeRoutes.js';
-import posRoutes from './routes/posRoutes.js';
-// Lazy import function to warm DeepSeek config from DB
-import { loadDeepseekConfigFromDb } from './services/translate/deepseek.js';
 
 // Path Setup
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Environment Variables: load project/.env first, then server/.env to override
+// Environment Variables
 dotenv.config({ path: path.resolve(__dirname, '../.env') });
-dotenv.config({ path: path.resolve(__dirname, './.env'), override: true });
 
 const app = express();
 
@@ -210,12 +197,8 @@ app.use('/api/delivery', deliveryRoutes);
 app.use('/api/currency', currencyRoutes);
 app.use('/api/footer', footerRoutes);
 app.use('/api/announcements', announcementRoutes);
-// Segregated mobile/web announcement read-only routes
-app.use('/api/mobile/announcements', announcementMobileRoutes);
-app.use('/api/web/announcements', announcementWebRoutes);
 app.use('/api/backgrounds', backgroundRoutes);
 app.use('/api/banners', bannerRoutes);
-app.use('/api/mobile-banners', mobileBannerRoutes);
 app.use('/api/inventory', inventoryRoutes);
 app.use('/api/gift-cards', giftCardRoutes);
 app.use('/api/recipients', recipientRoutes);
@@ -233,15 +216,6 @@ app.use('/api/legal', legalRoutes);
 app.use('/api/db', dbRoutes);
 // File upload endpoints (must come before static /uploads to avoid intercepting multipart requests)
 app.use('/api/uploads', uploadRoutes);
-app.use('/api/pages', pageRoutes);
-app.use('/api/forms', formRoutes);
-app.use('/api/flash-sales', flashSaleRoutes);
-app.use('/api/bundle-offers', bundleOfferRoutes);
-app.use('/api/translate', translateRoutes);
-// Generic product Attributes CRUD (admin-protected)
-app.use('/api/attributes', attributeRoutes);
-// POS System Routes (admin-protected)
-app.use('/api/pos', posRoutes);
 
 // Health Check Route
 app.get('/health', (req, res) => {
@@ -445,28 +419,6 @@ const startServer = async () => {
     return;
   }
 
-  // Ensure Inventory indexes are in sync (drops outdated indexes and creates new ones)
-  try {
-    const Inventory = (await import('./models/Inventory.js')).default;
-    // This will create indexes defined in the schema and drop any not present
-    const syncRes = await Inventory.syncIndexes();
-    console.log('[startup][indexes] Inventory.syncIndexes() done:', syncRes);
-    // As a safety net, explicitly drop legacy index if it still exists (from pre-variant era)
-    try {
-      const idxList = await mongoose.connection.db.collection('inventories').indexes();
-      const legacyIdx = idxList.find(i => i.name === 'product_1_size_1_color_1');
-      if (legacyIdx) {
-        await mongoose.connection.db.collection('inventories').dropIndex('product_1_size_1_color_1');
-        console.warn('[startup][indexes] Dropped legacy index product_1_size_1_color_1');
-      }
-    } catch (dropErr) {
-      // Non-fatal; continue
-      console.warn('[startup][indexes] Legacy index drop check failed:', dropErr?.message || dropErr);
-    }
-  } catch (idxErr) {
-    console.warn('[startup][indexes] Inventory index sync skipped/failed:', idxErr?.message || idxErr);
-  }
-
   // Initialize default data after database connection is established
   try {
     // Import and run data initialization
@@ -474,7 +426,6 @@ const startServer = async () => {
     const Settings = (await import('./models/Settings.js')).default;
     const FooterSettings = (await import('./models/FooterSettings.js')).default;
     const Background = (await import('./models/Background.js')).default;
-  const Form = (await import('./models/Form.js')).default;
 
     // Create default admin user
     await User.createDefaultAdmin();
@@ -487,9 +438,6 @@ const startServer = async () => {
 
     // Create default background
     await Background.createDefaultBackground();
-
-  // Create default forms (if none)
-  try { await Form.createDefaultForms(); } catch {}
 
     // Ensure a test delivery company exists
     try {
@@ -508,14 +456,6 @@ const startServer = async () => {
 
   // Start real-time services after everything is initialized
   import('./services/realTimeEventService.js');
-
-  // Warm DeepSeek translation config from DB (if configured)
-  try {
-    await loadDeepseekConfigFromDb();
-    console.log('[startup] DeepSeek translation config loaded');
-  } catch (e) {
-    console.warn('[startup] DeepSeek config load skipped:', e?.message || e);
-  }
 
   server.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);

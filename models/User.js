@@ -1,6 +1,5 @@
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
-import { normalizePhoneE164ish } from '../utils/phone.js';
 
 const userSchema = new mongoose.Schema({
   name: {
@@ -108,10 +107,6 @@ userSchema.pre('save', async function(next) {
   if (this.isModified('password')) {
     this.password = await bcrypt.hash(this.password, 10);
     this.lastPasswordChange = new Date();
-  }
-  // Normalize phone number consistently
-  if (this.isModified('phoneNumber') && this.phoneNumber) {
-    this.phoneNumber = normalizePhoneE164ish(this.phoneNumber);
   }
   next();
 });

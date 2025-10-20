@@ -6,8 +6,6 @@ const footerLinkSchema = new mongoose.Schema({
     required: [true, 'Link name is required'],
     trim: true
   },
-  // Localized name (maps lang -> text)
-  name_i18n: { type: Map, of: String, default: undefined },
   url: {
     type: String,
     required: [true, 'URL is required'],

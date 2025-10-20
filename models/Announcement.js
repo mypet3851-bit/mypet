@@ -7,37 +7,6 @@ const announcementSchema = new mongoose.Schema({
     trim: true,
     maxLength: [100, 'Announcement text cannot exceed 100 characters']
   },
-  description: {
-    type: String,
-    trim: true,
-    maxLength: [150, 'Description cannot exceed 150 characters'],
-    default: ''
-  },
-  url: {
-    type: String,
-    trim: true,
-    default: '',
-    validate: {
-      validator: function(v) {
-        if (!v) return true;
-        // allow http/https URLs and site-relative paths starting with '/'
-        return /^(https?:\/\/[^\s]+|\/[\S]*)$/i.test(v);
-      },
-      message: 'URL must be absolute (http/https) or a site-relative path starting with /'
-    }
-  },
-  // Target platform: web, mobile, or both
-  platform: {
-    type: String,
-    enum: ['web', 'mobile', 'both'],
-    default: 'both',
-    index: true
-  },
-  iconImage: {
-    type: String,
-    trim: true,
-    default: ''
-  },
   icon: {
     type: String,
     required: [true, 'Icon name is required'],

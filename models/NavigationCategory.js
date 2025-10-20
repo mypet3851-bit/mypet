@@ -7,8 +7,6 @@ const navigationCategorySchema = new mongoose.Schema({
     unique: true,
     trim: true
   },
-  // Localized name (maps lang -> text)
-  name_i18n: { type: Map, of: String, default: undefined },
   slug: {
     type: String,
     unique: true,
@@ -29,8 +27,6 @@ const navigationCategorySchema = new mongoose.Schema({
       type: String,
       required: true
     },
-    // Localized subcategory name
-    name_i18n: { type: Map, of: String, default: undefined },
     slug: {
       type: String,
       required: true
@@ -54,8 +50,6 @@ const navigationCategorySchema = new mongoose.Schema({
       type: String,
       trim: true
     },
-    // Localized group title
-    title_i18n: { type: Map, of: String, default: undefined },
     categories: [{
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Category'

@@ -96,11 +96,6 @@ const settingsSchema = new mongoose.Schema({
     type: String,
     default: '#ffffff' // White
   },
-  // Footer-specific text color (overrides default text color within footer)
-  footerTextColor: {
-    type: String,
-    default: ''
-  },
   // New Arrivals page (mobile-specific theming)
   newArrivalsMobileHeadingColor: { type: String, default: '' }, // e.g. '#ffffff'
   newArrivalsMobileTextColor: { type: String, default: '' }, // e.g. '#e5e7eb'
@@ -245,16 +240,6 @@ const settingsSchema = new mongoose.Schema({
     enum: ['standard', 'compact', 'masonry', 'list', 'wide', 'gallery', 'carousel'],
     default: 'standard'
   },
-  
-  // Translations/AI settings (DeepSeek)
-  translations: {
-    deepseek: {
-      enabled: { type: Boolean, default: false },
-      apiKey: { type: String, default: '' }, // stored securely in DB; masked in API responses
-      apiUrl: { type: String, default: '' }, // optional override (falls back to env or default)
-      model: { type: String, default: '' }   // optional override (falls back to env default)
-    }
-  },
   // Product listing filter visibility toggles
   showColorFilter: { type: Boolean, default: true }, // allow hiding color facet from storefront
   
@@ -317,14 +302,6 @@ const settingsSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Accessibility feature toggles
-settingsSchema.add({
-  a11y: {
-    // Controls visibility of the floating "Read page" button in the storefront
-    showReadPageButton: { type: Boolean, default: true }
-  }
-});
-
 // Cloudinary credentials (server-side use only). Do NOT expose secrets via public GET.
 settingsSchema.add({
   cloudinary: {
@@ -334,76 +311,11 @@ settingsSchema.add({
   }
 });
 
-// Inventory management configuration
-settingsSchema.add({
-  inventory: {
-    autoDecrementOnOrder: { type: Boolean, default: true },
-    autoIncrementOnCancel: { type: Boolean, default: true },
-    autoIncrementOnReturn: { type: Boolean, default: true },
-    allowNegativeStock: { type: Boolean, default: false },
-    reserveOnCheckout: { type: Boolean, default: true },
-    reservationTTLMinutes: { type: Number, default: 15, min: 1, max: 1440 }
-  }
-});
-
-// Mobile app bottom tab bar icon configuration (admin configurable)
-// Each tab can have optional active/inactive icon URLs (absolute, /uploads, or data URI)
-// Center button supports a single icon (when set, overrides gradient text)
-settingsSchema.add({
-  // Mobile Home header (top overlay/compact) icon visibility
-  mobileHomeHeader: {
-    showMessages: { type: Boolean, default: true },
-    showCalendar: { type: Boolean, default: true }
-  },
-
-  mobileTabBar: {
-    home: {
-      active: { type: String, default: '' },
-      inactive: { type: String, default: '' },
-      label: { type: String, default: '' },
-      ionActive: { type: String, default: '' },
-      ionInactive: { type: String, default: '' },
-      size: { type: Number, default: 24, min: 12, max: 48 }
-    },
-    category: {
-      active: { type: String, default: '' },
-      inactive: { type: String, default: '' },
-      label: { type: String, default: '' },
-      ionActive: { type: String, default: '' },
-      ionInactive: { type: String, default: '' },
-      size: { type: Number, default: 24, min: 12, max: 48 }
-    },
-    cart: {
-      active: { type: String, default: '' },
-      inactive: { type: String, default: '' },
-      label: { type: String, default: '' },
-      ionActive: { type: String, default: '' },
-      ionInactive: { type: String, default: '' },
-      size: { type: Number, default: 24, min: 12, max: 48 }
-    },
-    me: {
-      active: { type: String, default: '' },
-      inactive: { type: String, default: '' },
-      label: { type: String, default: '' },
-      ionActive: { type: String, default: '' },
-      ionInactive: { type: String, default: '' },
-      size: { type: Number, default: 24, min: 12, max: 48 }
-    },
-    center: {
-      icon: { type: String, default: '' },
-      label: { type: String, default: '' },
-      iconSize: { type: Number, default: 28, min: 16, max: 56 }
-    }
-  }
-});
-
 // Checkout form customization (admin configurable)
 settingsSchema.add({
   checkoutForm: {
     showEmail: { type: Boolean, default: false },
     showLastName: { type: Boolean, default: false },
-    // Allow users to proceed to checkout without authentication
-    allowGuestCheckout: { type: Boolean, default: true },
     // Future toggles (currently not rendered in UI):
     showSecondaryMobile: { type: Boolean, default: false },
     showCountry: { type: Boolean, default: false },
@@ -679,18 +591,6 @@ settingsSchema.add({
   }
 });
 
-// Shipping configuration (admin configurable)
-// When fixedFeeEnabled=true, backend shipping calculations will short-circuit to fixedFeeAmount.
-settingsSchema.add({
-  shipping: {
-    fixedFeeEnabled: { type: Boolean, default: false },
-    fixedFeeAmount: { type: Number, default: 0, min: 0 },
-    // If enabled and order subtotal >= freeShippingMinSubtotal, shipping is free (cost 0)
-    freeShippingEnabled: { type: Boolean, default: false },
-    freeShippingMinSubtotal: { type: Number, default: 0, min: 0 }
-  }
-});
-
 // Payments configuration (server-side; clientId may be exposed, secret must not be)
 settingsSchema.add({
   payments: {
@@ -874,15 +774,6 @@ settingsSchema.statics.createDefaultSettings = async function() {
       // Ensure googleAuth exists
       if (!settings.googleAuth) {
         updateData.googleAuth = { enabled: false, clientId: '' };
-        needsUpdate = true;
-      }
-
-      // Ensure a11y object and showReadPageButton exists (default true)
-      if (!settings.a11y || typeof settings.a11y.showReadPageButton === 'undefined') {
-        updateData.a11y = {
-          ...(settings.a11y || {}),
-          showReadPageButton: true
-        };
         needsUpdate = true;
       }
 
