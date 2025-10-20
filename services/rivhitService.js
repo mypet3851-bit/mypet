@@ -23,6 +23,25 @@ export async function testConnectivity() {
   return { ok: true };
 }
 
+export async function getLastRequest(format = 'json') {
+  const { enabled, apiUrl, token } = await getConfig();
+  if (!enabled) throw new Error('Rivhit integration disabled');
+  if (!token) throw new Error('Rivhit API token not configured');
+  const url = apiUrl + `/Status.LastRequest/${format}`;
+  const resp = await axios.post(url, { token_api: token }, { timeout: 15000, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Accept': 'application/json' } });
+  return resp?.data || {};
+}
+
+export async function getErrorMessage(code, format = 'json') {
+  const { enabled, apiUrl, token } = await getConfig();
+  if (!enabled) throw new Error('Rivhit integration disabled');
+  if (!token) throw new Error('Rivhit API token not configured');
+  const url = apiUrl + `/Status.ErrorMessage`;
+  const body = { token_api: token, error_code: Number(code) };
+  const resp = await axios.post(url, body, { timeout: 15000, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Accept': 'application/json' } });
+  return resp?.data || {};
+}
+
 // --- SOAP helpers ---
 function buildSoapEnvelope(action, bodyXml) {
   return `<?xml version="1.0" encoding="utf-8"?>\n`+
@@ -241,5 +260,7 @@ export async function updateItem({ id_item, storage_id, ...fields }) {
 export default {
   getItemQuantity,
   updateItem,
-  testConnectivity
+  testConnectivity,
+  getLastRequest,
+  getErrorMessage
 };
