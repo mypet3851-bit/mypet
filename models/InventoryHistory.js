@@ -8,7 +8,7 @@ const inventoryHistorySchema = new mongoose.Schema({
   },
   type: {
     type: String,
-    enum: ['increase', 'decrease'],
+    enum: ['increase', 'decrease', 'update'],
     required: true
   },
   quantity: {
@@ -22,7 +22,9 @@ const inventoryHistorySchema = new mongoose.Schema({
   user: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    required: true
+    // User may be undefined for guest checkouts or system actions
+    required: false,
+    default: null
   },
   timestamp: {
     type: Date,
