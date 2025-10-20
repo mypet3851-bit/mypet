@@ -101,6 +101,16 @@ router.get('/', async (req, res) => {
       };
       delete obj.googleAuth.clientSecret;
     }
+    // Translations (DeepSeek): mask secret
+    if (obj.translations && obj.translations.deepseek) {
+      obj.translations = obj.translations || {};
+      obj.translations.deepseek = {
+        enabled: !!obj.translations.deepseek.enabled,
+        apiKey: obj.translations.deepseek.apiKey ? '***' : '',
+        apiUrl: obj.translations.deepseek.apiUrl || '',
+        model: obj.translations.deepseek.model || ''
+      };
+    }
     // Normalize favicon (and optionally logo) to absolute so other-origins (Netlify) can load it
     try {
   if (obj.favicon) obj.favicon = toAbsolute(req, obj.favicon);
@@ -120,10 +130,80 @@ router.get('/', async (req, res) => {
       }
     });
   }
+  // Normalize mobile tab bar icons
+  if (obj.mobileTabBar) {
+    const fix = (val) => (typeof val === 'string' && val.startsWith('/uploads/')) ? toAbsolute(req, val) : val;
+    try {
+      if (obj.mobileTabBar.home) {
+        obj.mobileTabBar.home.active = fix(obj.mobileTabBar.home.active);
+        obj.mobileTabBar.home.inactive = fix(obj.mobileTabBar.home.inactive);
+      }
+      if (obj.mobileTabBar.category) {
+        obj.mobileTabBar.category.active = fix(obj.mobileTabBar.category.active);
+        obj.mobileTabBar.category.inactive = fix(obj.mobileTabBar.category.inactive);
+      }
+      if (obj.mobileTabBar.cart) {
+        obj.mobileTabBar.cart.active = fix(obj.mobileTabBar.cart.active);
+        obj.mobileTabBar.cart.inactive = fix(obj.mobileTabBar.cart.inactive);
+      }
+      if (obj.mobileTabBar.me) {
+        obj.mobileTabBar.me.active = fix(obj.mobileTabBar.me.active);
+        obj.mobileTabBar.me.inactive = fix(obj.mobileTabBar.me.inactive);
+      }
+      if (obj.mobileTabBar.center) {
+        obj.mobileTabBar.center.icon = fix(obj.mobileTabBar.center.icon);
+      }
+    } catch {}
+  }
     } catch {}
     res.json(obj);
   } catch (error) {
     res.status(500).json({ message: error.message });
+  }
+});
+
+// Get DeepSeek translation config (admin only for full detail sans secret value)
+router.get('/translations/deepseek', adminAuth, async (req, res) => {
+  try {
+    let settings = await Settings.findOne();
+    if (!settings) settings = await Settings.create({});
+    const ds = settings.translations?.deepseek || { enabled: false, apiKey: '', apiUrl: '', model: '' };
+    res.json({
+      enabled: !!ds.enabled,
+      apiKey: ds.apiKey ? '***' : '',
+      apiUrl: ds.apiUrl || '',
+      model: ds.model || ''
+    });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+});
+
+// Update DeepSeek translation config (admin)
+router.put('/translations/deepseek', adminAuth, async (req, res) => {
+  try {
+    let settings = await Settings.findOne().sort({ updatedAt: -1 });
+    if (!settings) settings = new Settings();
+    settings.translations = settings.translations || { deepseek: { enabled: false, apiKey: '', apiUrl: '', model: '' } };
+    const incoming = req.body || {};
+    const prevKey = settings.translations.deepseek?.apiKey || '';
+    const next = {
+      enabled: typeof incoming.enabled === 'undefined' ? !!settings.translations.deepseek?.enabled : !!incoming.enabled,
+      apiKey: typeof incoming.apiKey === 'string' ? (incoming.apiKey === '***' ? prevKey : incoming.apiKey.trim()) : (settings.translations.deepseek?.apiKey || ''),
+      apiUrl: typeof incoming.apiUrl === 'string' ? incoming.apiUrl.trim() : (settings.translations.deepseek?.apiUrl || ''),
+      model: typeof incoming.model === 'string' ? incoming.model.trim() : (settings.translations.deepseek?.model || '')
+    };
+    settings.translations.deepseek = next;
+    try { settings.markModified('translations'); } catch {}
+    await settings.save();
+    // Attempt to refresh in-memory DeepSeek config so changes take effect without restart
+    try {
+      const { loadDeepseekConfigFromDb } = await import('../services/translate/deepseek.js');
+      await loadDeepseekConfigFromDb();
+    } catch {}
+    res.json({ enabled: next.enabled, apiKey: next.apiKey ? '***' : '', apiUrl: next.apiUrl, model: next.model });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
   }
 });
 
@@ -141,6 +221,95 @@ router.get('/analytics', async (req, res) => {
     };
 
     res.json(analytics);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Rivhit integration config (admin only)
+router.get('/rivhit', adminAuth, async (req, res) => {
+  try {
+    let settings = await Settings.findOne();
+    if (!settings) settings = await Settings.create({});
+    const rv = settings.rivhit || { enabled: false, apiUrl: 'https://api.rivhit.co.il/online/RivhitOnlineAPI.svc', tokenApi: '', defaultStorageId: 0 };
+    res.json({
+      enabled: !!rv.enabled,
+      apiUrl: rv.apiUrl || 'https://api.rivhit.co.il/online/RivhitOnlineAPI.svc',
+      tokenApi: rv.tokenApi ? '***' : '',
+      defaultStorageId: rv.defaultStorageId || 0
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+router.put('/rivhit', adminAuth, async (req, res) => {
+  try {
+    let settings = await Settings.findOne().sort({ updatedAt: -1 });
+    if (!settings) settings = new Settings();
+    settings.rivhit = settings.rivhit || { enabled: false, apiUrl: 'https://api.rivhit.co.il/online/RivhitOnlineAPI.svc', tokenApi: '', defaultStorageId: 0 };
+    const inc = req.body || {};
+    if (typeof inc.enabled !== 'undefined') settings.rivhit.enabled = !!inc.enabled;
+    if (typeof inc.apiUrl === 'string') settings.rivhit.apiUrl = inc.apiUrl.trim();
+    if (typeof inc.defaultStorageId !== 'undefined') {
+      const n = Number(inc.defaultStorageId);
+      settings.rivhit.defaultStorageId = Number.isFinite(n) && n >= 0 ? n : 0;
+    }
+    if (typeof inc.tokenApi === 'string') {
+      if (inc.tokenApi !== '***') settings.rivhit.tokenApi = inc.tokenApi.trim();
+    }
+    try { settings.markModified('rivhit'); } catch {}
+    await settings.save();
+    res.json({ enabled: settings.rivhit.enabled, apiUrl: settings.rivhit.apiUrl, tokenApi: settings.rivhit.tokenApi ? '***' : '', defaultStorageId: settings.rivhit.defaultStorageId || 0 });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Inventory settings: GET
+router.get('/inventory', async (req, res) => {
+  try {
+    let settings = await Settings.findOne();
+    if (!settings) settings = await Settings.create({});
+    const inv = settings.inventory || {
+      autoDecrementOnOrder: true,
+      autoIncrementOnCancel: true,
+      autoIncrementOnReturn: true,
+      allowNegativeStock: false,
+      reserveOnCheckout: true,
+      reservationTTLMinutes: 15
+    };
+    res.json(inv);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Inventory settings: PUT (guarded like general settings)
+router.put('/inventory', settingsWriteGuard, async (req, res) => {
+  try {
+    let settings = await Settings.findOne().sort({ updatedAt: -1 });
+    if (!settings) settings = new Settings();
+    settings.inventory = settings.inventory || {};
+    const inc = req.body || {};
+    const next = { ...settings.inventory };
+    const coerceBool = (v, def) => (typeof v === 'undefined' ? def : !!v);
+    const coerceNum = (v, def) => {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : def;
+    };
+    next.autoDecrementOnOrder = coerceBool(inc.autoDecrementOnOrder, true);
+    next.autoIncrementOnCancel = coerceBool(inc.autoIncrementOnCancel, true);
+    next.autoIncrementOnReturn = coerceBool(inc.autoIncrementOnReturn, true);
+    next.allowNegativeStock = coerceBool(inc.allowNegativeStock, false);
+    next.reserveOnCheckout = coerceBool(inc.reserveOnCheckout, true);
+    let ttl = coerceNum(inc.reservationTTLMinutes, settings.inventory.reservationTTLMinutes || 15);
+    if (!(ttl >= 1 && ttl <= 1440)) ttl = 15;
+    next.reservationTTLMinutes = ttl;
+    settings.inventory = next;
+    try { settings.markModified('inventory'); } catch {}
+    await settings.save();
+    res.json(settings.inventory);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -318,6 +487,24 @@ router.put('/', settingsWriteGuard, async (req, res) => {
         try { settings.markModified('checkoutForm'); } catch {}
       }
 
+      // Shipping settings
+      if (req.body.shipping && typeof req.body.shipping === 'object') {
+        settings.shipping = settings.shipping || { fixedFeeEnabled: false, fixedFeeAmount: 0 };
+        const s = req.body.shipping;
+        if (typeof s.fixedFeeEnabled !== 'undefined') settings.shipping.fixedFeeEnabled = !!s.fixedFeeEnabled;
+        if (typeof s.fixedFeeAmount !== 'undefined') {
+          const num = Number(s.fixedFeeAmount);
+          if (!isNaN(num) && num >= 0) settings.shipping.fixedFeeAmount = num;
+        }
+        // Free shipping threshold
+        if (typeof s.freeShippingEnabled !== 'undefined') settings.shipping.freeShippingEnabled = !!s.freeShippingEnabled;
+        if (typeof s.freeShippingMinSubtotal !== 'undefined') {
+          const min = Number(s.freeShippingMinSubtotal);
+          if (!isNaN(min) && min >= 0) settings.shipping.freeShippingMinSubtotal = min;
+        }
+        try { settings.markModified('shipping'); } catch {}
+      }
+
       // Header icon configurations
       if (Object.prototype.hasOwnProperty.call(req.body, 'headerIcons')) {
         try { settings.markModified('headerIcons'); } catch {}
@@ -328,9 +515,20 @@ router.put('/', settingsWriteGuard, async (req, res) => {
       if (Object.prototype.hasOwnProperty.call(req.body, 'headerIconAssets')) {
         try { settings.markModified('headerIconAssets'); } catch {}
       }
+      // Mobile home header toggles (messages/calendar)
+      if (Object.prototype.hasOwnProperty.call(req.body, 'mobileHomeHeader')) {
+        settings.mobileHomeHeader = { ...(settings.mobileHomeHeader || {}), ...req.body.mobileHomeHeader };
+        try { settings.markModified('mobileHomeHeader'); } catch {}
+      }
       // Simple boolean toggles
       if (Object.prototype.hasOwnProperty.call(req.body, 'showColorFilter')) {
         settings.showColorFilter = !!req.body.showColorFilter;
+      }
+
+      // Accessibility toggles
+      if (req.body.a11y && typeof req.body.a11y === 'object') {
+        settings.a11y = { ...(settings.a11y || {}), ...req.body.a11y };
+        try { settings.markModified('a11y'); } catch {}
       }
     }
 
@@ -401,6 +599,8 @@ router.put('/', settingsWriteGuard, async (req, res) => {
             scrollTopTextColor: settings.scrollTopTextColor,
             scrollTopHoverBgColor: settings.scrollTopHoverBgColor,
             scrollTopPingColor: settings.scrollTopPingColor,
+            // Accessibility feature toggles
+            a11y: settings.a11y,
             // SEO fields
             siteTitle: settings.siteTitle,
             siteDescription: settings.siteDescription,
@@ -476,6 +676,8 @@ router.put('/', settingsWriteGuard, async (req, res) => {
     if (typeof savedObj.addressLink === 'undefined') {
       savedObj.addressLink = '';
     }
+    // Ensure a11y object exists in response
+    if (!savedObj.a11y) savedObj.a11y = { showReadPageButton: true };
     res.json(savedObj);
   } catch (error) {
   console.error('[Settings PUT] Error:', error);
@@ -505,9 +707,46 @@ router.post('/upload/header-icon/:key', adminAuth, upload.single('file'), async 
     let settings = await Settings.findOne();
     if (!settings) settings = new Settings();
 
-    const publicUrl = `/uploads/${req.file.filename}`;
+    // Default to local uploads path
+    let finalUrl = `/uploads/${req.file.filename}`;
+    const hasCloud = await hasCloudinaryCredentials();
+
+    // Prefer Cloudinary when configured
+    if (hasCloud) {
+      try {
+        await ensureCloudinaryConfig();
+        const uploadResult = await cloudinary.uploader.upload(path.join(uploadDir, req.file.filename), {
+          folder: `settings/header-icons/${key}`,
+          resource_type: 'image',
+          use_filename: true,
+          unique_filename: false,
+          overwrite: true
+        });
+        if (uploadResult?.secure_url) {
+          finalUrl = uploadResult.secure_url;
+          try { fs.unlinkSync(path.join(uploadDir, req.file.filename)); } catch {}
+        }
+      } catch (cloudErr) {
+        console.warn('[header-icon] Cloudinary upload failed, keeping local file:', cloudErr.message);
+      }
+    }
+
+    // If no Cloudinary configured, inline as data URI so it persists across restarts
+    if (!hasCloud) {
+      try {
+        const filePath = path.join(uploadDir, req.file.filename);
+        const buf = fs.readFileSync(filePath);
+        const b64 = buf.toString('base64');
+        const mime = req.file.mimetype || 'image/png';
+        finalUrl = `data:${mime};base64,${b64}`;
+        try { fs.unlinkSync(filePath); } catch {}
+      } catch (inlineErr) {
+        console.warn('[header-icon] Failed to inline image, using relative path:', inlineErr.message);
+      }
+    }
+
     settings.headerIconAssets = settings.headerIconAssets || {};
-    settings.headerIconAssets[key] = publicUrl;
+    settings.headerIconAssets[key] = finalUrl;
     settings.markModified('headerIconAssets');
     await settings.save();
 
@@ -515,14 +754,17 @@ router.post('/upload/header-icon/:key', adminAuth, upload.single('file'), async 
     try {
       const broadcast = req.app.get('broadcastToClients');
       if (typeof broadcast === 'function') {
-        broadcast({
-          type: 'settings_updated',
-          data: { headerIconAssets: settings.headerIconAssets }
-        });
+        // Ensure absolute URL if still relative
+        const val = settings.headerIconAssets[key];
+        const absVal = /^data:|^https?:/i.test(val) ? val : toAbsolute(req, val);
+        const payload = { ...(settings.headerIconAssets || {}) };
+        payload[key] = absVal;
+        broadcast({ type: 'settings_updated', data: { headerIconAssets: payload } });
       }
     } catch {}
 
-    res.json({ key, url: publicUrl });
+    const responseUrl = /^data:|^https?:/i.test(finalUrl) ? finalUrl : toAbsolute(req, finalUrl);
+    res.json({ key, url: responseUrl, stored: hasCloud ? 'cloudinary' : 'inline' });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -600,6 +842,155 @@ router.post('/upload/header-icon-bg/:key', adminAuth, upload.single('file'), asy
     res.json({ key, url: toAbsolute(req, settings.headerIconBackgrounds[key].image), stored: hasCloudinaryCreds ? 'cloudinary' : 'inline' });
   } catch (error) {
     res.status(500).json({ message: error.message });
+  }
+});
+
+// Upload mobile tab bar icon (admin only)
+// key: home.active|home.inactive|category.active|category.inactive|cart.active|cart.inactive|me.active|me.inactive|center.icon
+router.post('/upload/mobile-tab-icon/:key', adminAuth, upload.single('file'), async (req, res) => {
+  try {
+    const { key } = req.params;
+    const allowed = new Set([
+      'home.active','home.inactive','category.active','category.inactive','cart.active','cart.inactive','me.active','me.inactive','center.icon'
+    ]);
+    if (!allowed.has(key)) {
+      return res.status(400).json({ message: 'Invalid mobile tab icon key' });
+    }
+    if (!req.file) {
+      return res.status(400).json({ message: 'No file uploaded' });
+    }
+
+    let settings = await Settings.findOne();
+    if (!settings) settings = new Settings();
+
+    // Store at /uploads/... (or data URI fallback if no persistent storage)
+    let finalUrl = `/uploads/${req.file.filename}`;
+    // Optional: if Cloudinary configured, upload there
+    const hasCloud = await hasCloudinaryCredentials?.();
+    if (hasCloud) {
+      try {
+        await ensureCloudinaryConfig();
+        const folder = `settings/mobile-tabs/${key.replace(/\./g,'_')}`;
+        const uploadResult = await cloudinary.uploader.upload(path.join(uploadDir, req.file.filename), {
+          folder,
+          resource_type: 'image',
+          use_filename: true,
+          unique_filename: false,
+          overwrite: true
+        });
+        if (uploadResult?.secure_url) {
+          finalUrl = uploadResult.secure_url;
+          try { fs.unlinkSync(path.join(uploadDir, req.file.filename)); } catch {}
+        }
+      } catch (e) {
+        console.warn('[mobile-tab-icon] Cloudinary upload failed; keeping local file:', e?.message);
+      }
+    } else {
+      // Inline file so it survives ephemeral storages
+      try {
+        const filePath = path.join(uploadDir, req.file.filename);
+        const buf = fs.readFileSync(filePath);
+        const b64 = buf.toString('base64');
+        const mime = req.file.mimetype || 'image/png';
+        finalUrl = `data:${mime};base64,${b64}`;
+        try { fs.unlinkSync(filePath); } catch {}
+      } catch (inlineErr) {
+        console.warn('[mobile-tab-icon] Failed to inline image, using relative path:', inlineErr.message);
+      }
+    }
+
+    // Persist in settings.mobileTabBar at specified key
+    settings.mobileTabBar = settings.mobileTabBar || {};
+    const [section, field] = key.split('.');
+    if (section === 'center' && field === 'icon') {
+      settings.mobileTabBar.center = settings.mobileTabBar.center || {};
+      settings.mobileTabBar.center.icon = finalUrl;
+    } else {
+      settings.mobileTabBar[section] = settings.mobileTabBar[section] || {};
+      settings.mobileTabBar[section][field] = finalUrl;
+    }
+    settings.markModified('mobileTabBar');
+    await settings.save();
+
+    // Broadcast minimal update
+    try {
+      const broadcast = req.app.get('broadcastToClients');
+      if (typeof broadcast === 'function') {
+        broadcast({ type: 'settings_updated', data: { mobileTabBar: settings.mobileTabBar } });
+      }
+    } catch {}
+
+    // Respond with absolute URL for convenience
+    const abs = (u) => (/^data:|^https?:/i.test(u) ? u : toAbsolute(req, u));
+    return res.json({ key, url: abs(finalUrl) });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Update mobile tab bar config via JSON (admin only)
+router.put('/mobile-tab', settingsWriteGuard, async (req, res) => {
+  try {
+    let settings = await Settings.findOne();
+    if (!settings) settings = new Settings();
+    const incoming = req.body?.mobileTabBar || req.body;
+    if (incoming && typeof incoming === 'object') {
+      settings.mobileTabBar = { ...(settings.mobileTabBar || {}), ...incoming };
+      settings.markModified('mobileTabBar');
+      await settings.save();
+    }
+    res.json(settings.mobileTabBar || {});
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+});
+
+// Update labels/icons for mobile tabs (admin or relaxed guard)
+router.put('/mobile-tab/labels', settingsWriteGuard, async (req, res) => {
+  try {
+    let settings = await Settings.findOne();
+    if (!settings) settings = new Settings();
+    const incoming = req.body || {};
+    const merge = (section) => {
+      if (!incoming[section]) return;
+      settings.mobileTabBar = settings.mobileTabBar || {};
+      settings.mobileTabBar[section] = settings.mobileTabBar[section] || {};
+      ['label','ionActive','ionInactive'].forEach(k => {
+        if (typeof incoming[section][k] === 'string') settings.mobileTabBar[section][k] = incoming[section][k];
+      });
+    };
+    ['home','category','cart','me','center'].forEach(merge);
+    settings.markModified('mobileTabBar');
+    await settings.save();
+    res.json(settings.mobileTabBar || {});
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+});
+
+// Update icon sizes for mobile tabs
+router.put('/mobile-tab/sizes', settingsWriteGuard, async (req, res) => {
+  try {
+    let settings = await Settings.findOne();
+    if (!settings) settings = new Settings();
+    const incoming = req.body || {};
+    const clamp = (n, min, max) => Math.max(min, Math.min(max, Number(n) || 0));
+    const applySize = (section, key = 'size', min = 12, max = 48) => {
+      if (incoming?.[section]?.[key] == null) return;
+      settings.mobileTabBar = settings.mobileTabBar || {};
+      settings.mobileTabBar[section] = settings.mobileTabBar[section] || {};
+      settings.mobileTabBar[section][key] = clamp(incoming[section][key], min, max);
+    };
+    applySize('home');
+    applySize('category');
+    applySize('cart');
+    applySize('me');
+    applySize('center', 'iconSize', 16, 56);
+    settings.markModified('mobileTabBar');
+    await settings.save();
+    res.json(settings.mobileTabBar || {});
+  } catch (e) {
+    res.status(500).json({ message: e.message });
   }
 });
 
@@ -1155,6 +1546,7 @@ router.get('/checkout', async (req, res) => {
     res.json({
       showEmail: !!cf.showEmail,
       showLastName: !!cf.showLastName,
+      allowGuestCheckout: cf.allowGuestCheckout !== false, // default true
       showSecondaryMobile: !!cf.showSecondaryMobile,
       showCountry: !!cf.showCountry,
       allowOtherCity: !!cf.allowOtherCity,
@@ -1168,7 +1560,7 @@ router.get('/checkout', async (req, res) => {
 // Update checkout form (guarded; can be relaxed via env)
 router.put('/checkout', settingsWriteGuard, async (req, res) => {
   try {
-    const { showEmail, showLastName, showSecondaryMobile, showCountry, cities, allowOtherCity } = req.body || {};
+    const { showEmail, showLastName, showSecondaryMobile, showCountry, cities, allowOtherCity, allowGuestCheckout } = req.body || {};
     let settings = await Settings.findOne();
     if (!settings) settings = new Settings();
     settings.checkoutForm = settings.checkoutForm || {};
@@ -1176,6 +1568,7 @@ router.put('/checkout', settingsWriteGuard, async (req, res) => {
     if (typeof showLastName === 'boolean') settings.checkoutForm.showLastName = showLastName;
     if (typeof showSecondaryMobile === 'boolean') settings.checkoutForm.showSecondaryMobile = showSecondaryMobile;
     if (typeof showCountry === 'boolean') settings.checkoutForm.showCountry = showCountry;
+  if (typeof allowGuestCheckout === 'boolean') settings.checkoutForm.allowGuestCheckout = allowGuestCheckout;
     if (typeof allowOtherCity === 'boolean') settings.checkoutForm.allowOtherCity = allowOtherCity;
     if (Array.isArray(cities)) settings.checkoutForm.cities = cities.filter(c => typeof c === 'string' && c.trim().length).map(c => c.trim());
     settings.markModified('checkoutForm');

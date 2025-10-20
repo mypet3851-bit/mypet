@@ -14,6 +14,8 @@ import announcementRoutes from './announcementRoutes.js';
 import backgroundRoutes from './backgroundRoutes.js';
 import bannerRoutes from './bannerRoutes.js';
 import uploadRoutes from './uploadRoutes.js';
+import attributeRoutes from './attributeRoutes.js';
+import posRoutes from './posRoutes.js';
 
 
 
@@ -42,6 +44,8 @@ router.use('/announcements', announcementRoutes);
 router.use('/backgrounds', backgroundRoutes);
 router.use('/banners', bannerRoutes);
 router.use('/uploads', uploadRoutes);
+router.use('/attributes', attributeRoutes);
+router.use('/pos', posRoutes);
 
 router.use('/inventory', inventoryRoutes);
 

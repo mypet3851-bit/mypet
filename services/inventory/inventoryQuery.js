@@ -6,6 +6,8 @@ export class InventoryQuery {
   async getAll() {
     const inventory = await Inventory.find()
       .populate('product', 'name images')
+      .populate({ path: 'attributesSnapshot.attribute', select: 'name' })
+      .populate({ path: 'attributesSnapshot.value', select: 'value' })
       .sort({ 'product.name': 1, size: 1, color: 1 });
     return inventory;
   }
@@ -13,6 +15,8 @@ export class InventoryQuery {
   async getByProduct(productId) {
     const inventory = await Inventory.find({ product: productId })
       .populate('product', 'name images')
+      .populate({ path: 'attributesSnapshot.attribute', select: 'name' })
+      .populate({ path: 'attributesSnapshot.value', select: 'value' })
       .sort('size color');
     return inventory;
   }
@@ -20,6 +24,8 @@ export class InventoryQuery {
   async getLowStock() {
     const items = await Inventory.find({ status: 'low_stock' })
       .populate('product', 'name images')
+      .populate({ path: 'attributesSnapshot.attribute', select: 'name' })
+      .populate({ path: 'attributesSnapshot.value', select: 'value' })
       .sort('quantity');
     return items;
   }

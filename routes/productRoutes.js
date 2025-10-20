@@ -14,7 +14,8 @@ import {
   getProductStock,
   uploadProductVideo,
   uploadTempProductVideo,
-  getProductFilters
+  getProductFilters,
+  getProductLite
 } from '../controllers/productController.js';
 import { videoUpload } from '../middleware/videoUpload.js';
 import {
@@ -26,14 +27,22 @@ import {
   verifyReview,
   deleteReview
 } from '../controllers/reviewController.js';
-import { updateProductImages } from '../controllers/productController.js';
+import { updateProductImages, generateProductVariants, updateVariant, bulkUpdateVariants, getAttributeValueImages, setAttributeValueImages, deleteVariant, translateProductFields, batchTranslateProducts, syncQuantityFromRivhit } from '../controllers/productController.js';
 
 const router = express.Router();
 
 // Public routes
+// Alias: allow GET /api/products?q=term (maps to search controller when q present)
+router.get('/', (req, res, next) => {
+  if (req.query && typeof req.query.q === 'string' && req.query.q.trim()) {
+    return searchProducts(req, res, next);
+  }
+  return getProducts(req, res, next);
+});
 router.get('/', getProducts);
 router.get('/filters', getProductFilters); // must be before :id
 router.get('/search', searchProducts);
+router.get('/lite/:id', getProductLite);
 // Place static paths before dynamic ':id' to avoid conflicts
 router.get('/:id/stock', getProductStock); // New endpoint for stock levels
 router.get('/:id', getProduct);
@@ -41,11 +50,24 @@ router.get('/:id', getProduct);
 // Protected routes (admin only)
 router.post('/', adminAuth, createProduct);
 router.post('/bulk', adminAuth, bulkCreateProducts);
+// Translation endpoints
+router.post('/translate/batch', adminAuth, batchTranslateProducts);
+router.post('/:id/translate', adminAuth, translateProductFields);
 // Put static route before dynamic ones
 router.put('/featured/reorder', adminAuth, reorderFeaturedProducts);
 router.put('/:id', adminAuth, updateProduct);
+// Sync quantity from Rivhit for product or variant (variantId via query param)
+router.post('/:id/sync-rivhit-qty', adminAuth, syncQuantityFromRivhit);
 router.put('/:id/related', adminAuth, updateRelatedProducts);
 router.put('/:id/addons', adminAuth, updateAddOns);
+// Variant management
+router.post('/:id/variants/generate', adminAuth, generateProductVariants);
+router.put('/:id/variants/:variantId', adminAuth, updateVariant);
+router.put('/:id/variants-bulk', adminAuth, bulkUpdateVariants);
+router.delete('/:id/variants/:variantId', adminAuth, deleteVariant);
+// Attribute value images on a product
+router.get('/:id/attribute-images', adminAuth, getAttributeValueImages);
+router.put('/:id/attribute-images', adminAuth, setAttributeValueImages);
 // Partial image-only update
 router.patch('/:id/images', adminAuth, updateProductImages);
 router.post('/:id/videos', adminAuth, videoUpload.single('video'), uploadProductVideo);

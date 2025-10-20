@@ -6,13 +6,18 @@ import {
   createBanner,
   updateBanner,
   deleteBanner,
-  reorderBanners
+  reorderBanners,
+  getMobileBanners,
+  getMobileBannersByCategory
 } from '../controllers/bannerController.js';
 
 const router = express.Router();
 
 // Public
 router.get('/active', getActiveBanners);
+// Mobile optimized payloads (public)
+router.get('/mobile', getMobileBanners);
+router.get('/mobile/by-category/:slug', getMobileBannersByCategory);
 
 // Admin
 router.get('/', adminAuth, getBanners);
