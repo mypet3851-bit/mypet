@@ -3,12 +3,7 @@ import mongoose from 'mongoose';
 
 export const getBanners = async (req, res) => {
   try {
-    const { platform, categorySlug } = req.query || {};
-    const filter = {};
-    if (platform === 'mobile') Object.assign(filter, { $or: [{ platform: 'mobile' }, { platform: 'both' }] });
-    if (platform === 'web') Object.assign(filter, { $or: [{ platform: 'web' }, { platform: 'both' }] });
-    if (categorySlug) Object.assign(filter, { categorySlug });
-    const banners = await Banner.find(filter).sort('order').select('-__v');
+    const banners = await Banner.find().sort('order').select('-__v');
     res.json(banners);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -18,16 +13,8 @@ export const getBanners = async (req, res) => {
 export const getActiveBanners = async (req, res) => {
   try {
     const now = new Date();
-    const { platform, categorySlug } = req.query || {};
-    const platformFilter = platform === 'mobile'
-      ? { $or: [{ platform: 'mobile' }, { platform: 'both' }] }
-      : platform === 'web'
-        ? { $or: [{ platform: 'web' }, { platform: 'both' }] }
-        : {};
     const banners = await Banner.find({
       isActive: true,
-      ...platformFilter,
-      ...(categorySlug ? { categorySlug } : {}),
       $and: [
         { $or: [{ startDate: null }, { startDate: { $lte: now } }] },
         { $or: [{ endDate: null }, { endDate: { $gte: now } }] }
@@ -42,14 +29,7 @@ export const getActiveBanners = async (req, res) => {
 export const createBanner = async (req, res) => {
   try {
     const order = await Banner.countDocuments();
-    const { platform, categorySlug } = req.body || {};
-    // Default platform to 'web' for legacy callers
-    const banner = new Banner({
-      ...req.body,
-      platform: ['web','mobile','both'].includes(platform) ? platform : 'web',
-      categorySlug: categorySlug || '',
-      order
-    });
+    const banner = new Banner({ ...req.body, order });
     const saved = await banner.save();
     res.status(201).json(saved);
   } catch (error) {
@@ -59,75 +39,15 @@ export const createBanner = async (req, res) => {
 
 export const updateBanner = async (req, res) => {
   try {
-    const update = { ...req.body };
-    if (update.platform && !['web','mobile','both'].includes(update.platform)) {
-      return res.status(400).json({ message: 'Invalid platform' });
-    }
     const banner = await Banner.findByIdAndUpdate(
       req.params.id,
-      update,
+      req.body,
       { new: true, runValidators: true }
     );
     if (!banner) return res.status(404).json({ message: 'Banner not found' });
     res.json(banner);
   } catch (error) {
     res.status(400).json({ message: error.message });
-  }
-};
-
-// Lightweight mobile endpoints using same Banner collection
-export const getMobileBanners = async (req, res) => {
-  try {
-    const now = new Date();
-    const q = {
-      isActive: true,
-      $or: [{ platform: 'mobile' }, { platform: 'both' }],
-      $and: [
-        { $or: [{ startDate: null }, { startDate: { $lte: now } }] },
-        { $or: [{ endDate: null }, { endDate: { $gte: now } }] }
-      ]
-    };
-    const banners = await Banner.find(q).sort('order').select('-__v');
-    // Map to mobile-friendly payload
-    const data = banners.map(b => ({
-      id: b._id,
-      image: b.imageUrl,
-      title: b.title,
-      subtitle: b.subtitle || '',
-      cta: b.cta || '',
-      link: b.linkUrl || ''
-    }));
-    res.json(data);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-};
-
-export const getMobileBannersByCategory = async (req, res) => {
-  try {
-    const now = new Date();
-    const { slug } = req.params;
-    const q = {
-      isActive: true,
-      $or: [{ platform: 'mobile' }, { platform: 'both' }],
-      categorySlug: slug,
-      $and: [
-        { $or: [{ startDate: null }, { startDate: { $lte: now } }] },
-        { $or: [{ endDate: null }, { endDate: { $gte: now } }] }
-      ]
-    };
-    const banners = await Banner.find(q).sort('order').select('-__v');
-    const data = banners.map(b => ({
-      id: b._id,
-      image: b.imageUrl,
-      title: b.title,
-      subtitle: b.subtitle || '',
-      cta: b.cta || '',
-      link: b.linkUrl || ''
-    }));
-    res.json(data);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
   }
 };
 

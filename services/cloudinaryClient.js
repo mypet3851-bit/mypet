@@ -6,11 +6,8 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Load environment variables with sensible precedence
-// 1) project/.env (web + server defaults)
-// 2) server/.env (server-specific overrides)
+// Load env from project/.env
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
-dotenv.config({ path: path.resolve(__dirname, '../.env'), override: true });
 
 // Support both standard and Vite-style prefixes
 const CLOUD_NAME = process.env.CLOUDINARY_CLOUD_NAME || process.env.VITE_CLOUDINARY_CLOUD_NAME;

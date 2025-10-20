@@ -1,61 +1,14 @@
 import FooterSettings from '../models/FooterSettings.js';
 import FooterLink from '../models/FooterLink.js';
-import { deepseekTranslate, isDeepseekConfigured } from '../services/translate/deepseek.js';
 
 // Get footer settings
 export const getFooterSettings = async (req, res) => {
   try {
-    const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
-    const allowAuto = isDeepseekConfigured();
     let settings = await FooterSettings.findOne();
     if (!settings) {
       settings = await FooterSettings.create({});
     }
-    const obj = settings.toObject();
-    if (reqLang) {
-      // description
-      try {
-        const d = obj.description_i18n?.[reqLang] || settings.description_i18n?.get?.(reqLang);
-        if (d) obj.description = d;
-        else if (allowAuto && obj.description) {
-          try {
-            const tr = await deepseekTranslate(obj.description, 'auto', reqLang);
-            const map = new Map(settings.description_i18n || []);
-            map.set(reqLang, tr);
-            settings.description_i18n = map;
-            obj.description = tr;
-            await settings.save().catch(() => {});
-          } catch {}
-        }
-      } catch {}
-      // newsletter fields
-      obj.newsletter = obj.newsletter || {};
-      const nl = settings.newsletter || {};
-      const localizeField = async (fieldKey) => {
-        try {
-          const val = obj.newsletter?.[fieldKey];
-          const mapName = `${fieldKey}_i18n`;
-          const existing = obj.newsletter?.[mapName]?.[reqLang] || nl?.[mapName]?.get?.(reqLang);
-          if (existing) obj.newsletter[fieldKey] = existing;
-          else if (allowAuto && val) {
-            try {
-              const tr = await deepseekTranslate(val, 'auto', reqLang);
-              const currentMap = new Map(nl?.[mapName] || []);
-              currentMap.set(reqLang, tr);
-              nl[mapName] = currentMap;
-              obj.newsletter[fieldKey] = tr;
-            } catch {}
-          }
-        } catch {}
-      };
-      await localizeField('title');
-      await localizeField('subtitle');
-      await localizeField('placeholder');
-      await localizeField('buttonText');
-      // Persist newsletter maps if any were added
-      try { settings.newsletter = nl; await settings.save().catch(() => {}); } catch {}
-    }
-    res.json(obj);
+    res.json(settings);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -94,27 +47,7 @@ export const updateFooterSettings = async (req, res) => {
 // Get all footer links
 export const getFooterLinks = async (req, res) => {
   try {
-    const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
-    const allowAuto = isDeepseekConfigured();
     const links = await FooterLink.find().sort('order');
-    if (reqLang) {
-      for (const l of links) {
-        try {
-          const nm = l.name_i18n?.get?.(reqLang) || (l.name_i18n && l.name_i18n[reqLang]);
-          if (nm) l.name = nm;
-          else if (allowAuto && l.name) {
-            try {
-              const tr = await deepseekTranslate(l.name, 'auto', reqLang);
-              const map = new Map(l.name_i18n || []);
-              map.set(reqLang, tr);
-              l.name_i18n = map;
-              l.name = tr;
-              await l.save().catch(() => {});
-            } catch {}
-          }
-        } catch {}
-      }
-    }
     res.json(links);
   } catch (error) {
     res.status(500).json({ message: error.message });

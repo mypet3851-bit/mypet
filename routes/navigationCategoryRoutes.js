@@ -2,7 +2,6 @@ import express from 'express';
 import { adminAuth } from '../middleware/auth.js';
 import NavigationCategory from '../models/NavigationCategory.js';
 import Category from '../models/Category.js';
-import { deepseekTranslate, isDeepseekConfigured } from '../services/translate/deepseek.js';
 
 const router = express.Router();
 
@@ -38,120 +37,10 @@ async function ensureUniqueSlug(desired, excludeId) {
 // Get all navigation categories
 router.get('/', async (req, res) => {
   try {
-    const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
-    const allowAuto = isDeepseekConfigured();
     const categories = await NavigationCategory.find()
       .populate('categories', '_id name slug path')
       .populate('slugGroups.categories', '_id name slug path')
       .sort('order');
-    if (reqLang) {
-      // Helper: schedule async work without delaying response
-      const schedule = (fn) => { try { Promise.resolve().then(fn).catch(() => {}); } catch {} };
-      // Localize names for populated Category refs without blocking
-      const localize = (cat) => {
-        try {
-          const nm = (cat?.name_i18n && (cat.name_i18n[reqLang] || cat.name_i18n.get?.(reqLang))) || null;
-          if (nm) { cat.name = nm; return; }
-          // Use existing populated name for immediate response
-          if (cat?.name) cat.name = cat.name;
-          if (allowAuto && cat?._id && cat?.name) {
-            schedule(async () => {
-              try {
-                const full = await Category.findById(cat._id);
-                if (full?.name) {
-                  const tr = await deepseekTranslate(full.name, 'auto', reqLang);
-                  const map = new Map(full.name_i18n || []);
-                  map.set(reqLang, tr);
-                  full.name_i18n = map;
-                  await full.save().catch(() => {});
-                }
-              } catch {}
-            });
-          }
-        } catch {}
-      };
-      for (const nav of categories) {
-        try {
-          // Localize navigation item name
-          const navName = (nav?.name_i18n && (nav.name_i18n[reqLang] || nav.name_i18n.get?.(reqLang))) || null;
-          if (navName) nav.name = navName;
-          else {
-            // Immediate fallback: keep original name, schedule translation persistence
-            if (nav?.name) nav.name = nav.name;
-            if (allowAuto && nav?.name) {
-              schedule(async () => {
-                try {
-                  const tr = await deepseekTranslate(nav.name, 'auto', reqLang);
-                  const map = new Map(nav.name_i18n || []);
-                  map.set(reqLang, tr);
-                  nav.name_i18n = map;
-                  await nav.save().catch(() => {});
-                } catch {}
-              });
-            }
-          }
-
-          // Localize subCategories inline names
-          if (Array.isArray(nav.subCategories)) {
-            for (const sc of nav.subCategories) {
-              try {
-                const scName = (sc?.name_i18n && (sc.name_i18n[reqLang] || sc.name_i18n.get?.(reqLang))) || null;
-                if (scName) sc.name = scName;
-                else {
-                  if (sc?.name) sc.name = sc.name;
-                  if (allowAuto && sc?.name) {
-                    schedule(async () => {
-                      try {
-                        const tr = await deepseekTranslate(sc.name, 'auto', reqLang);
-                        const map = new Map(sc.name_i18n || []);
-                        map.set(reqLang, tr);
-                        sc.name_i18n = map;
-                        await nav.save().catch(() => {});
-                      } catch {}
-                    });
-                  }
-                }
-              } catch {}
-            }
-          }
-
-          // Localize group titles
-          if (Array.isArray(nav.slugGroups)) {
-            for (const g of nav.slugGroups) {
-              try {
-                const gTitle = (g?.title_i18n && (g.title_i18n[reqLang] || g.title_i18n.get?.(reqLang))) || null;
-                if (gTitle) g.title = gTitle;
-                else {
-                  if (g?.title) g.title = g.title;
-                  if (allowAuto && g?.title) {
-                    schedule(async () => {
-                      try {
-                        const tr = await deepseekTranslate(g.title, 'auto', reqLang);
-                        const map = new Map(g.title_i18n || []);
-                        map.set(reqLang, tr);
-                        g.title_i18n = map;
-                        await nav.save().catch(() => {});
-                      } catch {}
-                    });
-                  }
-                }
-              } catch {}
-            }
-          }
-
-          if (Array.isArray(nav.categories)) {
-            for (const c of nav.categories) localize(c);
-          }
-          if (Array.isArray(nav.slugGroups)) {
-            for (const g of nav.slugGroups) {
-              if (Array.isArray(g.categories)) {
-                for (const c of g.categories) localize(c);
-              }
-            }
-          }
-        } catch {}
-      }
-    }
     res.json(categories);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -311,57 +200,9 @@ router.delete('/:id([0-9a-fA-F]{24})', adminAuth, async (req, res) => {
 // GET groups for a navigation item
 router.get('/:id([0-9a-fA-F]{24})/groups', async (req, res) => {
   try {
-    const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
-    const allowAuto = isDeepseekConfigured();
     const doc = await NavigationCategory.findById(req.params.id)
       .populate('slugGroups.categories', '_id name slug path');
     if (!doc) return res.status(404).json({ message: 'Navigation item not found' });
-    if (reqLang) {
-      const localize = async (cat) => {
-        try {
-          const nm = (cat?.name_i18n && (cat.name_i18n[reqLang] || cat.name_i18n.get?.(reqLang))) || null;
-          if (nm) { cat.name = nm; return; }
-          if (allowAuto && cat?._id) {
-            const full = await Category.findById(cat._id);
-            if (full?.name) {
-              try {
-                const tr = await deepseekTranslate(full.name, 'auto', reqLang);
-                const map = new Map(full.name_i18n || []);
-                map.set(reqLang, tr);
-                full.name_i18n = map;
-                await full.save().catch(() => {});
-                cat.name = tr;
-              } catch {}
-            }
-          }
-        } catch {}
-      };
-      // Localize group titles
-      if (Array.isArray(doc.slugGroups)) {
-        for (const g of doc.slugGroups) {
-          try {
-            const gTitle = (g?.title_i18n && (g.title_i18n[reqLang] || g.title_i18n.get?.(reqLang))) || null;
-            if (gTitle) g.title = gTitle;
-            else if (allowAuto && g?.title) {
-              try {
-                const tr = await deepseekTranslate(g.title, 'auto', reqLang);
-                const map = new Map(g.title_i18n || []);
-                map.set(reqLang, tr);
-                g.title_i18n = map;
-                await doc.save().catch(() => {});
-                g.title = tr;
-              } catch {}
-            }
-          } catch {}
-        }
-      }
-
-      for (const g of (doc.slugGroups || [])) {
-        if (Array.isArray(g.categories)) {
-          for (const c of g.categories) await localize(c);
-        }
-      }
-    }
     res.json(doc.slugGroups || []);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -451,52 +292,10 @@ router.delete('/:id([0-9a-fA-F]{24})/groups/:groupSlug', adminAuth, async (req, 
 // Public: fetch by group slug (across all navigation items)
 router.get('/group/by-slug/:groupSlug', async (req, res) => {
   try {
-    const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
-    const allowAuto = isDeepseekConfigured();
     const doc = await NavigationCategory.findOne({ 'slugGroups.slug': req.params.groupSlug, isActive: true })
       .populate('slugGroups.categories', '_id name slug path');
     if (!doc) return res.status(404).json({ message: 'Group not found' });
     const grp = (doc.slugGroups || []).find(g => g.slug === req.params.groupSlug);
-    if (reqLang && grp) {
-      // Localize group title
-      try {
-        const gTitle = (grp?.title_i18n && (grp.title_i18n[reqLang] || grp.title_i18n.get?.(reqLang))) || null;
-        if (gTitle) grp.title = gTitle;
-        else if (allowAuto && grp?.title) {
-          try {
-            const tr = await deepseekTranslate(grp.title, 'auto', reqLang);
-            const map = new Map(grp.title_i18n || []);
-            map.set(reqLang, tr);
-            grp.title_i18n = map;
-            await doc.save().catch(() => {});
-            grp.title = tr;
-          } catch {}
-        }
-      } catch {}
-
-      if (Array.isArray(grp.categories)) {
-      const localize = async (cat) => {
-        try {
-          const nm = (cat?.name_i18n && (cat.name_i18n[reqLang] || cat.name_i18n.get?.(reqLang))) || null;
-          if (nm) { cat.name = nm; return; }
-          if (allowAuto && cat?._id) {
-            const full = await Category.findById(cat._id);
-            if (full?.name) {
-              try {
-                const tr = await deepseekTranslate(full.name, 'auto', reqLang);
-                const map = new Map(full.name_i18n || []);
-                map.set(reqLang, tr);
-                full.name_i18n = map;
-                await full.save().catch(() => {});
-                cat.name = tr;
-              } catch {}
-            }
-          }
-        } catch {}
-      };
-        for (const c of grp.categories) await localize(c);
-      }
-    }
     res.json({ navigationId: doc._id, group: grp });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -506,43 +305,10 @@ router.get('/group/by-slug/:groupSlug', async (req, res) => {
 // Public: get a single navigation category by slug with its mapped categories
 router.get('/:slug', async (req, res) => {
   try {
-    const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
-    const allowAuto = isDeepseekConfigured();
     const doc = await NavigationCategory.findOne({ slug: req.params.slug, isActive: true })
       .populate('categories', '_id name slug path')
       .populate('slugGroups.categories', '_id name slug path');
     if (!doc) return res.status(404).json({ message: 'Navigation item not found' });
-    if (reqLang) {
-      const localize = async (cat) => {
-        try {
-          const nm = (cat?.name_i18n && (cat.name_i18n[reqLang] || cat.name_i18n.get?.(reqLang))) || null;
-          if (nm) { cat.name = nm; return; }
-          if (allowAuto && cat?._id) {
-            const full = await Category.findById(cat._id);
-            if (full?.name) {
-              try {
-                const tr = await deepseekTranslate(full.name, 'auto', reqLang);
-                const map = new Map(full.name_i18n || []);
-                map.set(reqLang, tr);
-                full.name_i18n = map;
-                await full.save().catch(() => {});
-                cat.name = tr;
-              } catch {}
-            }
-          }
-        } catch {}
-      };
-      if (Array.isArray(doc.categories)) {
-        for (const c of doc.categories) await localize(c);
-      }
-      if (Array.isArray(doc.slugGroups)) {
-        for (const g of doc.slugGroups) {
-          if (Array.isArray(g.categories)) {
-            for (const c of g.categories) await localize(c);
-          }
-        }
-      }
-    }
     res.json(doc);
   } catch (error) {
     res.status(500).json({ message: error.message });

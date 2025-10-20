@@ -23,42 +23,6 @@ export const getActiveAnnouncements = async (req, res) => {
   }
 };
 
-// Platform-aware: mobile
-export const getActiveAnnouncementsMobile = async (req, res) => {
-  try {
-    const announcements = await Announcement.find({
-      isActive: true,
-      $or: [
-        { platform: { $in: ['mobile', 'both'] } },
-        { platform: { $exists: false } }
-      ]
-    })
-      .sort('order')
-      .select('-__v');
-    res.json(announcements);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-};
-
-// Platform-aware: web
-export const getActiveAnnouncementsWeb = async (req, res) => {
-  try {
-    const announcements = await Announcement.find({
-      isActive: true,
-      $or: [
-        { platform: { $in: ['web', 'both'] } },
-        { platform: { $exists: false } }
-      ]
-    })
-      .sort('order')
-      .select('-__v');
-    res.json(announcements);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-};
-
 export const createAnnouncement = async (req, res) => {
   try {
     const announcement = new Announcement({

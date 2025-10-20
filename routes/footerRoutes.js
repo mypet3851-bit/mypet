@@ -13,12 +13,10 @@ import {
 const router = express.Router();
 
 // Settings routes
-// Accepts optional ?lang=xx to localize description/newsletter fields using DeepSeek when configured
 router.get('/settings', getFooterSettings);
 router.put('/settings', adminAuth, updateFooterSettings);
 
 // Links routes
-// Accepts optional ?lang=xx to localize link names using DeepSeek when configured
 router.get('/links', getFooterLinks);
 router.post('/links', adminAuth, createFooterLink);
 router.put('/links/:id', adminAuth, updateFooterLink);

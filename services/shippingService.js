@@ -1,6 +1,5 @@
 import ShippingZone from '../models/ShippingZone.js';
 import ShippingRate from '../models/ShippingRate.js';
-import Settings from '../models/Settings.js';
 
 /**
  * Calculate shipping fee based on order details
@@ -14,24 +13,6 @@ import Settings from '../models/Settings.js';
  */
 export const calculateShippingFee = async ({ subtotal, weight, country, region, city }) => {
   try {
-    // Free shipping threshold and fixed fee override (from Settings)
-    try {
-      const s = await Settings.findOne();
-      // Free shipping if subtotal meets threshold
-      if (s?.shipping?.freeShippingEnabled) {
-        const min = typeof s.shipping.freeShippingMinSubtotal === 'number' ? s.shipping.freeShippingMinSubtotal : 0;
-        if (typeof subtotal === 'number' && subtotal >= Math.max(0, min)) {
-          return 0;
-        }
-      }
-      // Global fixed fee takes effect only if free shipping not applied
-      if (s?.shipping?.fixedFeeEnabled) {
-        const amt = typeof s.shipping.fixedFeeAmount === 'number' ? s.shipping.fixedFeeAmount : 0;
-        return Math.max(0, amt);
-      }
-    } catch (e) {
-      // Non-fatal; proceed with normal logic
-    }
     // City-first lookup: treat `countries` array as list of cities if no real country logic is used
     let zones = [];
     if (city) {
@@ -123,39 +104,6 @@ export const calculateShippingFee = async ({ subtotal, weight, country, region, 
  */
 export const getAvailableShippingOptions = async ({ country, region, city, subtotal = 0, weight = 0 }) => {
   try {
-    // Free shipping threshold and fixed fee override
-    try {
-      const s = await Settings.findOne();
-      // Free shipping if subtotal meets threshold
-      if (s?.shipping?.freeShippingEnabled) {
-        const min = typeof s.shipping.freeShippingMinSubtotal === 'number' ? s.shipping.freeShippingMinSubtotal : 0;
-        if (typeof subtotal === 'number' && subtotal >= Math.max(0, min)) {
-          return [{
-            id: 'free:threshold',
-            name: 'Free Shipping',
-            description: `Free shipping on orders over ${min}`,
-            method: 'free',
-            cost: 0,
-            zone: 'All',
-            estimatedDays: null
-          }];
-        }
-      }
-      if (s?.shipping?.fixedFeeEnabled) {
-        const amt = typeof s.shipping.fixedFeeAmount === 'number' ? s.shipping.fixedFeeAmount : 0;
-        return [{
-          id: 'fixed:store',
-          name: 'Standard Shipping',
-          description: 'Fixed fee set by store',
-          method: 'fixed_fee',
-          cost: Math.max(0, amt),
-          zone: 'All',
-          estimatedDays: null
-        }];
-      }
-    } catch (e) {
-      // ignore and continue with zone/rates logic
-    }
     // City-first strategy (we repurpose `countries` to store city names)
     let zones = [];
     if (city) {

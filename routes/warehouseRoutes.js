@@ -4,16 +4,13 @@ import {
   getWarehouseById,
   createWarehouse,
   updateWarehouse,
-  deleteWarehouse,
-  getDefaultWarehouse
+  deleteWarehouse
 } from '../controllers/warehouseController.js';
 import { adminAuth } from '../middleware/auth.js';
 
 const router = express.Router();
 
 router.get('/', adminAuth, getWarehouses);
-// Must be defined before '/:id' to avoid being captured by it
-router.get('/default', adminAuth, getDefaultWarehouse);
 router.get('/:id', adminAuth, getWarehouseById);
 router.post('/', adminAuth, createWarehouse);
 router.put('/:id', adminAuth, updateWarehouse);

@@ -4,7 +4,6 @@ import crypto from 'crypto';
 import User from '../models/User.js';
 import { saveRefreshToken, consumeRefreshToken, revokeUserTokens } from '../utils/refreshTokenStore.js';
 import { signUserJwt } from '../utils/jwt.js';
-import { normalizePhoneE164ish } from '../utils/phone.js';
 
 function issueTokens(res, userId) {
   const accessToken = signUserJwt(userId, { expiresIn: process.env.ACCESS_TOKEN_TTL || '1h' });
@@ -64,7 +63,7 @@ export const promoteToAdmin = async (req, res) => {
 
 export const register = async (req, res) => {
   try {
-  const { name, email, password, phoneNumber, region } = req.body;
+  const { name, email, password } = req.body;
   const normalizedEmail = String(email || '').toLowerCase();
 
     // Check if user already exists
@@ -78,7 +77,6 @@ export const register = async (req, res) => {
       name,
       email: normalizedEmail,
       password,
-      phoneNumber: phoneNumber ? normalizePhoneE164ish(phoneNumber, region) : undefined,
       role: 'user' // Default role
     });
 
@@ -249,40 +247,5 @@ export const logout = async (req, res) => {
     return res.json({ ok: true });
   } catch (e) {
     return res.json({ ok: true });
-  }
-};
-
-// POST /api/auth/check-identifier { identifier }
-// Checks whether an email or phone number already exists. Returns { exists: boolean, type: 'email'|'phone'|'unknown' }
-export const checkIdentifier = async (req, res) => {
-  try {
-    const raw = String(req.body?.identifier || '').trim();
-    const region = String(req.body?.region || '').trim() || undefined;
-    if (!raw) return res.status(400).json({ message: 'identifier is required' });
-    const emailRegex = /^\S+@\S+\.\S+$/;
-    const phoneRegex = /^\+?[1-9]\d{6,15}$/; // simple E.164ish
-    let type = 'unknown';
-    let exists = false;
-    if (emailRegex.test(raw)) {
-      type = 'email';
-      const user = await User.findOne({ email: raw.toLowerCase() }).select('_id');
-      exists = !!user;
-    } else if (phoneRegex.test(raw)) {
-      type = 'phone';
-      const normalized = normalizePhoneE164ish(raw, region);
-      const user = await User.findOne({ phoneNumber: normalized }).select('_id');
-      exists = !!user;
-    } else {
-      // Try coercing to phone digits and re-check
-      const digits = normalizePhoneE164ish(raw, region);
-      if (phoneRegex.test(digits)) {
-        type = 'phone';
-        const user = await User.findOne({ phoneNumber: digits }).select('_id');
-        exists = !!user;
-      }
-    }
-    return res.json({ exists, type });
-  } catch (e) {
-    return res.status(500).json({ message: 'Check failed' });
   }
 };

@@ -4,7 +4,6 @@ import {
   createOrder,
   getUserOrders,
   getAllOrders,
-  getOrderPublic,
   updateOrderStatus,
   recalculateShipping
 } from '../controllers/orderController.js';
@@ -20,11 +19,8 @@ router.post('/', (req, res, next) => {
 // Protected routes
 router.get('/my-orders', auth, getUserOrders);
 
-// Admin routes (must be before catch-all '/:id')
+// Admin routes
 router.get('/all', adminAuth, getAllOrders);
-
-// Public order details (guest checkout flow)
-router.get('/:id', getOrderPublic);
 // Full admin update (customer info, shipping address, status, fee)
 import { updateOrder } from '../controllers/orderController.js';
 router.put('/:id', adminAuth, updateOrder);
