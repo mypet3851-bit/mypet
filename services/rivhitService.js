@@ -33,8 +33,33 @@ export async function getItemQuantity({ id_item, storage_id }) {
   const sid = typeof storage_id === 'number' ? storage_id : defaultStorageId;
   if (sid && Number.isFinite(sid) && sid > 0) body.storage_id = sid;
   const url = apiUrl + '/Item.Quantity';
-  const resp = await axios.post(url, body, { timeout: 15000 });
-  const data = resp?.data || {};
+  let data;
+  try {
+    const resp = await axios.post(url, body, {
+      timeout: 15000,
+      headers: {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Accept': 'application/json'
+      }
+    });
+    data = resp?.data || {};
+  } catch (err) {
+    // Axios rejects on 4xx/5xx; try to extract meaningful message
+    const r = err?.response;
+    const status = r?.status;
+    const raw = r?.data;
+    // Rivhit sometimes returns HTML "Request Error" page on bad request
+    if (typeof raw === 'string') {
+      const hint = raw.includes('Request Error') ? ' (Rivhit Request Error – verify token_api, id_item, and API URL)' : '';
+      const e = new Error(`Rivhit ${status || ''} error${hint}`.trim());
+      e.code = status || 0;
+      throw e;
+    }
+    // JSON-like error: propagate
+    const e = new Error(`Rivhit request failed${status ? ` (${status})` : ''}`);
+    e.code = status || 0;
+    throw e;
+  }
   if (typeof data?.error_code === 'number' && data.error_code !== 0) {
     const msg = data?.client_message || data?.debug_message || 'Rivhit error';
     const err = new Error(msg);
@@ -53,8 +78,30 @@ export async function updateItem({ id_item, storage_id, ...fields }) {
   const sid = typeof storage_id === 'number' ? storage_id : defaultStorageId;
   if (sid && Number.isFinite(sid) && sid > 0) body.storage_id = sid;
   const url = apiUrl + '/Item.Update';
-  const resp = await axios.post(url, body, { timeout: 20000 });
-  const data = resp?.data || {};
+  let data;
+  try {
+    const resp = await axios.post(url, body, {
+      timeout: 20000,
+      headers: {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Accept': 'application/json'
+      }
+    });
+    data = resp?.data || {};
+  } catch (err) {
+    const r = err?.response;
+    const status = r?.status;
+    const raw = r?.data;
+    if (typeof raw === 'string') {
+      const hint = raw.includes('Request Error') ? ' (Rivhit Request Error – verify token_api, id_item, fields, and API URL)' : '';
+      const e = new Error(`Rivhit ${status || ''} error${hint}`.trim());
+      e.code = status || 0;
+      throw e;
+    }
+    const e = new Error(`Rivhit request failed${status ? ` (${status})` : ''}`);
+    e.code = status || 0;
+    throw e;
+  }
   if (typeof data?.error_code === 'number' && data.error_code !== 0) {
     const msg = data?.client_message || data?.debug_message || 'Rivhit error';
     const err = new Error(msg);
