@@ -352,7 +352,9 @@ settingsSchema.add({
     enabled: { type: Boolean, default: false },
     apiUrl: { type: String, default: 'https://api.rivhit.co.il/online/RivhitOnlineAPI.svc' },
     tokenApi: { type: String, default: '' }, // write-only style; mask in API responses
-    defaultStorageId: { type: Number, default: 0 } // 0 or empty -> all storages
+    defaultStorageId: { type: Number, default: 0 }, // 0 or empty -> all storages
+    // Transport to Rivhit: 'json' (WCF JSON endpoints) or 'soap' (SOAP/XML). Default 'json'.
+    transport: { type: String, enum: ['json', 'soap'], default: 'json' }
   }
 });
 
