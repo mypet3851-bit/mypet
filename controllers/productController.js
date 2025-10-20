@@ -617,12 +617,20 @@ export const syncQuantityFromRivhit = async (req, res) => {
     const product = await Product.findById(id);
     if (!product) return res.status(404).json({ message: 'Product not found' });
     let itemId = null;
+    // Admin override: allow specifying id_item directly for quick tests or ad-hoc syncs
+    try {
+      const overrideRaw = (req.body && (req.body.id_item ?? req.body.itemId)) ?? (req.query && (req.query.id_item ?? req.query.itemId));
+      const override = Number(overrideRaw);
+      if (Number.isFinite(override) && override > 0) {
+        itemId = override;
+      }
+    } catch {}
     if (variantId) {
       const v = (product.variants || []).id(variantId);
       if (!v) return res.status(404).json({ message: 'Variant not found' });
-      itemId = v?.rivhitItemId || null;
+      if (!itemId) itemId = v?.rivhitItemId || null;
     } else {
-      itemId = product.rivhitItemId || null;
+      if (!itemId) itemId = product.rivhitItemId || null;
     }
     if (!itemId) return res.status(400).json({ message: 'No Rivhit item id mapped for the selected entity' });
     const { quantity } = await rivhitGetQty({ id_item: Number(itemId) });
