@@ -15,7 +15,8 @@ router.get('/config', adminAuth, async (req, res) => {
       enabled: !!r.enabled,
       apiUrl: r.apiUrl || 'https://api.rivhit.co.il/online/RivhitOnlineAPI.svc',
       tokenApi: r.tokenApi ? '***' : '',
-      defaultStorageId: r.defaultStorageId || 0
+      defaultStorageId: r.defaultStorageId || 0,
+      transport: r.transport || 'json'
     });
   } catch (e) {
     res.status(500).json({ message: e.message });
@@ -28,19 +29,22 @@ router.put('/config', adminAuth, async (req, res) => {
     let s = await Settings.findOne().sort({ updatedAt: -1 });
     if (!s) s = new Settings();
     const inc = req.body || {};
-    s.rivhit = s.rivhit || { enabled: false, apiUrl: 'https://api.rivhit.co.il/online/RivhitOnlineAPI.svc', tokenApi: '', defaultStorageId: 0 };
+    s.rivhit = s.rivhit || { enabled: false, apiUrl: 'https://api.rivhit.co.il/online/RivhitOnlineAPI.svc', tokenApi: '', defaultStorageId: 0, transport: 'json' };
     if (typeof inc.enabled !== 'undefined') s.rivhit.enabled = !!inc.enabled;
     if (typeof inc.apiUrl === 'string') s.rivhit.apiUrl = inc.apiUrl.trim();
     if (typeof inc.defaultStorageId !== 'undefined') {
       const n = Number(inc.defaultStorageId);
       s.rivhit.defaultStorageId = Number.isFinite(n) && n >= 0 ? n : 0;
     }
+    if (typeof inc.transport === 'string' && ['json', 'soap'].includes(inc.transport)) {
+      s.rivhit.transport = inc.transport;
+    }
     if (typeof inc.tokenApi === 'string') {
       if (inc.tokenApi !== '***') s.rivhit.tokenApi = inc.tokenApi.trim();
     }
     try { s.markModified('rivhit'); } catch {}
     await s.save();
-    res.json({ enabled: s.rivhit.enabled, apiUrl: s.rivhit.apiUrl, tokenApi: s.rivhit.tokenApi ? '***' : '', defaultStorageId: s.rivhit.defaultStorageId || 0 });
+    res.json({ enabled: s.rivhit.enabled, apiUrl: s.rivhit.apiUrl, tokenApi: s.rivhit.tokenApi ? '***' : '', defaultStorageId: s.rivhit.defaultStorageId || 0, transport: s.rivhit.transport || 'json' });
   } catch (e) {
     res.status(500).json({ message: e.message });
   }
