@@ -1,11 +1,29 @@
 import axios from 'axios';
 import Settings from '../models/Settings.js';
 
+// Normalize and sanitize base URL to Rivhit .svc endpoint (avoid double-method segments)
+function normalizeApiBase(u) {
+  let url = String(u || '').trim();
+  if (!url) url = 'https://api.rivhit.co.il/online/RivhitOnlineAPI.svc';
+  // remove whitespace and trailing slashes
+  url = url.replace(/\s+/g, '').replace(/\/+$/, '');
+  // strip accidental method segments or /JSON suffixes added by mistake
+  url = url.replace(/\/(JSON|SOAP)\/(Item\.[A-Za-z]+|Status\.[A-Za-z]+|[A-Za-z_]+)$/i, '');
+  url = url.replace(/\/(Item\.[A-Za-z]+|Status\.[A-Za-z]+|[A-Za-z_]+)$/i, '');
+  // ensure ends with .svc
+  if (!/\.svc$/i.test(url)) {
+    if (/\/online$/i.test(url)) url += '/RivhitOnlineAPI.svc';
+    else if (/rivhit\.co\.il\/online/i.test(url)) url += '/RivhitOnlineAPI.svc';
+    else url += '/RivhitOnlineAPI.svc';
+  }
+  return url;
+}
+
 async function getConfig() {
   let s = await Settings.findOne();
   if (!s) s = await Settings.create({});
   const cfg = s.rivhit || {};
-  const apiUrl = (cfg.apiUrl || 'https://api.rivhit.co.il/online/RivhitOnlineAPI.svc').replace(/\/$/, '');
+  const apiUrl = normalizeApiBase(cfg.apiUrl || 'https://api.rivhit.co.il/online/RivhitOnlineAPI.svc');
   const token = cfg.tokenApi || process.env.RIVHIT_TOKEN || '';
   const defaultStorageId = Number(cfg.defaultStorageId || 0) || 0;
   const transport = cfg.transport === 'soap' ? 'soap' : 'json';
@@ -73,6 +91,50 @@ function maskToken(t) {
   return str.slice(0,3) + '***' + str.slice(-3);
 }
 
+function looksLikeHtmlError(resp) {
+  try {
+    const ct = resp?.headers?.['content-type'] || resp?.headers?.['Content-Type'];
+    if (ct && /text\/html/i.test(String(ct))) return true;
+    const body = resp?.data;
+    if (typeof body === 'string') {
+      const s = body;
+      return /<html|Request Error|The incoming message has an unexpected message format/i.test(s);
+    }
+  } catch {}
+  return false;
+}
+
+function buildJsonMethodCandidates(base, method) {
+  const b = base.replace(/\/$/, '');
+  const noSvc = b.replace(/RivhitOnlineAPI\.svc$/i, '');
+  // Try standard, JSON subpath, and service-root variants
+  return [
+    `${b}/${method}`,
+    `${b}/JSON/${method}`,
+    `${noSvc}/JSON/${method}`,
+    `${noSvc}/${method}`
+  ].filter((v, i, a) => a.indexOf(v) === i);
+}
+
+async function postSoap(apiUrl, action, envelope, timeoutMs = 20000) {
+  const headersList = [
+    { 'Content-Type': 'text/xml; charset=utf-8', 'SOAPAction': `https://api.rivhit.co.il/online/${action}` },
+    { 'Content-Type': 'text/xml; charset=utf-8' },
+    { 'Content-Type': 'text/xml; charset=utf-8', 'SOAPAction': `http://tempuri.org/IRivhitOnlineAPI/${action}` }
+  ];
+  let lastErr = null;
+  for (let i = 0; i < headersList.length; i++) {
+    try {
+      const resp = await axios.post(apiUrl, envelope, { timeout: timeoutMs, headers: headersList[i] });
+      return resp;
+    } catch (e) {
+      lastErr = e;
+      // try next header variant
+    }
+  }
+  throw lastErr || new Error('SOAP request failed');
+}
+
 export async function getItemQuantity({ id_item, storage_id }) {
   const { enabled, apiUrl, token, defaultStorageId, transport } = await getConfig();
   if (!enabled) throw new Error('Rivhit integration disabled');
@@ -93,13 +155,7 @@ export async function getItemQuantity({ id_item, storage_id }) {
     const envelope = buildSoapEnvelope(action, `\n${inner}\n`);
     const url = apiUrl;
     try {
-      const resp = await axios.post(url, envelope, {
-        timeout: 20000,
-        headers: {
-          'Content-Type': 'text/xml; charset=utf-8',
-          'SOAPAction': `https://api.rivhit.co.il/online/${action}`
-        }
-      });
+      const resp = await postSoap(url, action, envelope, 20000);
       const xml = resp?.data || '';
       const quantity = parseSoapQuantity(xml);
       return { quantity };
@@ -113,31 +169,41 @@ export async function getItemQuantity({ id_item, storage_id }) {
   } else {
     const body = { token_api: token, id_item };
     if (sid && Number.isFinite(sid) && sid > 0) body.storage_id = sid;
-    const url = apiUrl + '/Item.Quantity';
-    let data;
-    try {
-      const resp = await axios.post(url, body, {
-        timeout: 15000,
-        headers: { 'Content-Type': 'application/json; charset=utf-8', 'Accept': 'application/json' }
-      });
-      data = resp?.data || {};
-    } catch (err) {
-      const r = err?.response;
-      const status = r?.status;
-      const raw = r?.data;
-      if (typeof raw === 'string') {
-        const isReqErr = raw.includes('Request Error');
-        if (isReqErr) {
-          // Auto-fallback: try SOAP once if JSON endpoint returns the HTML error page
+    const candidates = buildJsonMethodCandidates(apiUrl, 'Item.Quantity');
+    let lastErr = null;
+    for (let i = 0; i < candidates.length; i++) {
+      const url = candidates[i];
+      try {
+        const resp = await axios.post(url, body, {
+          timeout: 15000,
+          headers: { 'Content-Type': 'application/json; charset=utf-8', 'Accept': 'application/json' }
+        });
+        const data = resp?.data || {};
+        if (typeof data?.error_code === 'number' && data.error_code !== 0) {
+          const msg = data?.client_message || data?.debug_message || 'Rivhit error';
+          const err = new Error(msg);
+          err.code = data.error_code;
+          throw err;
+        }
+        const qty = data?.data?.quantity;
+        return { quantity: typeof qty === 'number' ? qty : 0 };
+      } catch (err) {
+        const r = err?.response;
+        const status = r?.status;
+        const isHtml = looksLikeHtmlError(r);
+        lastErr = err;
+        if (isHtml) {
+          // Try next JSON variant; if none left, fall back to SOAP
+          if (i < candidates.length - 1) {
+            console.warn(`[rivhit] JSON call returned HTML at %s; trying next variant (%d/%d)`, url, i + 2, candidates.length);
+            continue;
+          }
           try {
-            console.warn('[rivhit] JSON call returned HTML Request Error; attempting SOAP fallback');
+            console.warn('[rivhit] JSON call returned HTML on all variants; attempting SOAP fallback');
             const action = 'Item_Quantity';
             const inner = `      <token_api>${xmlEscape(token)}</token_api>\n      <id_item>${nItem}</id_item>` + (sid && Number.isFinite(sid) && sid > 0 ? `\n      <storage_id>${Number(sid)}</storage_id>` : '');
             const envelope = buildSoapEnvelope(action, `\n${inner}\n`);
-            const resp2 = await axios.post(apiUrl, envelope, {
-              timeout: 20000,
-              headers: { 'Content-Type': 'text/xml; charset=utf-8', 'SOAPAction': `https://api.rivhit.co.il/online/${action}` }
-            });
+            const resp2 = await postSoap(apiUrl, action, envelope, 20000);
             const xml = resp2?.data || '';
             const quantity = parseSoapQuantity(xml);
             return { quantity };
@@ -146,23 +212,15 @@ export async function getItemQuantity({ id_item, storage_id }) {
             e2.code = 400; throw e2;
           }
         }
-        const hint = ' (Rivhit Request Error – verify token_api, id_item, and API URL)';
-        const e = new Error(`Rivhit ${status || ''} error${hint}`.trim());
+        // Non-HTML error: bubble with hint
+        const hint = ' (verify token_api, id_item, storage_id and API URL)';
+        const e = new Error(`Rivhit request failed${status ? ` (${status})` : ''}${hint}`);
         e.code = status || 0;
         throw e;
       }
-      const e = new Error(`Rivhit request failed${status ? ` (${status})` : ''}`);
-      e.code = status || 0;
-      throw e;
     }
-    if (typeof data?.error_code === 'number' && data.error_code !== 0) {
-      const msg = data?.client_message || data?.debug_message || 'Rivhit error';
-      const err = new Error(msg);
-      err.code = data.error_code;
-      throw err;
-    }
-    const qty = data?.data?.quantity;
-    return { quantity: typeof qty === 'number' ? qty : 0 };
+    // Should not reach here; throw last error
+    throw lastErr || new Error('Rivhit request failed');
   }
 }
 
@@ -183,13 +241,7 @@ export async function updateItem({ id_item, storage_id, ...fields }) {
     const envelope = buildSoapEnvelope(action, `\n${inner}\n`);
     const url = apiUrl;
     try {
-      const resp = await axios.post(url, envelope, {
-        timeout: 25000,
-        headers: {
-          'Content-Type': 'text/xml; charset=utf-8',
-          'SOAPAction': `https://api.rivhit.co.il/online/${action}`
-        }
-      });
+      const resp = await postSoap(url, action, envelope, 25000);
       const xml = resp?.data || '';
       // Consider any 200 a success unless explicit fault detected
       if (/<faultstring>/i.test(String(xml))) {
@@ -210,50 +262,52 @@ export async function updateItem({ id_item, storage_id, ...fields }) {
   } else {
     const body = { token_api: token, id_item, ...fields };
     if (sid && Number.isFinite(sid) && sid > 0) body.storage_id = sid;
-    const url = apiUrl + '/Item.Update';
-    let data;
-    try {
-      const resp = await axios.post(url, body, {
-        timeout: 20000,
-        headers: { 'Content-Type': 'application/json; charset=utf-8', 'Accept': 'application/json' }
-      });
-      data = resp?.data || {};
-    } catch (err) {
-      const r = err?.response;
-      const status = r?.status;
-      const raw = r?.data;
-      if (typeof raw === 'string') {
-        const isReqErr = raw.includes('Request Error');
-        if (isReqErr) {
-          // Attempt SOAP fallback
+    const candidates = buildJsonMethodCandidates(apiUrl, 'Item.Update');
+    let lastErr = null;
+    for (let i = 0; i < candidates.length; i++) {
+      const url = candidates[i];
+      try {
+        const resp = await axios.post(url, body, {
+          timeout: 20000,
+          headers: { 'Content-Type': 'application/json; charset=utf-8', 'Accept': 'application/json' }
+        });
+        const data = resp?.data || {};
+        if (typeof data?.error_code === 'number' && data.error_code !== 0) {
+          const msg = data?.client_message || data?.debug_message || 'Rivhit error';
+          const err = new Error(msg);
+          err.code = data.error_code;
+          throw err;
+        }
+        return { update_success: !!data?.data?.update_success };
+      } catch (err) {
+        const r = err?.response;
+        const status = r?.status;
+        const isHtml = looksLikeHtmlError(r);
+        lastErr = err;
+        if (isHtml) {
+          if (i < candidates.length - 1) {
+            console.warn(`[rivhit] JSON update returned HTML at %s; trying next variant (%d/%d)`, url, i + 2, candidates.length);
+            continue;
+          }
           try {
-            console.warn('[rivhit] JSON update returned HTML Request Error; attempting SOAP fallback');
+            console.warn('[rivhit] JSON update returned HTML on all variants; attempting SOAP fallback');
             const action = 'Item_Update';
             const fieldsXml = Object.entries(fields).map(([k,v]) => `      <${k}>${xmlEscape(v)}</${k}>`).join('\n');
             const inner = `      <token_api>${xmlEscape(token)}</token_api>\n      <id_item>${nItem}</id_item>` + (sid && Number.isFinite(sid) && sid > 0 ? `\n      <storage_id>${Number(sid)}</storage_id>` : '') + (fieldsXml ? `\n${fieldsXml}` : '');
             const envelope = buildSoapEnvelope(action, `\n${inner}\n`);
-            await axios.post(apiUrl, envelope, { timeout: 25000, headers: { 'Content-Type': 'text/xml; charset=utf-8', 'SOAPAction': `https://api.rivhit.co.il/online/${action}` } });
+            await postSoap(apiUrl, action, envelope, 25000);
             return { update_success: true };
           } catch (soapErr) {
             const e2 = new Error('Rivhit 400 error (Request Error – JSON and SOAP both failed)'); e2.code = 400; throw e2;
           }
         }
-        const hint = ' (Rivhit Request Error – verify token_api, id_item, fields, and API URL)';
-        const e = new Error(`Rivhit ${status || ''} error${hint}`.trim());
+        const hint = ' (verify token_api, id_item, fields and API URL)';
+        const e = new Error(`Rivhit request failed${status ? ` (${status})` : ''}${hint}`);
         e.code = status || 0;
         throw e;
       }
-      const e = new Error(`Rivhit request failed${status ? ` (${status})` : ''}`);
-      e.code = status || 0;
-      throw e;
     }
-    if (typeof data?.error_code === 'number' && data.error_code !== 0) {
-      const msg = data?.client_message || data?.debug_message || 'Rivhit error';
-      const err = new Error(msg);
-      err.code = data.error_code;
-      throw err;
-    }
-    return { update_success: !!data?.data?.update_success };
+    throw lastErr || new Error('Rivhit request failed');
   }
 }
 
