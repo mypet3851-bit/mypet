@@ -1,4 +1,7 @@
 import express from 'express';
+import mongoose from 'mongoose';
+import Product from '../models/Product.js';
+import Category from '../models/Category.js';
 import {
   // Register management
   createRegister,
@@ -77,8 +80,65 @@ router.get('/users/current', async (req, res) => {
 // Product search for POS (basic implementation)
 router.get('/products/search', async (req, res) => {
   try {
-    // Return empty array for now
-    res.json([]);
+    let { q = '', barcode, limit = 24, categoryId } = req.query;
+
+  const maxLimit = 60;
+  const take = Math.min(parseInt(limit, 10) || 24, maxLimit);
+
+  const filter = { isActive: { $ne: false } };
+
+    if (barcode && typeof barcode === 'string' && barcode.trim()) {
+      const code = barcode.trim();
+      filter.$or = [
+        { barcode: code },
+        { sku: code }
+      ];
+    } else if (q && typeof q === 'string' && q.trim()) {
+      let term = q.trim();
+      if (term.length > 64) term = term.slice(0, 64);
+      const regex = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      const or = [
+        { name: regex },
+        { description: regex },
+        { sku: regex },
+        { barcode: regex }
+      ];
+
+      // Try to match categories by name too
+      try {
+        const cats = await Category.find({ name: regex }).select('_id').lean();
+        if (cats.length) {
+          const ids = cats.map(c => c._id);
+          or.push({ category: { $in: ids } });
+          or.push({ categories: { $in: ids } });
+        }
+      } catch {}
+
+      filter.$or = or;
+    }
+
+    if (categoryId && typeof categoryId === 'string' && categoryId.trim()) {
+      try {
+        const cid = new mongoose.Types.ObjectId(categoryId.trim());
+        filter.$or = filter.$or || [];
+        filter.$or.push({ category: cid });
+        filter.$or.push({ categories: cid });
+      } catch {}
+    }
+
+    const docs = await Product.find(filter)
+      .select('name price images sku barcode category categories')
+      .limit(take)
+      .sort({ createdAt: -1 })
+      .lean();
+
+    // Provide minimal inventory info so POS UI can enable Add button; real check happens via /pos/inventory/.../check
+    const data = docs.map(d => ({
+      ...d,
+      inventory: { availableQuantity: 100 },
+    }));
+
+    res.json(data);
   } catch (error) {
     res.status(500).json({ message: 'Error searching products', error: error.message });
   }
