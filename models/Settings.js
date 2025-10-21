@@ -718,6 +718,8 @@ settingsSchema.add({
       enabled: { type: Boolean, default: false },
       // Endpoint to obtain hosted payment URL
       apiUrl: { type: String, default: 'https://icredit.rivhit.co.il/API/PaymentPageRequest.svc/GetUrl' },
+      // Preferred transport for PaymentPageRequest: 'auto' (JSON then SOAP), 'json' (JSON only), 'soap' (SOAP only)
+      transport: { type: String, enum: ['auto','json','soap'], default: 'auto' },
       // Secret token provided by Rivhit/iCredit (write-only style; mask in API responses)
       groupPrivateToken: { type: String, default: '' },
       // Defaults for building requests (can be overridden per checkout session)
@@ -886,6 +888,7 @@ settingsSchema.statics.createDefaultSettings = async function() {
           icredit: {
             enabled: false,
             apiUrl: 'https://icredit.rivhit.co.il/API/PaymentPageRequest.svc/GetUrl',
+            transport: 'auto',
             groupPrivateToken: '',
             redirectURL: '',
             ipnURL: '',
@@ -925,6 +928,7 @@ settingsSchema.statics.createDefaultSettings = async function() {
           icredit: {
             enabled: false,
             apiUrl: 'https://icredit.rivhit.co.il/API/PaymentPageRequest.svc/GetUrl',
+            transport: 'auto',
             groupPrivateToken: '',
             redirectURL: '',
             ipnURL: '',
