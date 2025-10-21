@@ -466,16 +466,28 @@ export async function listItems({ page, page_size } = {}) {
           timeout: 25000,
           headers: { 'Content-Type': 'application/json; charset=utf-8', 'Accept': 'application/json' }
         });
-        const data = resp?.data || {};
-        if (typeof data?.error_code === 'number' && data.error_code !== 0) {
-          const msg = data?.client_message || data?.debug_message || 'Rivhit error';
-          const err = new Error(msg); err.code = data.error_code; throw err;
+        const raw = resp?.data || {};
+        if (typeof raw?.error_code === 'number' && raw.error_code !== 0) {
+          const msg = raw?.client_message || raw?.debug_message || 'Rivhit error';
+          const err = new Error(msg); err.code = raw.error_code; throw err;
         }
-        const items = Array.isArray(data?.data?.items) ? data.data.items
-          : Array.isArray(data?.items) ? data.items
-          : Array.isArray(data?.data) ? data.data
-          : [];
-        return items || [];
+        // Rivhit responses can shape items in several ways: data.item_list, data.items, items, item_list, or data as array
+        const payload = (raw && typeof raw === 'object' && raw.data !== undefined) ? raw.data : raw;
+        let items = [];
+        if (Array.isArray(payload?.items)) items = payload.items;
+        else if (Array.isArray(payload?.item_list)) items = payload.item_list;
+        else if (Array.isArray(raw?.items)) items = raw.items;
+        else if (Array.isArray(raw?.item_list)) items = raw.item_list;
+        else if (Array.isArray(payload)) items = payload;
+        // As a last resort, if payload has a single key pointing to an array, use it
+        if (!Array.isArray(items)) {
+          try {
+            const firstArrayKey = Object.keys(payload || {}).find(k => Array.isArray(payload[k]));
+            if (firstArrayKey) items = payload[firstArrayKey];
+          } catch {}
+        }
+        if (!Array.isArray(items)) items = [];
+        return items;
       } catch (err) {
         lastErr = err;
         const isHtml = looksLikeHtmlError(err?.response);

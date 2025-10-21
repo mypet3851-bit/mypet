@@ -116,14 +116,17 @@ router.post('/sync-items', adminAuth, async (req, res) => {
     const { defaultCategoryId, page, page_size, dryRun } = req.body || {};
     const dry = !!dryRun || String(req.query?.dryRun || '').toLowerCase() === 'true';
     // Fetch items list from Rivhit (may be paginated); for MVP, one page
-    const items = await listItems({ page, page_size });
-    const sampleKeys = Array.isArray(items) && items[0] ? Object.keys(items[0]) : [];
+  const items = await listItems({ page, page_size });
+  const sampleKeys = Array.isArray(items) && items[0] ? Object.keys(items[0]) : [];
     // Build a map of existing rivhitItemIds to skip duplicates
     const ids = items
       .map((it) => Number(it?.id_item ?? it?.item_id ?? it?.id))
       .filter((n) => Number.isFinite(n) && n > 0);
     const codes = items
-      .map((it) => String(it?.item_code ?? it?.code ?? it?.ItemCode ?? '').trim())
+      .map((it) => {
+        const c = (it?.item_code ?? it?.code ?? it?.ItemCode ?? it?.item_part_num ?? it?.part_num ?? it?.itempartnum ?? it?.barcode ?? '').toString().trim();
+        return c;
+      })
       .filter(Boolean);
     const uniqueIds = Array.from(new Set(ids));
     const uniqueCodes = Array.from(new Set(codes));
@@ -150,17 +153,24 @@ router.post('/sync-items', adminAuth, async (req, res) => {
     let skippedAsDuplicate = 0;
     for (const it of items) {
       const rid = Number(it?.id_item ?? it?.item_id ?? it?.id);
-      const rcode = String(it?.item_code ?? it?.code ?? it?.ItemCode ?? '').trim();
+      const rcode = (it?.item_code ?? it?.code ?? it?.ItemCode ?? it?.item_part_num ?? it?.part_num ?? it?.itempartnum ?? it?.barcode ?? '').toString().trim();
       if ((!Number.isFinite(rid) || rid <= 0) && !rcode) { skippedByMissingKey++; continue; }
       if ((Number.isFinite(rid) && rid > 0 && existingIdSet.has(rid)) || (rcode && existingCodeSet.has(rcode))) { skippedAsDuplicate++; continue; }
       // Map fields with safe defaults
-      const name = (it?.item_name || it?.name || `Item ${rid}`).toString().trim() || `Item ${rid}`;
-      const desc = (it?.description || it?.item_description || '').toString();
-      const priceRaw = Number(it?.price || it?.sale_price || it?.Price);
+      const nameCandidate = (it?.item_name ?? it?.name ?? it?.item_name_en ?? rcode ?? (Number.isFinite(rid) && rid > 0 ? `Item ${rid}` : '')).toString().trim();
+      const name = nameCandidate || (Number.isFinite(rid) && rid > 0 ? `Item ${rid}` : (rcode || 'Rivhit Item'));
+      const desc = (it?.item_extended_description ?? it?.description ?? it?.item_description ?? '').toString();
+      const priceRaw = Number(
+        it?.sale_nis ?? it?.sale_price ?? it?.price ?? it?.Price ?? it?.sale_mtc ?? it?.cost_nis ?? 0
+      );
       const price = Number.isFinite(priceRaw) && priceRaw >= 0 ? priceRaw : 0;
-      const stockRaw = Number(it?.quantity || it?.stock || it?.Quantity);
+      const stockRaw = Number(it?.quantity ?? it?.stock ?? it?.Quantity);
       const stock = Number.isFinite(stockRaw) && stockRaw >= 0 ? stockRaw : 0;
-      const images = Array.isArray(it?.images) && it.images.length ? it.images.map(String) : [];
+      const picture = (it?.picture_link ?? '').toString().trim();
+      const pictureUrl = /^(https?:\/\/|\/)/i.test(picture) ? picture : '';
+      const images = Array.isArray(it?.images) && it.images.length
+        ? it.images.map(String)
+        : (pictureUrl ? [pictureUrl] : []);
       const doc = {
         name,
         description: desc || 'Imported from Rivhit',
