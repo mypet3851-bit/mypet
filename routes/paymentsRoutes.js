@@ -1,5 +1,4 @@
 import express from 'express';
-import fetch from 'node-fetch';
 import Order from '../models/Order.js';
 import { loadSettings, requestICreditPaymentUrl, buildICreditRequest } from '../services/icreditService.js';
 
@@ -16,8 +15,6 @@ router.post('/icredit/ipn', async (req, res) => {
     res.status(500).json({ ok: false, message: e?.message || 'ipn_error' });
   }
 });
-
-export default router;
 
 // Create hosted payment session for iCredit from an existing order
 router.post('/icredit/create-session', async (req, res) => {
@@ -40,3 +37,5 @@ router.post('/icredit/create-session', async (req, res) => {
     res.status(500).json({ message: e.message });
   }
 });
+
+export default router;

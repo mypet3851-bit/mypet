@@ -131,11 +131,17 @@ const corsOptions = {
     // Allow non-browser requests (no origin) like curl/health checks
     if (!origin) return callback(null, true);
     // Allow any Netlify preview/production subdomain if desired
-    const isNetlify = /\.netlify\.app$/i.test(origin) || /\.netlify\.live$/i.test(origin);
+    const isNetlify = /.netlify\.app$/i.test(origin) || /.netlify\.live$/i.test(origin);
     // Allow any localhost/127.0.0.1 origin regardless of port for development
     try {
       const u = new URL(origin);
-      if (['localhost', '127.0.0.1', '::1'].includes(u.hostname)) {
+      const host = u.hostname;
+      if (['localhost', '127.0.0.1', '::1'].includes(host)) {
+        return callback(null, true);
+      }
+      // Allow private LAN IPs during development (e.g., testing from a phone on 192.168.x.x)
+      const isPrivateIPv4 = /^10\./.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[0-1])\./.test(host);
+      if (isPrivateIPv4 && process.env.NODE_ENV !== 'production') {
         return callback(null, true);
       }
     } catch {}
