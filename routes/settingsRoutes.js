@@ -342,6 +342,21 @@ router.get('/version', async (req, res) => {
     const updatedAt = settings.updatedAt instanceof Date ? settings.updatedAt : new Date();
     // Version can be milliseconds timestamp; easy to compare client-side
     const version = updatedAt.getTime();
+
+    // Conditional GET: honor If-None-Match/If-Modified-Since for lightweight polling
+    const etag = `W/"ver-${version}"`;
+    res.setHeader('ETag', etag);
+    res.setHeader('Last-Modified', updatedAt.toUTCString());
+    res.setHeader('Cache-Control', 'no-cache');
+    const inm = req.headers['if-none-match'];
+    const ims = req.headers['if-modified-since'];
+    const notModifiedByEtag = inm && String(inm) === etag;
+    const notModifiedByTime = ims && new Date(ims).getTime() >= updatedAt.getTime();
+    if (notModifiedByEtag || notModifiedByTime) {
+      try { console.log('REQ GET /api/settings/version -> 304 (conditional)'); } catch {}
+      return res.status(304).end();
+    }
+
     res.json({ version, updatedAt: updatedAt.toISOString() });
   } catch (error) {
     res.status(500).json({ message: error.message });
