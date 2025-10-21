@@ -665,7 +665,8 @@ export const syncQuantityFromRivhit = async (req, res) => {
     res.json({ synced: true, quantity, id_item: Number(itemId), storage_id: (Number.isFinite(storage_id) && storage_id > 0) ? storage_id : undefined });
   } catch (e) {
     console.error('syncQuantityFromRivhit error', e);
-    res.status(400).json({ message: e?.message || 'Failed to sync quantity', code: e?.code || 0 });
+    const status = e?.code === 412 ? 412 : 400;
+    res.status(status).json({ message: e?.message || 'Failed to sync quantity', code: e?.code || 0 });
   }
 };
 
