@@ -63,12 +63,14 @@ const inventorySchema = new mongoose.Schema({
 // 1) Unique per product+variant+warehouse when variantId is set
 inventorySchema.index(
   { product: 1, variantId: 1, warehouse: 1 },
-  { unique: true, partialFilterExpression: { variantId: { $type: 'objectId' } } }
+  // Use $exists:true for broad compatibility (avoid $type in partial indexes on older MongoDB)
+  { unique: true, partialFilterExpression: { variantId: { $exists: true } } }
 );
 // 2) Backward-compat: unique per product+size+color+warehouse when variantId is NOT set
 inventorySchema.index(
   { product: 1, size: 1, color: 1, warehouse: 1 },
-  { unique: true, partialFilterExpression: { variantId: { $exists: false } } }
+  // Use equality-to-null which matches both null and non-existent fields; $exists:false may not be supported in partial indexes on some MongoDB versions
+  { unique: true, partialFilterExpression: { variantId: null } }
 );
 
 // Update status based on quantity
