@@ -1,7 +1,9 @@
 import express from 'express';
 import Settings from '../models/Settings.js';
 import { adminAuth } from '../middleware/auth.js';
-import { getItemQuantity, updateItem, testConnectivity, getLastRequest, getErrorMessage } from '../services/rivhitService.js';
+import { getItemQuantity, updateItem, testConnectivity, getLastRequest, getErrorMessage, listItems } from '../services/rivhitService.js';
+import Product from '../models/Product.js';
+import Category from '../models/Category.js';
 
 const router = express.Router();
 
@@ -104,6 +106,75 @@ router.post('/update', adminAuth, async (req, res) => {
     res.json(r);
   } catch (e) {
     res.status(400).json({ message: e?.message || 'update_failed', code: e?.code || 0 });
+  }
+});
+
+// Sync items from Rivhit into Products: create only new ones (no duplicates)
+router.post('/sync-items', adminAuth, async (req, res) => {
+  try {
+    // Incoming mapping options
+    const { defaultCategoryId, page, page_size } = req.body || {};
+    // Fetch items list from Rivhit (may be paginated); for MVP, one page
+    const items = await listItems({ page, page_size });
+    // Build a map of existing rivhitItemIds to skip duplicates
+    const ids = items
+      .map((it) => Number(it?.id_item || it?.item_id || it?.id))
+      .filter((n) => Number.isFinite(n) && n > 0);
+    const uniqueIds = Array.from(new Set(ids));
+    const existing = await Product.find({ rivhitItemId: { $in: uniqueIds } }).select('rivhitItemId');
+    const existingSet = new Set(existing.map((p) => Number(p.rivhitItemId)));
+    // Pick a default category if provided, else first category
+    let categoryId = null;
+    if (typeof defaultCategoryId === 'string' && /^[a-fA-F0-9]{24}$/.test(defaultCategoryId)) {
+      const ok = await Category.findById(defaultCategoryId).select('_id');
+      if (ok) categoryId = ok._id;
+    }
+    if (!categoryId) {
+      const first = await Category.findOne({}).select('_id').sort({ createdAt: 1 });
+      if (first) categoryId = first._id;
+    }
+    if (!categoryId) return res.status(400).json({ message: 'No category available; create a category first or pass defaultCategoryId' });
+
+    const toInsert = [];
+    for (const it of items) {
+      const rid = Number(it?.id_item || it?.item_id || it?.id);
+      if (!Number.isFinite(rid) || rid <= 0) continue;
+      if (existingSet.has(rid)) continue; // skip duplicates
+      // Map fields with safe defaults
+      const name = (it?.item_name || it?.name || `Item ${rid}`).toString().trim() || `Item ${rid}`;
+      const desc = (it?.description || it?.item_description || '').toString();
+      const priceRaw = Number(it?.price || it?.sale_price || it?.Price);
+      const price = Number.isFinite(priceRaw) && priceRaw >= 0 ? priceRaw : 0;
+      const stockRaw = Number(it?.quantity || it?.stock || it?.Quantity);
+      const stock = Number.isFinite(stockRaw) && stockRaw >= 0 ? stockRaw : 0;
+      const images = Array.isArray(it?.images) && it.images.length ? it.images.map(String) : [];
+      toInsert.push({
+        name,
+        description: desc || 'Imported from Rivhit',
+        price,
+        originalPrice: undefined,
+        images: images.length ? images : ['/placeholder-image.svg'],
+        category: categoryId,
+        stock,
+        relatedProducts: [],
+        isActive: true,
+        rivhitItemId: rid
+      });
+    }
+    let created = [];
+    if (toInsert.length) {
+      created = await Product.insertMany(toInsert, { ordered: false }).catch((e) => {
+        // Ignore duplicate key errors due to race conditions
+        if (e?.writeErrors) {
+          const inserted = e.result?.nInserted || 0;
+          return toInsert.slice(0, inserted);
+        }
+        throw e;
+      });
+    }
+    res.json({ total: items.length, existing: existingSet.size, created: created.length, skipped: items.length - created.length });
+  } catch (e) {
+    res.status(400).json({ message: e?.message || 'sync_items_failed' });
   }
 });
 
