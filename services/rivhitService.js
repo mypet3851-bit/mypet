@@ -441,3 +441,56 @@ export default {
   getLastRequest,
   getErrorMessage
 };
+
+// List items from Rivhit (Item.List) with JSON transport
+export async function listItems({ page, page_size } = {}) {
+  const { enabled, apiUrl, token, transport } = await getConfig();
+  if (!enabled) throw new Error('Rivhit integration disabled');
+  if (!token) throw new Error('Rivhit API token not configured');
+  if (transport === 'soap') {
+    // This build supports Item.List via JSON only for simplicity
+    throw new Error('Item.List supported only with JSON transport');
+  }
+  const bases = buildAlternateBases(apiUrl);
+  const body = { token_api: token, api_token: token };
+  if (Number.isFinite(Number(page)) && Number(page) > 0) body.page = Number(page);
+  if (Number.isFinite(Number(page_size)) && Number(page_size) > 0) body.page_size = Number(page_size);
+  let lastErr = null;
+  for (let bIdx = 0; bIdx < bases.length; bIdx++) {
+    const base = bases[bIdx];
+    const candidates = buildJsonMethodCandidates(base, 'Item.List');
+    for (let i = 0; i < candidates.length; i++) {
+      const url = candidates[i];
+      try {
+        const resp = await axios.post(url, body, {
+          timeout: 25000,
+          headers: { 'Content-Type': 'application/json; charset=utf-8', 'Accept': 'application/json' }
+        });
+        const data = resp?.data || {};
+        if (typeof data?.error_code === 'number' && data.error_code !== 0) {
+          const msg = data?.client_message || data?.debug_message || 'Rivhit error';
+          const err = new Error(msg); err.code = data.error_code; throw err;
+        }
+        const items = Array.isArray(data?.data?.items) ? data.data.items
+          : Array.isArray(data?.items) ? data.items
+          : Array.isArray(data?.data) ? data.data
+          : [];
+        return items || [];
+      } catch (err) {
+        lastErr = err;
+        const isHtml = looksLikeHtmlError(err?.response);
+        if (!isHtml && bIdx < bases.length - 1) {
+          // try next base host
+          continue;
+        }
+        // otherwise try next variant or fall through
+      }
+    }
+  }
+  const e = new Error('Failed to fetch Rivhit Item.List');
+  e.code = lastErr?.code || lastErr?.response?.status || 0;
+  throw e;
+}
+
+// Include named export in default export for convenience if some code imports default
+export const __rivhitServiceExtras = { listItems };
