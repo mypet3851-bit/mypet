@@ -289,10 +289,15 @@ export async function requestICreditPaymentUrl({ order, settings, overrides = {}
           lastErr = new Error(`HTTP ${r.status} ${r.statusText} at ${url}: ${text.slice(0, 180).replace(/\s+/g,' ')}`);
         } catch (e) {
           // Normalize abort/timeout errors with context so UI can show an actionable hint
-          if (e && (e.name === 'AbortError' || /aborted|AbortError/i.test(String(e.message || '')))) {
+          const code = e?.code || e?.cause?.code || e?.errno;
+          const name = e?.name;
+          const extra = code ? ` code=${code}` : '';
+          if (e && (name === 'AbortError' || /aborted|AbortError/i.test(String(e.message || '')))) {
             lastErr = new Error(`timeout after ${Math.min(PER_ATTEMPT_MAX_MS, Math.max(PER_ATTEMPT_MIN_MS, remaining()))}ms at ${url}`);
+          } else if (/ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ETIMEDOUT|CERT_|UNABLE_TO_VERIFY/i.test(String(code || ''))) {
+            lastErr = new Error(`network_error${extra} at ${url}`);
           } else {
-            lastErr = e;
+            lastErr = new Error(`fetch_failed${extra} at ${url}: ${(e?.message || '').split('\n')[0]}`);
           }
           // If we've exhausted our total budget, stop trying
           if (remaining() <= 250) break;
@@ -378,10 +383,15 @@ export async function requestICreditPaymentUrl({ order, settings, overrides = {}
             const snippet = xml.slice(0, 300).replace(/\s+/g, ' ');
             lastSoapErr = new Error(`SOAP ${r.status} at ${ep} action=${act}: ${snippet}`);
           } catch (e) {
-            if (e && (e.name === 'AbortError' || /aborted|AbortError/i.test(String(e.message || '')))) {
+            const code = e?.code || e?.cause?.code || e?.errno;
+            const name = e?.name;
+            const extra = code ? ` code=${code}` : '';
+            if (e && (name === 'AbortError' || /aborted|AbortError/i.test(String(e.message || '')))) {
               lastSoapErr = new Error(`timeout after ${Math.min(PER_ATTEMPT_MAX_MS, Math.max(PER_ATTEMPT_MIN_MS, remaining()))}ms at ${ep} action=${act}`);
+            } else if (/ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ETIMEDOUT|CERT_|UNABLE_TO_VERIFY/i.test(String(code || ''))) {
+              lastSoapErr = new Error(`network_error${extra} at ${ep} action=${act}`);
             } else {
-              lastSoapErr = e;
+              lastSoapErr = new Error(`fetch_failed${extra} at ${ep} action=${act}: ${(e?.message || '').split('\n')[0]}`);
             }
           }
         }
@@ -395,4 +405,45 @@ export async function requestICreditPaymentUrl({ order, settings, overrides = {}
   const err = new Error(`icredit_call_failed${lastErr ? ': ' + (lastErr.message || lastErr) : ''}`);
   err.status = 400;
   throw err;
+}
+
+// Diagnostics: basic connectivity and DNS checks to iCredit endpoints
+export async function diagnoseICreditConnectivity(baseUrl) {
+  const candidates = buildICreditCandidates(baseUrl).slice(0, 8);
+  const origins = Array.from(new Set(candidates.map(u => {
+    try { return new URL(u).origin; } catch { return null; }
+  }).filter(Boolean)));
+  // Resolve hostnames
+  let dnsMod = null;
+  try { dnsMod = await import('dns/promises'); } catch {}
+  const dnsResults = [];
+  for (const origin of origins) {
+    try {
+      const host = new URL(origin).hostname;
+      let addrs = [];
+      if (dnsMod?.default?.lookup) {
+        try {
+          const a4 = await dnsMod.default.lookup(host, { all: true, family: 4 }).catch(() => []);
+          const a6 = await dnsMod.default.lookup(host, { all: true, family: 6 }).catch(() => []);
+          addrs = [...a4, ...a6].map(x => x.address);
+        } catch (e) {}
+      }
+      dnsResults.push({ host, addresses: addrs });
+    } catch (e) {
+      dnsResults.push({ host: origin, error: e?.message || String(e) });
+    }
+  }
+
+  // Try a lightweight GET to origin root (connectivity + TLS). 405/404 still indicate connectivity works.
+  const httpResults = [];
+  for (const origin of origins) {
+    try {
+      const r = await fetchWithTimeout(origin + '/', { method: 'GET' }, 7000);
+      httpResults.push({ origin, status: r.status, ok: r.ok, ct: r.headers.get('content-type') || '' });
+    } catch (e) {
+      httpResults.push({ origin, error: (e?.cause?.code ? `${e.cause.code}: ` : '') + (e?.message || String(e)) });
+    }
+  }
+
+  return { baseUrl, candidates, origins, dns: dnsResults, http: httpResults };
 }

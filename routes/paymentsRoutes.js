@@ -1,6 +1,7 @@
 import express from 'express';
 import Order from '../models/Order.js';
-import { loadSettings, requestICreditPaymentUrl, buildICreditRequest, buildICreditCandidates } from '../services/icreditService.js';
+import { adminAuth } from '../middleware/auth.js';
+import { loadSettings, requestICreditPaymentUrl, buildICreditRequest, buildICreditCandidates, diagnoseICreditConnectivity } from '../services/icreditService.js';
 
 const router = express.Router();
 
@@ -25,6 +26,18 @@ router.get('/icredit/candidates', async (req, res) => {
     return res.json({ ok: true, base, candidates: Array.from(new Set(list)).slice(0, 12) });
   } catch (e) {
     res.status(500).json({ ok: false, message: e?.message || 'candidates_error' });
+  }
+});
+
+// Diagnose connectivity/DNS to iCredit endpoints (admin only)
+router.get('/icredit/diagnose', adminAuth, async (req, res) => {
+  try {
+    const settings = await loadSettings();
+    const base = settings?.payments?.icredit?.apiUrl || 'https://icredit.rivhit.co.il/API/PaymentPageRequest.svc/GetUrl';
+    const diag = await diagnoseICreditConnectivity(base);
+    return res.json({ ok: true, ...diag });
+  } catch (e) {
+    res.status(500).json({ ok: false, message: e?.message || 'diagnose_error' });
   }
 });
 
