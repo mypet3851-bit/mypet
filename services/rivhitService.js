@@ -24,10 +24,43 @@ async function getConfig() {
   if (!s) s = await Settings.create({});
   const cfg = s.rivhit || {};
   const apiUrl = normalizeApiBase(cfg.apiUrl || 'https://api.rivhit.co.il/online/RivhitOnlineAPI.svc');
-  const token = cfg.tokenApi || process.env.RIVHIT_TOKEN || '';
+  // Support legacy/migrated key names too (cfg.token) and trim whitespace
+  const token = String((cfg.tokenApi || cfg.token || process.env.RIVHIT_TOKEN || '')).trim();
   const defaultStorageId = Number(cfg.defaultStorageId || 0) || 0;
   const transport = cfg.transport === 'soap' ? 'soap' : 'json';
   return { enabled: !!cfg.enabled, apiUrl, token, defaultStorageId, transport };
+}
+
+// Validate configuration and inputs before attempting remote calls
+function validateBeforeSend({ enabled, apiUrl, token }, { id_item, storage_id } = {}) {
+  if (!enabled) {
+    const e = new Error('Rivhit integration disabled by settings');
+    e.code = 412; // precondition failed
+    throw e;
+  }
+  if (!token || token.length < 10) {
+    const e = new Error('Rivhit API token not configured (Settings.rivhit.tokenApi)');
+    e.code = 412;
+    throw e;
+  }
+  // Basic sanity on apiUrl
+  if (!/rivhit\.co\.il/i.test(apiUrl) || !/RivhitOnlineAPI\.svc$/i.test(apiUrl)) {
+    // Not throwing because normalizeApiBase should have fixed most issues, but warn loudly
+    console.warn('[rivhit] Suspicious apiUrl after normalization:', apiUrl);
+  }
+  if (id_item !== undefined) {
+    const n = Number(id_item);
+    if (!Number.isFinite(n) || n <= 0) {
+      const e = new Error('Invalid id_item (must be a positive number)');
+      e.code = 400; throw e;
+    }
+  }
+  if (storage_id !== undefined && storage_id !== null && storage_id !== '') {
+    const ns = Number(storage_id);
+    if (!Number.isFinite(ns) || ns < 0) {
+      console.warn('[rivhit] Ignoring invalid storage_id value:', storage_id);
+    }
+  }
 }
 
 export async function testConnectivity() {
@@ -158,13 +191,9 @@ async function postSoap(apiUrl, action, envelope, timeoutMs = 20000) {
 
 export async function getItemQuantity({ id_item, storage_id }) {
   const { enabled, apiUrl, token, defaultStorageId, transport } = await getConfig();
-  if (!enabled) throw new Error('Rivhit integration disabled');
-  if (!token) throw new Error('Rivhit API token not configured');
+  // Preflight validation for migration/config errors before sending
+  validateBeforeSend({ enabled, apiUrl, token }, { id_item, storage_id });
   const nItem = Number(id_item);
-  if (!Number.isFinite(nItem) || nItem <= 0) {
-    const e = new Error('Invalid id_item (must be a positive number)');
-    e.code = 400; throw e;
-  }
   const sid = typeof storage_id === 'number' ? storage_id : defaultStorageId;
   try {
     // Minimal debug to server logs without revealing token
@@ -188,7 +217,7 @@ export async function getItemQuantity({ id_item, storage_id }) {
       throw e;
     }
   } else {
-    const body = { token_api: token, id_item };
+  const body = { token_api: token, id_item };
     if (sid && Number.isFinite(sid) && sid > 0) body.storage_id = sid;
 
     // Try across alternate base hosts and JSON path variants
@@ -230,8 +259,19 @@ export async function getItemQuantity({ id_item, storage_id }) {
             console.warn(`[rivhit] JSON call failed at %s status=%s; trying alternate base host (%d/%d)`, url, status || 'n/a', bIdx + 2, bases.length);
             continue;
           }
+          // Try to surface more details from server response when possible
+          let detail = '';
+          try {
+            if (r?.data && typeof r.data === 'object') {
+              const dm = r.data.debug_message || r.data.client_message || r.data.message;
+              if (dm) detail = `: ${dm}`;
+            } else if (typeof r?.data === 'string') {
+              const snip = String(r.data).slice(0, 160).replace(/\s+/g, ' ').trim();
+              if (snip) detail = `: ${snip}`;
+            }
+          } catch {}
           const hint = ' (verify token_api, id_item, storage_id and API URL)';
-          const e = new Error(`Rivhit request failed${status ? ` (${status})` : ''}${hint}`);
+          const e = new Error(`Rivhit request failed${status ? ` (${status})` : ''}${detail || ''}${hint}`);
           e.code = status || 0;
           throw e;
         }
@@ -266,10 +306,9 @@ export async function getItemQuantity({ id_item, storage_id }) {
 
 export async function updateItem({ id_item, storage_id, ...fields }) {
   const { enabled, apiUrl, token, defaultStorageId, transport } = await getConfig();
-  if (!enabled) throw new Error('Rivhit integration disabled');
-  if (!token) throw new Error('Rivhit API token not configured');
+  // Preflight validation for migration/config errors before sending
+  validateBeforeSend({ enabled, apiUrl, token }, { id_item, storage_id });
   const nItem = Number(id_item);
-  if (!Number.isFinite(nItem) || nItem <= 0) { const e = new Error('Invalid id_item (must be a positive number)'); e.code = 400; throw e; }
   const sid = typeof storage_id === 'number' ? storage_id : defaultStorageId;
   try {
     console.log('[rivhit][updateItem] transport=%s url=%s id_item=%s storage_id=%s token=%s fields=%s', transport, apiUrl, nItem, (sid||0), maskToken(token), Object.keys(fields||{}).join(','));
