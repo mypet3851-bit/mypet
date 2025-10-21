@@ -55,7 +55,7 @@ function maskToken(s) {
 }
 
 // Generate likely API URL variants for JSON and SOAP
-function buildICreditCandidates(apiUrl) {
+export function buildICreditCandidates(apiUrl) {
   const u = String(apiUrl || '').trim().replace(/\s+/g, '');
   const list = new Set();
   const push = (v) => { if (v) list.add(v.replace(/\s+/g, '')); };
@@ -195,6 +195,7 @@ export async function requestICreditPaymentUrl({ order, settings, overrides = {}
   if (!cfg?.groupPrivateToken) throw new Error('missing_token');
   const apiUrl = cfg.apiUrl || 'https://icredit.rivhit.co.il/API/PaymentPageRequest.svc/GetUrl';
   const payload = buildICreditRequest({ order, settings, overrides });
+  try { console.log('[icredit] starting create-session via %s token=%s', apiUrl, maskToken(cfg.groupPrivateToken)); } catch {}
 
   // Build wrappers expected by some WCF JSON endpoints
   const wrappers = [
@@ -207,6 +208,9 @@ export async function requestICreditPaymentUrl({ order, settings, overrides = {}
   const candidates = buildICreditCandidates(apiUrl).slice(0, 8);
   // Enforce a total time budget so the browser doesn't hit axios 30s timeout and surface a generic "Network error"
   const MAX_TOTAL_MS = Number(process.env.ICREDIT_MAX_MS || 20000);
+  // Allow tuning per-attempt timeout via env; defaults chosen to balance speed vs flaky WCF endpoints
+  const PER_ATTEMPT_MAX_MS = Number(process.env.ICREDIT_PER_ATTEMPT_MAX_MS || 5000);
+  const PER_ATTEMPT_MIN_MS = Number(process.env.ICREDIT_PER_ATTEMPT_MIN_MS || 1500);
   const startTs = Date.now();
   const elapsed = () => Date.now() - startTs;
   const remaining = () => Math.max(0, MAX_TOTAL_MS - elapsed());
@@ -219,7 +223,7 @@ export async function requestICreditPaymentUrl({ order, settings, overrides = {}
     for (let w = 0; w < wrappers.length; w++) {
       const bodyWrapped = wrappers[w](payload);
       try {
-        const perAttempt = Math.min(4000, Math.max(1000, remaining()));
+        const perAttempt = Math.min(PER_ATTEMPT_MAX_MS, Math.max(PER_ATTEMPT_MIN_MS, remaining()));
         const r = await fetchWithTimeout(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json; charset=utf-8', 'Accept': 'application/json' },
@@ -257,7 +261,12 @@ export async function requestICreditPaymentUrl({ order, settings, overrides = {}
         // Non-HTML error — capture a snippet and continue trying variants
         lastErr = new Error(`HTTP ${r.status} ${r.statusText} at ${url}: ${text.slice(0, 180).replace(/\s+/g,' ')}`);
       } catch (e) {
-        lastErr = e;
+        // Normalize abort/timeout errors with context so UI can show an actionable hint
+        if (e && (e.name === 'AbortError' || /aborted|AbortError/i.test(String(e.message || '')))) {
+          lastErr = new Error(`timeout after ${Math.min(PER_ATTEMPT_MAX_MS, Math.max(PER_ATTEMPT_MIN_MS, remaining()))}ms at ${url}`);
+        } else {
+          lastErr = e;
+        }
         // If we've exhausted our total budget, stop trying
         if (remaining() <= 250) break;
         continue;
@@ -311,7 +320,7 @@ export async function requestICreditPaymentUrl({ order, settings, overrides = {}
         for (const act of soapActions) {
           if (remaining() <= 250) break;
           try {
-            const perAttempt = Math.min(4000, Math.max(1000, remaining()));
+            const perAttempt = Math.min(PER_ATTEMPT_MAX_MS, Math.max(PER_ATTEMPT_MIN_MS, remaining()));
             const r = await fetchWithTimeout(ep, {
               method: 'POST',
               headers: { 'Content-Type': 'text/xml; charset=utf-8', 'SOAPAction': act },
@@ -327,7 +336,11 @@ export async function requestICreditPaymentUrl({ order, settings, overrides = {}
             const snippet = xml.slice(0, 300).replace(/\s+/g, ' ');
             lastSoapErr = new Error(`SOAP ${r.status} at ${ep} action=${act}: ${snippet}`);
           } catch (e) {
-            lastSoapErr = e;
+            if (e && (e.name === 'AbortError' || /aborted|AbortError/i.test(String(e.message || '')))) {
+              lastSoapErr = new Error(`timeout after ${Math.min(PER_ATTEMPT_MAX_MS, Math.max(PER_ATTEMPT_MIN_MS, remaining()))}ms at ${ep} action=${act}`);
+            } else {
+              lastSoapErr = e;
+            }
           }
         }
       }
