@@ -165,7 +165,10 @@ router.post('/sync-items', adminAuth, async (req, res) => {
       );
       const price = Number.isFinite(priceRaw) && priceRaw >= 0 ? priceRaw : 0;
       const stockRaw = Number(it?.quantity ?? it?.stock ?? it?.Quantity);
-      const stock = Number.isFinite(stockRaw) && stockRaw >= 0 ? stockRaw : 0;
+      // If quantity is negative in Rivhit, import as positive by taking absolute value
+      const stock = Number.isFinite(stockRaw)
+        ? (stockRaw < 0 ? Math.abs(stockRaw) : stockRaw)
+        : 0;
       const picture = (it?.picture_link ?? '').toString().trim();
       const pictureUrl = /^(https?:\/\/|\/)/i.test(picture) ? picture : '';
       const images = Array.isArray(it?.images) && it.images.length
