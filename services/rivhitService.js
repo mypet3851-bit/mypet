@@ -67,10 +67,33 @@ export async function testConnectivity() {
   const { enabled, apiUrl, token } = await getConfig();
   if (!enabled) return { ok: false, reason: 'disabled' };
   if (!token) return { ok: false, reason: 'missing_token' };
+  // Perform a lightweight authenticated call that doesn't require id_item to verify token & base URL
   try {
-    // Lightweight OPTIONS/HEAD as a smoke (not all servers accept, fall back to POST with bogus id)
-    await axios.options(apiUrl + '/Item.Quantity').catch(() => null);
-  } catch {}
+    const url = apiUrl.replace(/\/$/, '') + '/Status.ErrorMessage';
+    const body = { token_api: token, error_code: 0 };
+    const resp = await axios.post(url, body, {
+      timeout: 10000,
+      headers: { 'Content-Type': 'application/json; charset=utf-8', 'Accept': 'application/json' }
+    });
+    // If service returns JSON without transport errors, consider connectivity OK
+    const data = resp?.data;
+    if (typeof data === 'object') return { ok: true };
+  } catch (e) {
+    const status = e?.response?.status;
+    let detail = '';
+    try {
+      const d = e?.response?.data;
+      if (d && typeof d === 'object') {
+        const dm = d.debug_message || d.client_message || d.message;
+        if (dm) detail = `: ${dm}`;
+      } else if (typeof e?.response?.data === 'string') {
+        const snip = String(e.response.data).slice(0,160).replace(/\s+/g,' ').trim();
+        if (snip) detail = `: ${snip}`;
+      }
+    } catch {}
+    return { ok: false, reason: `status_error_message_failed${status?` (${status})`:''}${detail}` };
+  }
+  // Fallback: if response wasn't object but no exception was thrown
   return { ok: true };
 }
 

@@ -640,7 +640,16 @@ export const syncQuantityFromRivhit = async (req, res) => {
       if (!itemId) itemId = product.rivhitItemId || null;
     }
     if (!itemId) return res.status(400).json({ message: 'No Rivhit item id mapped for the selected entity' });
-    const { quantity } = await rivhitGetQty({ id_item: Number(itemId) });
+    // Optional per-warehouse quantity: allow admin to provide storage_id via query/body override
+    let storageOverrideRaw = undefined;
+    try {
+      storageOverrideRaw = (req.body && (req.body.storage_id ?? req.body.storageId)) ?? (req.query && (req.query.storage_id ?? req.query.storageId));
+    } catch {}
+    const storage_id = Number(storageOverrideRaw);
+    const payload = Number.isFinite(storage_id) && storage_id > 0
+      ? { id_item: Number(itemId), storage_id }
+      : { id_item: Number(itemId) };
+    const { quantity } = await rivhitGetQty(payload);
     // Apply to inventory: set the main/default warehouse row to the fetched quantity
     let warehouses = await Warehouse.find({});
     if (!warehouses || warehouses.length === 0) {
@@ -653,7 +662,7 @@ export const syncQuantityFromRivhit = async (req, res) => {
     const update = { $set: { quantity: Math.max(0, Number(quantity) || 0) } };
     await Inventory.findOneAndUpdate(filter, update, { upsert: true, new: true, setDefaultsOnInsert: true });
     try { await inventoryService.recomputeProductStock(id); } catch {}
-    res.json({ synced: true, quantity });
+    res.json({ synced: true, quantity, id_item: Number(itemId), storage_id: (Number.isFinite(storage_id) && storage_id > 0) ? storage_id : undefined });
   } catch (e) {
     console.error('syncQuantityFromRivhit error', e);
     res.status(400).json({ message: e?.message || 'Failed to sync quantity', code: e?.code || 0 });
