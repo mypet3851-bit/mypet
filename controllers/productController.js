@@ -32,7 +32,7 @@ import cloudinary from '../services/cloudinaryClient.js';
 import { cacheGet, cacheSet } from '../utils/cache/simpleCache.js';
 import { inventoryService } from '../services/inventoryService.js';
 import { deepseekTranslate, deepseekTranslateBatch, isDeepseekConfigured } from '../services/translate/deepseek.js';
-import { getItemQuantity as rivhitGetQty } from '../services/rivhitService.js';
+import { getItemQuantity as rivhitGetQty, testConnectivity as rivhitTest } from '../services/rivhitService.js';
 // Currency conversion disabled for product storage/display; prices are stored and served as-is in store currency
 
 // Get all products
@@ -614,6 +614,13 @@ export const syncQuantityFromRivhit = async (req, res) => {
   try {
     const { id } = req.params; // product id
     const { variantId } = req.query; // optional
+    // Preflight: ensure Rivhit is enabled and token exists before attempting remote call
+    try {
+      const pre = await rivhitTest();
+      if (!pre?.ok) {
+        return res.status(412).json({ message: 'Rivhit not ready', reason: pre?.reason || 'unknown' });
+      }
+    } catch {}
     const product = await Product.findById(id);
     if (!product) return res.status(404).json({ message: 'Product not found' });
     let itemId = null;
@@ -649,7 +656,7 @@ export const syncQuantityFromRivhit = async (req, res) => {
     res.json({ synced: true, quantity });
   } catch (e) {
     console.error('syncQuantityFromRivhit error', e);
-    res.status(400).json({ message: e?.message || 'Failed to sync quantity' });
+    res.status(400).json({ message: e?.message || 'Failed to sync quantity', code: e?.code || 0 });
   }
 };
 
