@@ -1,15 +1,26 @@
 import Settings from '../models/Settings.js';
-import fetch from 'node-fetch';
+// Prefer built-in fetch in modern Node; fall back to node-fetch only if needed
+let __fetch = globalThis.fetch;
+if (!__fetch) {
+  try {
+    const mod = await import('node-fetch');
+    __fetch = mod?.default || mod;
+  } catch (e) {
+    // Will throw later if fetch is actually used with no implementation
+    __fetch = null;
+  }
+}
 
 // Small helper to add a timeout to node-fetch requests so the browser client
 // doesn't hit its own 30s axios timeout and surface a generic "Network error".
 // We prefer to fail fast on the server (returning a 4xx with detail) so the UI
 // can show a clear message and allow a quick retry.
 function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
+  if (!__fetch) throw new Error('fetch_not_available');
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeoutMs);
   const opts = { ...options, signal: controller.signal };
-  return fetch(url, opts)
+  return __fetch(url, opts)
     .finally(() => clearTimeout(id));
 }
 
@@ -192,20 +203,28 @@ export async function requestICreditPaymentUrl({ order, settings, overrides = {}
     (b) => ({ Request: b }) // PascalCase wrapper just in case
   ];
 
-  const candidates = buildICreditCandidates(apiUrl);
+  // Build candidate endpoints and cap how many we try to avoid client-side 30s timeout
+  const candidates = buildICreditCandidates(apiUrl).slice(0, 8);
+  // Enforce a total time budget so the browser doesn't hit axios 30s timeout and surface a generic "Network error"
+  const MAX_TOTAL_MS = Number(process.env.ICREDIT_MAX_MS || 20000);
+  const startTs = Date.now();
+  const elapsed = () => Date.now() - startTs;
+  const remaining = () => Math.max(0, MAX_TOTAL_MS - elapsed());
   let lastErr = null;
 
   // Try JSON candidates
   for (let i = 0; i < candidates.length; i++) {
     const url = candidates[i];
+    if (remaining() <= 250) break; // out of budget
     for (let w = 0; w < wrappers.length; w++) {
       const bodyWrapped = wrappers[w](payload);
       try {
+        const perAttempt = Math.min(4000, Math.max(1000, remaining()));
         const r = await fetchWithTimeout(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json; charset=utf-8', 'Accept': 'application/json' },
           body: JSON.stringify(bodyWrapped)
-        }, 15000);
+        }, perAttempt);
         const text = await r.text();
         // Some deployments return JSON with { Url: '...' }, others plain URL in body
         let urlOut = '';
@@ -239,13 +258,17 @@ export async function requestICreditPaymentUrl({ order, settings, overrides = {}
         lastErr = new Error(`HTTP ${r.status} ${r.statusText} at ${url}: ${text.slice(0, 180).replace(/\s+/g,' ')}`);
       } catch (e) {
         lastErr = e;
+        // If we've exhausted our total budget, stop trying
+        if (remaining() <= 250) break;
         continue;
       }
     }
+    if (remaining() <= 250) break;
   }
 
   // SOAP fallback
   try {
+    if (remaining() <= 250) throw lastErr || new Error('budget_exhausted');
     const action = 'GetUrl';
     const inner =
       '<request>' +
@@ -281,15 +304,19 @@ export async function requestICreditPaymentUrl({ order, settings, overrides = {}
 
     let lastSoapErr = null;
     for (const ep of soapEndpoints) {
+      if (remaining() <= 250) break;
       for (const ns of namespaces) {
+        if (remaining() <= 250) break;
         const envelope = buildSoapEnvelope(action, inner, ns);
         for (const act of soapActions) {
+          if (remaining() <= 250) break;
           try {
+            const perAttempt = Math.min(4000, Math.max(1000, remaining()));
             const r = await fetchWithTimeout(ep, {
               method: 'POST',
               headers: { 'Content-Type': 'text/xml; charset=utf-8', 'SOAPAction': act },
               body: envelope
-            }, 15000);
+            }, perAttempt);
             const xml = await r.text();
             const m = xml.match(/<GetUrlResult>(https?:[^<]+)<\/GetUrlResult>/i);
             if (r.ok && m && m[1]) {
