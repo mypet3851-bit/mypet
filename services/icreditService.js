@@ -15,7 +15,7 @@ if (!__fetch) {
 // doesn't hit its own 30s axios timeout and surface a generic "Network error".
 // We prefer to fail fast on the server (returning a 4xx with detail) so the UI
 // can show a clear message and allow a quick retry.
-function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
+function fetchWithTimeout(url, options = {}, timeoutMs = 20000) {
   if (!__fetch) throw new Error('fetch_not_available');
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeoutMs);
@@ -207,10 +207,11 @@ export async function requestICreditPaymentUrl({ order, settings, overrides = {}
   // Build candidate endpoints and cap how many we try to avoid client-side 30s timeout
   const candidates = buildICreditCandidates(apiUrl).slice(0, 8);
   // Enforce a total time budget so the browser doesn't hit axios 30s timeout and surface a generic "Network error"
-  const MAX_TOTAL_MS = Number(process.env.ICREDIT_MAX_MS || 20000);
+  // Give slow WCF endpoints more breathing room by default; still tunable via env
+  const MAX_TOTAL_MS = Number(process.env.ICREDIT_MAX_MS || 45000);
   // Allow tuning per-attempt timeout via env; defaults chosen to balance speed vs flaky WCF endpoints
-  const PER_ATTEMPT_MAX_MS = Number(process.env.ICREDIT_PER_ATTEMPT_MAX_MS || 5000);
-  const PER_ATTEMPT_MIN_MS = Number(process.env.ICREDIT_PER_ATTEMPT_MIN_MS || 1500);
+  const PER_ATTEMPT_MAX_MS = Number(process.env.ICREDIT_PER_ATTEMPT_MAX_MS || 15000);
+  const PER_ATTEMPT_MIN_MS = Number(process.env.ICREDIT_PER_ATTEMPT_MIN_MS || 5000);
   const startTs = Date.now();
   const elapsed = () => Date.now() - startTs;
   const remaining = () => Math.max(0, MAX_TOTAL_MS - elapsed());
