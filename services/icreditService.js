@@ -2,12 +2,12 @@ import Settings from '../models/Settings.js';
 import fetch from 'node-fetch';
 
 // Build SOAP envelope for iCredit PaymentPageRequest.GetUrl
-function buildSoapEnvelope(action, innerXml) {
+function buildSoapEnvelope(action, innerXml, ns = 'https://icredit.rivhit.co.il/API/') {
   return (
     '<?xml version="1.0" encoding="utf-8"?>' +
     '<soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">' +
     '<soap:Body>' +
-    `<${action} xmlns="https://icredit.rivhit.co.il/API/">` +
+    `<${action} xmlns="${ns}">` +
     innerXml +
     `</${action}>` +
     '</soap:Body>' +
@@ -44,14 +44,26 @@ function buildICreditCandidates(apiUrl) {
   push(u.replace(/\/API\//i, '/API/JSON/'));
   // Lowercase json variant used by some deployments
   push(u.replace(/\/GetUrl$/i, '/json/GetUrl'));
+  // Some WCF deployments use /PaymentPageRequest.svc/JSON/GetUrl (segment after .svc)
+  push(u.replace(/\/API\/PaymentPageRequest\.svc\/GetUrl$/i, '/API/PaymentPageRequest.svc/JSON/GetUrl'));
+  push(u.replace(/\/API\/PaymentPageRequest\.svc\/GetUrl$/i, '/API/PaymentPageRequest.svc/json/GetUrl'));
+  // If base ends with PaymentPageRequest.svc (no trailing GetUrl)
   // If missing GetUrl (base ends with PaymentPageRequest.svc), append both
   if (/PaymentPageRequest\.svc$/i.test(u)) {
     push(u + '/GetUrl');
     push(u + '/JSON/GetUrl');
+    push(u + '/json/GetUrl');
+  }
+  // If base missed /API prefix but contains PaymentPageRequest.svc
+  if (/PaymentPageRequest\.svc\/?$/i.test(u) && !/\/API\//i.test(u)) {
+    push(u.replace(/PaymentPageRequest\.svc\/?$/i, 'PaymentPageRequest.svc/JSON/GetUrl'));
   }
   // Alternate host variations that sometimes work
   push(u.replace('https://icredit.rivhit.co.il/', 'https://online.rivhit.co.il/'));
   push(u.replace('https://online.rivhit.co.il/', 'https://icredit.rivhit.co.il/'));
+  // Test environment variants (useful during development). If production host is configured, also try the test host.
+  push(u.replace('https://icredit.rivhit.co.il/', 'https://testicredit.rivhit.co.il/'));
+  push(u.replace('https://online.rivhit.co.il/', 'https://testicredit.rivhit.co.il/'));
   return Array.from(list);
 }
 
@@ -65,6 +77,29 @@ export function buildICreditRequest({ order, settings, overrides = {} }) {
   }
 
   const val = (v, def) => (typeof v === 'undefined' || v === null ? def : v);
+  const mapCurrency = (code) => {
+    const c = String(code || '').toUpperCase();
+    switch (c) {
+      case 'ILS':
+      case 'NIS':
+      case '₪':
+        return 1;
+      case 'USD':
+      case '$':
+        return 2;
+      case 'EUR':
+      case '€':
+        return 3;
+      case 'GBP':
+        return 4;
+      case 'AUD':
+        return 5;
+      case 'CAD':
+        return 6;
+      default:
+        return undefined; // let iCredit default to ILS when not provided
+    }
+  };
 
   const items = (order.items || []).map((it) => ({
     Id: 0,
@@ -78,10 +113,13 @@ export function buildICreditRequest({ order, settings, overrides = {} }) {
     GroupPrivateToken: ic.groupPrivateToken,
     Items: items,
     RedirectURL: val(overrides.RedirectURL, ic.redirectURL || ''),
+  FailRedirectURL: overrides.FailRedirectURL || '',
     IPNURL: val(overrides.IPNURL, ic.ipnURL || ''),
+  IPNFailureURL: overrides.IPNFailureURL || '',
     ExemptVAT: val(overrides.ExemptVAT, !!ic.exemptVAT),
     MaxPayments: val(overrides.MaxPayments, ic.maxPayments || 1),
     CreditFromPayment: val(overrides.CreditFromPayment, ic.creditFromPayment || 0),
+  Currency: overrides.Currency || mapCurrency(order.currency),
     EmailAddress: order.customerInfo?.email || '',
     CustomerLastName: order.customerInfo?.lastName || '',
     CustomerFirstName: order.customerInfo?.firstName || '',
@@ -162,7 +200,12 @@ export async function requestICreditPaymentUrl({ order, settings, overrides = {}
         if (/application\/json/i.test(r.headers.get('content-type') || '')) {
           try {
             const j = JSON.parse(text);
-            urlOut = j?.Url || j?.url || j?.PaymentUrl || '';
+            // Prefer official response shape with Status and URL
+            if ((j?.Status === 0 || j?.status === 0) && (j?.URL || j?.Url)) {
+              urlOut = j.URL || j.Url;
+            } else {
+              urlOut = j?.URL || j?.Url || j?.url || j?.PaymentUrl || '';
+            }
           } catch {
             // fall back below
           }
@@ -198,22 +241,59 @@ export async function requestICreditPaymentUrl({ order, settings, overrides = {}
         .map(([k, v]) => `<${k}>${xmlEscape(v)}</${k}>`)
         .join('') +
       '</request>';
-    const envelope = buildSoapEnvelope(action, inner);
-    // Use base without /JSON and without trailing /GetUrl
-    const soapEndpoint = apiUrl.replace(/\/JSON\//i, '/').replace(/\/GetUrl$/i, '');
-    const r = await fetch(soapEndpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/xml; charset=utf-8', 'SOAPAction': 'https://icredit.rivhit.co.il/API/GetUrl' },
-      body: envelope
-    });
-    const xml = await r.text();
-    // Minimal extraction of <GetUrlResult>http...<\/GetUrlResult>
-    const m = xml.match(/<GetUrlResult>(https?:[^<]+)<\/GetUrlResult>/i);
-    if (r.ok && m && m[1]) {
-      try { console.log('[icredit] SOAP success via %s', soapEndpoint); } catch {}
-      return { url: m[1] };
+
+    // Build endpoint candidates for SOAP
+    const base1 = apiUrl.replace(/\/JSON\//i, '/').replace(/\/GetUrl$/i, '');
+    // Ensure we point to the service root (ending with PaymentPageRequest.svc)
+    const svcMatch = base1.match(/^(.*PaymentPageRequest\.svc)(?:\/?|$)/i);
+    const svcRoot = svcMatch ? svcMatch[1] : base1.replace(/\/?$/,'') + '/PaymentPageRequest.svc';
+    const soapEndpoints = Array.from(new Set([
+      svcRoot,
+      // Occasionally path without /API prefix is configured
+      svcRoot.replace('/API/PaymentPageRequest.svc', '/PaymentPageRequest.svc'),
+      // Test environment host fallbacks
+      svcRoot.replace('https://icredit.rivhit.co.il', 'https://testicredit.rivhit.co.il'),
+      svcRoot.replace('https://online.rivhit.co.il', 'https://testicredit.rivhit.co.il')
+    ]));
+
+    // Try common SOAPAction namespaces used by WCF variations
+    const soapActions = [
+      'https://icredit.rivhit.co.il/API/GetUrl',
+      'https://icredit.rivhit.co.il/API/PaymentPageRequest/GetUrl',
+      'http://tempuri.org/IPaymentPageRequest/GetUrl'
+    ];
+    const namespaces = [
+      'https://icredit.rivhit.co.il/API/',
+      'http://tempuri.org/'
+    ];
+
+    let lastSoapErr = null;
+    for (const ep of soapEndpoints) {
+      for (const ns of namespaces) {
+        const envelope = buildSoapEnvelope(action, inner, ns);
+        for (const act of soapActions) {
+          try {
+            const r = await fetch(ep, {
+              method: 'POST',
+              headers: { 'Content-Type': 'text/xml; charset=utf-8', 'SOAPAction': act },
+              body: envelope
+            });
+            const xml = await r.text();
+            const m = xml.match(/<GetUrlResult>(https?:[^<]+)<\/GetUrlResult>/i);
+            if (r.ok && m && m[1]) {
+              try { console.log('[icredit] SOAP success via %s action=%s ns=%s', ep, act, ns); } catch {}
+              return { url: m[1] };
+            }
+            // Capture a compact error body for diagnostics
+            const snippet = xml.slice(0, 300).replace(/\s+/g, ' ');
+            lastSoapErr = new Error(`SOAP ${r.status} at ${ep} action=${act}: ${snippet}`);
+          } catch (e) {
+            lastSoapErr = e;
+          }
+        }
+      }
     }
-    lastErr = new Error(`SOAP failed ${r.status}: ${xml.slice(0, 200).replace(/\s+/g,' ')}`);
+    if (lastSoapErr) throw lastSoapErr;
   } catch (e) {
     lastErr = e;
   }
