@@ -240,7 +240,10 @@ export async function getItemQuantity({ id_item, storage_id }) {
       throw e;
     }
   } else {
-  const body = { token_api: token, id_item };
+  // Rivhit endpoints in the wild use both token_api/api_token and id_item/item_id.
+  // Send both aliases to be maximally compatible across deployments.
+  const idVal = Number(id_item);
+  const body = { token_api: token, api_token: token, id_item: idVal, item_id: idVal };
     if (sid && Number.isFinite(sid) && sid > 0) body.storage_id = sid;
 
     // Try across alternate base hosts and JSON path variants
@@ -362,7 +365,9 @@ export async function updateItem({ id_item, storage_id, ...fields }) {
       throw e;
     }
   } else {
-    const body = { token_api: token, id_item, ...fields };
+  // Send both legacy and current key names for compatibility
+  const idVal2 = Number(id_item);
+  const body = { token_api: token, api_token: token, id_item: idVal2, item_id: idVal2, ...fields };
     if (sid && Number.isFinite(sid) && sid > 0) body.storage_id = sid;
     const bases = buildAlternateBases(apiUrl);
     let lastErr = null;
