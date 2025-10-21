@@ -1,6 +1,18 @@
 import Settings from '../models/Settings.js';
 import fetch from 'node-fetch';
 
+// Small helper to add a timeout to node-fetch requests so the browser client
+// doesn't hit its own 30s axios timeout and surface a generic "Network error".
+// We prefer to fail fast on the server (returning a 4xx with detail) so the UI
+// can show a clear message and allow a quick retry.
+function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  const opts = { ...options, signal: controller.signal };
+  return fetch(url, opts)
+    .finally(() => clearTimeout(id));
+}
+
 // Build SOAP envelope for iCredit PaymentPageRequest.GetUrl
 function buildSoapEnvelope(action, innerXml, ns = 'https://icredit.rivhit.co.il/API/') {
   return (
@@ -189,11 +201,11 @@ export async function requestICreditPaymentUrl({ order, settings, overrides = {}
     for (let w = 0; w < wrappers.length; w++) {
       const bodyWrapped = wrappers[w](payload);
       try {
-        const r = await fetch(url, {
+        const r = await fetchWithTimeout(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json; charset=utf-8', 'Accept': 'application/json' },
           body: JSON.stringify(bodyWrapped)
-        });
+        }, 15000);
         const text = await r.text();
         // Some deployments return JSON with { Url: '...' }, others plain URL in body
         let urlOut = '';
@@ -273,11 +285,11 @@ export async function requestICreditPaymentUrl({ order, settings, overrides = {}
         const envelope = buildSoapEnvelope(action, inner, ns);
         for (const act of soapActions) {
           try {
-            const r = await fetch(ep, {
+            const r = await fetchWithTimeout(ep, {
               method: 'POST',
               headers: { 'Content-Type': 'text/xml; charset=utf-8', 'SOAPAction': act },
               body: envelope
-            });
+            }, 15000);
             const xml = await r.text();
             const m = xml.match(/<GetUrlResult>(https?:[^<]+)<\/GetUrlResult>/i);
             if (r.ok && m && m[1]) {
