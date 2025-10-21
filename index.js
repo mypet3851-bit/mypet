@@ -62,6 +62,7 @@ import cloudinaryRoutes from './routes/cloudinaryRoutes.js';
 import paypalRoutes from './routes/paypalRoutes.js';
 import legalRoutes from './routes/legalRoutes.js';
 import uploadRoutes from './routes/uploadRoutes.js';
+import paymentsRoutes from './routes/paymentsRoutes.js';
 import pageRoutes from './routes/pageRoutes.js';
 import translateRoutes from './routes/translateRoutes.js';
 import formRoutes from './routes/formRoutes.js';
@@ -232,6 +233,7 @@ app.use('/api/cloudinary', cloudinaryRoutes);
 app.use('/api/paypal', paypalRoutes);
 app.use('/api/legal', legalRoutes);
 app.use('/api/db', dbRoutes);
+app.use('/api/payments', paymentsRoutes);
 // File upload endpoints (must come before static /uploads to avoid intercepting multipart requests)
 app.use('/api/uploads', uploadRoutes);
 app.use('/api/pages', pageRoutes);

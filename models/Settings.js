@@ -712,6 +712,26 @@ settingsSchema.add({
       clientId: { type: String, default: '' },
       secret: { type: String, default: '' }
     },
+    // iCredit Payment Page (Rivhit) integration
+    // Only non-secret fields are safe to expose; GroupPrivateToken must be masked in API responses
+    icredit: {
+      enabled: { type: Boolean, default: false },
+      // Endpoint to obtain hosted payment URL
+      apiUrl: { type: String, default: 'https://icredit.rivhit.co.il/API/PaymentPageRequest.svc/GetUrl' },
+      // Secret token provided by Rivhit/iCredit (write-only style; mask in API responses)
+      groupPrivateToken: { type: String, default: '' },
+      // Defaults for building requests (can be overridden per checkout session)
+      redirectURL: { type: String, default: '' },
+      ipnURL: { type: String, default: '' },
+      exemptVAT: { type: Boolean, default: false },
+      maxPayments: { type: Number, default: 1, min: 1 },
+      creditFromPayment: { type: Number, default: 0, min: 0 },
+      documentLanguage: { type: String, enum: ['he','en','ar',''], default: 'he' },
+      createToken: { type: Boolean, default: false },
+      hideItemList: { type: Boolean, default: false },
+      emailBcc: { type: String, default: '' },
+      defaultDiscount: { type: Number, default: 0, min: 0 }
+    },
     // Visibility / availability flags for each checkout payment option
     visibility: {
       card: { type: Boolean, default: true },      // credit/debit card (local form)
@@ -863,6 +883,21 @@ settingsSchema.statics.createDefaultSettings = async function() {
             clientId: '',
             secret: ''
           },
+          icredit: {
+            enabled: false,
+            apiUrl: 'https://icredit.rivhit.co.il/API/PaymentPageRequest.svc/GetUrl',
+            groupPrivateToken: '',
+            redirectURL: '',
+            ipnURL: '',
+            exemptVAT: false,
+            maxPayments: 1,
+            creditFromPayment: 0,
+            documentLanguage: 'he',
+            createToken: false,
+            hideItemList: false,
+            emailBcc: '',
+            defaultDiscount: 0
+          },
           visibility: {
             card: true,
             cod: true,
@@ -879,6 +914,28 @@ settingsSchema.statics.createDefaultSettings = async function() {
             card: true,
             cod: true,
             paypal: true
+          }
+        };
+        needsUpdate = true;
+      }
+      // Ensure payments.icredit exists if payments existed previously
+      if (settings.payments && !settings.payments.icredit) {
+        updateData.payments = {
+          ...(updateData.payments || settings.payments),
+          icredit: {
+            enabled: false,
+            apiUrl: 'https://icredit.rivhit.co.il/API/PaymentPageRequest.svc/GetUrl',
+            groupPrivateToken: '',
+            redirectURL: '',
+            ipnURL: '',
+            exemptVAT: false,
+            maxPayments: 1,
+            creditFromPayment: 0,
+            documentLanguage: 'he',
+            createToken: false,
+            hideItemList: false,
+            emailBcc: '',
+            defaultDiscount: 0
           }
         };
         needsUpdate = true;
