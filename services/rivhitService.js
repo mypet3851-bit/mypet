@@ -174,24 +174,19 @@ export async function getItemQuantity({ id_item, storage_id }) {
     const action = 'Item_Quantity'; // Rivhit SOAP method name (example)
     const inner = `      <token_api>${xmlEscape(token)}</token_api>\n      <id_item>${Number(id_item)}</id_item>` + (sid && Number.isFinite(sid) && sid > 0 ? `\n      <storage_id>${Number(sid)}</storage_id>` : '');
     const envelope = buildSoapEnvelope(action, `\n${inner}\n`);
-    // Try across alternate base hosts for SOAP as well
-    const bases = buildAlternateBases(apiUrl);
-    let lastErr = null;
-    for (let bIdx = 0; bIdx < bases.length; bIdx++) {
-      try {
-        const resp = await postSoap(bases[bIdx], action, envelope, 20000);
-        const xml = resp?.data || '';
-        const quantity = parseSoapQuantity(xml);
-        return { quantity };
-      } catch (err) {
-        lastErr = err; continue;
-      }
+    const url = apiUrl;
+    try {
+      const resp = await postSoap(url, action, envelope, 20000);
+      const xml = resp?.data || '';
+      const quantity = parseSoapQuantity(xml);
+      return { quantity };
+    } catch (err) {
+      const r = err?.response;
+      const status = r?.status;
+      const e = new Error(`Rivhit SOAP request failed${status ? ` (${status})` : ''}`);
+      e.code = status || 0;
+      throw e;
     }
-    const r = lastErr?.response;
-    const status = r?.status;
-    const e = new Error(`Rivhit SOAP request failed${status ? ` (${status})` : ''}`);
-    e.code = status || 0;
-    throw e;
   } else {
     const body = { token_api: token, id_item };
     if (sid && Number.isFinite(sid) && sid > 0) body.storage_id = sid;
@@ -284,30 +279,26 @@ export async function updateItem({ id_item, storage_id, ...fields }) {
     const fieldsXml = Object.entries(fields).map(([k,v]) => `      <${k}>${xmlEscape(v)}</${k}>`).join('\n');
     const inner = `      <token_api>${xmlEscape(token)}</token_api>\n      <id_item>${Number(id_item)}</id_item>` + (sid && Number.isFinite(sid) && sid > 0 ? `\n      <storage_id>${Number(sid)}</storage_id>` : '') + (fieldsXml ? `\n${fieldsXml}` : '');
     const envelope = buildSoapEnvelope(action, `\n${inner}\n`);
-    const bases = buildAlternateBases(apiUrl);
-    let lastErr = null;
-    for (let bIdx = 0; bIdx < bases.length; bIdx++) {
-      try {
-        const resp = await postSoap(bases[bIdx], action, envelope, 25000);
-        const xml = resp?.data || '';
-        // Consider any 200 a success unless explicit fault detected
-        if (/<faultstring>/i.test(String(xml))) {
-          const m = String(xml).match(/<faultstring>([\s\S]*?)<\/faultstring>/i);
-          const msg = m ? m[1] : 'Rivhit SOAP fault';
-          const e = new Error(msg);
-          e.code = 0;
-          throw e;
-        }
-        return { update_success: true };
-      } catch (err) {
-        lastErr = err; continue;
+    const url = apiUrl;
+    try {
+      const resp = await postSoap(url, action, envelope, 25000);
+      const xml = resp?.data || '';
+      // Consider any 200 a success unless explicit fault detected
+      if (/<faultstring>/i.test(String(xml))) {
+        const m = String(xml).match(/<faultstring>([\s\S]*?)<\/faultstring>/i);
+        const msg = m ? m[1] : 'Rivhit SOAP fault';
+        const e = new Error(msg);
+        e.code = 0;
+        throw e;
       }
+      return { update_success: true };
+    } catch (err) {
+      const r = err?.response;
+      const status = r?.status;
+      const e = new Error(`Rivhit SOAP request failed${status ? ` (${status})` : ''}`);
+      e.code = status || 0;
+      throw e;
     }
-    const r = lastErr?.response;
-    const status = r?.status;
-    const e = new Error(`Rivhit SOAP request failed${status ? ` (${status})` : ''}`);
-    e.code = status || 0;
-    throw e;
   } else {
     const body = { token_api: token, id_item, ...fields };
     if (sid && Number.isFinite(sid) && sid > 0) body.storage_id = sid;
