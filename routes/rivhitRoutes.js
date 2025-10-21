@@ -1,7 +1,7 @@
 import express from 'express';
 import Settings from '../models/Settings.js';
 import { adminAuth } from '../middleware/auth.js';
-import { getItemQuantity, updateItem, testConnectivity } from '../services/rivhitService.js';
+import { getItemQuantity, updateItem, testConnectivity, getLastRequest, getErrorMessage } from '../services/rivhitService.js';
 
 const router = express.Router();
 
@@ -57,6 +57,28 @@ router.get('/test', adminAuth, async (req, res) => {
     res.json(r);
   } catch (e) {
     res.status(500).json({ ok: false, error: e?.message || 'test_failed' });
+  }
+});
+
+// Diagnostics: last request/response seen by Rivhit
+router.get('/status/last', adminAuth, async (req, res) => {
+  try {
+    const format = typeof req.query.format === 'string' ? req.query.format : 'json';
+    const r = await getLastRequest(format);
+    res.json(r);
+  } catch (e) {
+    res.status(400).json({ message: e?.message || 'status_last_failed' });
+  }
+});
+
+// Diagnostics: get error message for an error code
+router.get('/status/error-message', adminAuth, async (req, res) => {
+  try {
+    const code = Number(req.query.code);
+    const r = await getErrorMessage(code || 0);
+    res.json(r);
+  } catch (e) {
+    res.status(400).json({ message: e?.message || 'status_error_message_failed' });
   }
 });
 

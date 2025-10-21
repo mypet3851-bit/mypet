@@ -85,6 +85,23 @@ router.get('/', async (req, res) => {
           secret: obj.payments.paypal.secret ? '***' : ''
         };
       }
+      if (obj.payments.icredit) {
+        obj.payments.icredit = {
+          enabled: !!obj.payments.icredit.enabled,
+          apiUrl: obj.payments.icredit.apiUrl || 'https://icredit.rivhit.co.il/API/PaymentPageRequest.svc/GetUrl',
+          groupPrivateToken: obj.payments.icredit.groupPrivateToken ? '***' : '',
+          redirectURL: obj.payments.icredit.redirectURL || '',
+          ipnURL: obj.payments.icredit.ipnURL || '',
+          exemptVAT: !!obj.payments.icredit.exemptVAT,
+          maxPayments: Number.isFinite(Number(obj.payments.icredit.maxPayments)) ? Number(obj.payments.icredit.maxPayments) : 1,
+          creditFromPayment: Number(obj.payments.icredit.creditFromPayment) || 0,
+          documentLanguage: obj.payments.icredit.documentLanguage || 'he',
+          createToken: !!obj.payments.icredit.createToken,
+          hideItemList: !!obj.payments.icredit.hideItemList,
+          emailBcc: obj.payments.icredit.emailBcc || '',
+          defaultDiscount: Number(obj.payments.icredit.defaultDiscount) || 0
+        };
+      }
       if (obj.payments.visibility) {
         obj.payments.visibility = {
           card: !!obj.payments.visibility.card,
@@ -1600,5 +1617,99 @@ router.post('/payments/paypal/test', adminAuth, async (req, res) => {
     }
   } catch (e) {
     res.status(500).json({ message: e.message });
+  }
+});
+
+// iCredit (Rivhit Payment Page) config endpoints
+router.get('/payments/icredit', async (req, res) => {
+  try {
+    let settings = await Settings.findOne();
+    if (!settings) settings = new Settings();
+    const c = (settings.payments && settings.payments.icredit) || {};
+    return res.json({
+      enabled: !!c.enabled,
+      apiUrl: c.apiUrl || 'https://icredit.rivhit.co.il/API/PaymentPageRequest.svc/GetUrl',
+      groupPrivateToken: c.groupPrivateToken ? '***' : '',
+      redirectURL: c.redirectURL || '',
+      ipnURL: c.ipnURL || '',
+      exemptVAT: !!c.exemptVAT,
+      maxPayments: Number.isFinite(Number(c.maxPayments)) ? Number(c.maxPayments) : 1,
+      creditFromPayment: Number(c.creditFromPayment) || 0,
+      documentLanguage: c.documentLanguage || 'he',
+      createToken: !!c.createToken,
+      hideItemList: !!c.hideItemList,
+      emailBcc: c.emailBcc || '',
+      defaultDiscount: Number(c.defaultDiscount) || 0
+    });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+});
+
+router.put('/payments/icredit', adminAuth, async (req, res) => {
+  try {
+    const inc = req.body || {};
+    let settings = await Settings.findOne();
+    if (!settings) settings = new Settings();
+    settings.payments = settings.payments || {};
+    settings.payments.icredit = settings.payments.icredit || {};
+    const prevToken = settings.payments.icredit.groupPrivateToken || '';
+    const setIf = (cond, setter) => { if (typeof cond !== 'undefined') setter(); };
+    setIf(inc.enabled, () => settings.payments.icredit.enabled = !!inc.enabled);
+    setIf(inc.apiUrl, () => settings.payments.icredit.apiUrl = String(inc.apiUrl).trim());
+    if (typeof inc.groupPrivateToken === 'string') {
+      settings.payments.icredit.groupPrivateToken = inc.groupPrivateToken === '***' ? prevToken : inc.groupPrivateToken.trim();
+    }
+    setIf(inc.redirectURL, () => settings.payments.icredit.redirectURL = String(inc.redirectURL).trim());
+    setIf(inc.ipnURL, () => settings.payments.icredit.ipnURL = String(inc.ipnURL).trim());
+    if (typeof inc.exemptVAT !== 'undefined') settings.payments.icredit.exemptVAT = !!inc.exemptVAT;
+    if (typeof inc.maxPayments !== 'undefined') {
+      const n = Number(inc.maxPayments); settings.payments.icredit.maxPayments = Number.isFinite(n) && n >= 1 ? n : 1;
+    }
+    if (typeof inc.creditFromPayment !== 'undefined') {
+      const n = Number(inc.creditFromPayment); settings.payments.icredit.creditFromPayment = Number.isFinite(n) && n >= 0 ? n : 0;
+    }
+    if (typeof inc.documentLanguage === 'string') settings.payments.icredit.documentLanguage = inc.documentLanguage;
+    if (typeof inc.createToken !== 'undefined') settings.payments.icredit.createToken = !!inc.createToken;
+    if (typeof inc.hideItemList !== 'undefined') settings.payments.icredit.hideItemList = !!inc.hideItemList;
+    if (typeof inc.emailBcc === 'string') settings.payments.icredit.emailBcc = inc.emailBcc.trim();
+    if (typeof inc.defaultDiscount !== 'undefined') {
+      const n = Number(inc.defaultDiscount); settings.payments.icredit.defaultDiscount = Number.isFinite(n) && n >= 0 ? n : 0;
+    }
+    try { settings.markModified('payments'); } catch {}
+    await settings.save();
+    return res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+});
+
+// Basic test endpoint: validates required fields presence
+router.post('/payments/icredit/test', adminAuth, async (req, res) => {
+  try {
+    let settings = await Settings.findOne();
+    const c = settings?.payments?.icredit || {};
+    if (!c.enabled) return res.status(400).json({ ok: false, message: 'iCredit is disabled' });
+    if (!c.apiUrl) return res.status(400).json({ ok: false, message: 'Missing API URL' });
+    if (!c.groupPrivateToken) return res.status(400).json({ ok: false, message: 'Missing GroupPrivateToken' });
+    // We don't call the remote API here to avoid network dependency; this endpoint checks local config only.
+    return res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, message: e.message });
+  }
+});
+
+// Public IPN endpoint for iCredit payment notifications
+// Note: Depending on iCredit's IPN sender, you might need to disable auth and use a shared secret
+router.post('/payments/icredit/ipn', async (req, res) => {
+  try {
+    const payload = req.body || {};
+    // Basic acceptance; later: verify signature/token if provided, then update order status
+    console.log('[iCredit][IPN] payload', JSON.stringify(payload).slice(0,2000));
+    // Example: const orderId = payload?.Custom1 or Reference
+    // TODO: implement verification and order status update
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, message: e.message });
   }
 });
