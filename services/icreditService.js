@@ -213,6 +213,7 @@ export async function requestICreditPaymentUrl({ order, settings, overrides = {}
   if (!cfg?.enabled) throw new Error('icredit_disabled');
   if (!cfg?.groupPrivateToken) throw new Error('missing_token');
   const apiUrl = cfg.apiUrl || 'https://icredit.rivhit.co.il/API/PaymentPageRequest.svc/GetUrl';
+  const transport = (cfg.transport || 'auto').toLowerCase();
   const payload = buildICreditRequest({ order, settings, overrides });
   try { console.log('[icredit] starting create-session via %s token=%s', apiUrl, maskToken(cfg.groupPrivateToken)); } catch {}
 
@@ -236,66 +237,79 @@ export async function requestICreditPaymentUrl({ order, settings, overrides = {}
   const remaining = () => Math.max(0, MAX_TOTAL_MS - elapsed());
   let lastErr = null;
 
-  // Try JSON candidates
-  for (let i = 0; i < candidates.length; i++) {
-    const url = candidates[i];
-    if (remaining() <= 250) break; // out of budget
-    for (let w = 0; w < wrappers.length; w++) {
-      const bodyWrapped = wrappers[w](payload);
-      try {
-        const perAttempt = Math.min(PER_ATTEMPT_MAX_MS, Math.max(PER_ATTEMPT_MIN_MS, remaining()));
-        const r = await fetchWithTimeout(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json; charset=utf-8', 'Accept': 'application/json' },
-          body: JSON.stringify(bodyWrapped)
-        }, perAttempt);
-        const text = await r.text();
-        // Some deployments return JSON with { Url: '...' }, others plain URL in body
-        let urlOut = '';
-        if (/application\/json/i.test(r.headers.get('content-type') || '')) {
-          try {
-            const j = JSON.parse(text);
-            // Prefer official response shape with Status and URL
-            if ((j?.Status === 0 || j?.status === 0) && (j?.URL || j?.Url)) {
-              urlOut = j.URL || j.Url;
-            } else {
-              urlOut = j?.URL || j?.Url || j?.url || j?.PaymentUrl || '';
+  // Try JSON candidates (skip if transport=soap)
+  if (transport !== 'soap') {
+    for (let i = 0; i < candidates.length; i++) {
+      const url = candidates[i];
+      if (remaining() <= 250) break; // out of budget
+      for (let w = 0; w < wrappers.length; w++) {
+        const bodyWrapped = wrappers[w](payload);
+        try {
+          const perAttempt = Math.min(PER_ATTEMPT_MAX_MS, Math.max(PER_ATTEMPT_MIN_MS, remaining()));
+          const r = await fetchWithTimeout(url, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json; charset=utf-8',
+              'Accept': 'application/json',
+              // Hint WCF that this is an AJAX JSON call to avoid HTML error pages in some deployments
+              'X-Requested-With': 'XMLHttpRequest'
+            },
+            body: JSON.stringify(bodyWrapped)
+          }, perAttempt);
+          const text = await r.text();
+          // Some deployments return JSON with { Url: '...' }, others plain URL in body
+          let urlOut = '';
+          if (/application\/json/i.test(r.headers.get('content-type') || '')) {
+            try {
+              const j = JSON.parse(text);
+              // Prefer official response shape with Status and URL
+              if ((j?.Status === 0 || j?.status === 0) && (j?.URL || j?.Url)) {
+                urlOut = j.URL || j.Url;
+              } else {
+                urlOut = j?.URL || j?.Url || j?.url || j?.PaymentUrl || '';
+              }
+            } catch {
+              // fall back below
             }
-          } catch {
-            // fall back below
           }
-        }
-        if (!urlOut && /^https?:\/\//i.test(text.trim())) {
-          urlOut = text.trim();
-        }
-        if (r.ok && urlOut) {
-          try { console.log('[icredit] JSON success via %s wrapper=%d token=%s', url, w + 1, maskToken(cfg.groupPrivateToken)); } catch {}
-          return { url: urlOut };
-        }
-        // If HTML "Request Error" page, try next variant
-        const isHtml = /<html|Request Error/i.test(text) || /text\/html/i.test(r.headers.get('content-type') || '');
-        if (isHtml) {
-          try { console.warn('[icredit] HTML response at %s wrapper=%d; trying next variant', url, w + 1); } catch {}
+          if (!urlOut && /^https?:\/\//i.test(text.trim())) {
+            urlOut = text.trim();
+          }
+          if (r.ok && urlOut) {
+            try { console.log('[icredit] JSON success via %s wrapper=%d token=%s', url, w + 1, maskToken(cfg.groupPrivateToken)); } catch {}
+            return { url: urlOut };
+          }
+          // If HTML "Request Error" page, try next variant
+          const isHtml = /<html|Request Error/i.test(text) || /text\/html/i.test(r.headers.get('content-type') || '');
+          if (isHtml) {
+            try { console.warn('[icredit] HTML response at %s wrapper=%d; trying next variant', url, w + 1); } catch {}
+            continue;
+          }
+          // Non-HTML error — capture a snippet and continue trying variants
+          lastErr = new Error(`HTTP ${r.status} ${r.statusText} at ${url}: ${text.slice(0, 180).replace(/\s+/g,' ')}`);
+        } catch (e) {
+          // Normalize abort/timeout errors with context so UI can show an actionable hint
+          if (e && (e.name === 'AbortError' || /aborted|AbortError/i.test(String(e.message || '')))) {
+            lastErr = new Error(`timeout after ${Math.min(PER_ATTEMPT_MAX_MS, Math.max(PER_ATTEMPT_MIN_MS, remaining()))}ms at ${url}`);
+          } else {
+            lastErr = e;
+          }
+          // If we've exhausted our total budget, stop trying
+          if (remaining() <= 250) break;
           continue;
         }
-        // Non-HTML error — capture a snippet and continue trying variants
-        lastErr = new Error(`HTTP ${r.status} ${r.statusText} at ${url}: ${text.slice(0, 180).replace(/\s+/g,' ')}`);
-      } catch (e) {
-        // Normalize abort/timeout errors with context so UI can show an actionable hint
-        if (e && (e.name === 'AbortError' || /aborted|AbortError/i.test(String(e.message || '')))) {
-          lastErr = new Error(`timeout after ${Math.min(PER_ATTEMPT_MAX_MS, Math.max(PER_ATTEMPT_MIN_MS, remaining()))}ms at ${url}`);
-        } else {
-          lastErr = e;
-        }
-        // If we've exhausted our total budget, stop trying
-        if (remaining() <= 250) break;
-        continue;
       }
+      if (remaining() <= 250) break;
     }
-    if (remaining() <= 250) break;
+    // If JSON only is requested, skip SOAP
+    if (transport === 'json') {
+      const err = new Error(`icredit_call_failed${lastErr ? ': ' + (lastErr.message || lastErr) : ''}`);
+      err.status = 400;
+      throw err;
+    }
   }
 
-  // SOAP fallback
+  // SOAP fallback (or primary if transport=soap)
   try {
     if (remaining() <= 250) throw lastErr || new Error('budget_exhausted');
     const action = 'GetUrl';
@@ -322,8 +336,12 @@ export async function requestICreditPaymentUrl({ order, settings, overrides = {}
 
     // Try common SOAPAction namespaces used by WCF variations
     const soapActions = [
-      'https://icredit.rivhit.co.il/API/GetUrl',
+      // Common WCF SOAPAction variations observed in the wild
+      'https://icredit.rivhit.co.il/API/IPaymentPageRequest/GetUrl',
       'https://icredit.rivhit.co.il/API/PaymentPageRequest/GetUrl',
+      'https://icredit.rivhit.co.il/API/GetUrl',
+      'http://icredit.rivhit.co.il/API/IPaymentPageRequest/GetUrl',
+      'http://icredit.rivhit.co.il/API/PaymentPageRequest/GetUrl',
       'http://tempuri.org/IPaymentPageRequest/GetUrl'
     ];
     const namespaces = [
@@ -343,7 +361,11 @@ export async function requestICreditPaymentUrl({ order, settings, overrides = {}
             const perAttempt = Math.min(PER_ATTEMPT_MAX_MS, Math.max(PER_ATTEMPT_MIN_MS, remaining()));
             const r = await fetchWithTimeout(ep, {
               method: 'POST',
-              headers: { 'Content-Type': 'text/xml; charset=utf-8', 'SOAPAction': act },
+              headers: {
+                'Content-Type': 'text/xml; charset=utf-8',
+                'Accept': 'text/xml',
+                'SOAPAction': act
+              },
               body: envelope
             }, perAttempt);
             const xml = await r.text();

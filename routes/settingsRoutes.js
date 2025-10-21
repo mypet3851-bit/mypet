@@ -1629,6 +1629,7 @@ router.get('/payments/icredit', async (req, res) => {
     return res.json({
       enabled: !!c.enabled,
       apiUrl: c.apiUrl || 'https://icredit.rivhit.co.il/API/PaymentPageRequest.svc/GetUrl',
+      transport: c.transport || 'auto',
       groupPrivateToken: c.groupPrivateToken ? '***' : '',
       redirectURL: c.redirectURL || '',
       ipnURL: c.ipnURL || '',
@@ -1657,6 +1658,10 @@ router.put('/payments/icredit', adminAuth, async (req, res) => {
     const setIf = (cond, setter) => { if (typeof cond !== 'undefined') setter(); };
     setIf(inc.enabled, () => settings.payments.icredit.enabled = !!inc.enabled);
     setIf(inc.apiUrl, () => settings.payments.icredit.apiUrl = String(inc.apiUrl).trim());
+    if (typeof inc.transport === 'string') {
+      const tr = String(inc.transport).toLowerCase();
+      if (['auto','json','soap'].includes(tr)) settings.payments.icredit.transport = tr;
+    }
     if (typeof inc.groupPrivateToken === 'string') {
       settings.payments.icredit.groupPrivateToken = inc.groupPrivateToken === '***' ? prevToken : inc.groupPrivateToken.trim();
     }
