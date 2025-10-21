@@ -235,6 +235,8 @@ const productSchema = new mongoose.Schema({
 
 // Optional Rivhit item id mapping at product level (for simple single-SKU products)
 productSchema.add({ rivhitItemId: { type: Number } });
+// Prevent duplicates when importing from Rivhit; allow sparse so most products can be without mapping
+try { productSchema.index({ rivhitItemId: 1 }, { unique: true, sparse: true }); } catch {}
 
 // Virtual for average rating
 productSchema.virtual('averageRating').get(function() {
