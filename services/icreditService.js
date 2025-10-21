@@ -213,7 +213,8 @@ export async function requestICreditPaymentUrl({ order, settings, overrides = {}
   if (!cfg?.enabled) throw new Error('icredit_disabled');
   if (!cfg?.groupPrivateToken) throw new Error('missing_token');
   const apiUrl = cfg.apiUrl || 'https://icredit.rivhit.co.il/API/PaymentPageRequest.svc/GetUrl';
-  const transport = (cfg.transport || 'auto').toLowerCase();
+  // Allow env override to force transport without redeploying settings
+  const transport = (process.env.ICREDIT_TRANSPORT || cfg.transport || 'auto').toLowerCase();
   const payload = buildICreditRequest({ order, settings, overrides });
   try { console.log('[icredit] starting create-session via %s token=%s', apiUrl, maskToken(cfg.groupPrivateToken)); } catch {}
 
@@ -239,6 +240,9 @@ export async function requestICreditPaymentUrl({ order, settings, overrides = {}
 
   // Try JSON candidates (skip if transport=soap)
   if (transport !== 'soap') {
+    // Heuristic: if multiple HTML "Request Error" pages are received, JSON is likely not enabled;
+    // switch to SOAP sooner to avoid hitting the 60s budget and the client's 30s axios timeout.
+    let htmlResponses = 0;
     for (let i = 0; i < candidates.length; i++) {
       const url = candidates[i];
       if (remaining() <= 250) break; // out of budget
@@ -280,9 +284,15 @@ export async function requestICreditPaymentUrl({ order, settings, overrides = {}
             return { url: urlOut };
           }
           // If HTML "Request Error" page, try next variant
-          const isHtml = /<html|Request Error/i.test(text) || /text\/html/i.test(r.headers.get('content-type') || '');
+          const isHtml = /<html|Request Error|The incoming message has an unexpected message format/i.test(text) || /text\/html/i.test(r.headers.get('content-type') || '');
           if (isHtml) {
-            try { console.warn('[icredit] HTML response at %s wrapper=%d; trying next variant', url, w + 1); } catch {}
+            htmlResponses++;
+            try { console.warn('[icredit] HTML response at %s wrapper=%d; trying next variant (htmlResponses=%d)', url, w + 1, htmlResponses); } catch {}
+            // After a few HTML responses across variants, bail to SOAP quickly
+            if (transport === 'auto' && htmlResponses >= 3) {
+              i = candidates.length; // break outer loop
+              break;
+            }
             continue;
           }
           // Non-HTML error — capture a snippet and continue trying variants
