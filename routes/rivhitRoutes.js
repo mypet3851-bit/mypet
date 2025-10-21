@@ -113,16 +113,26 @@ router.post('/update', adminAuth, async (req, res) => {
 router.post('/sync-items', adminAuth, async (req, res) => {
   try {
     // Incoming mapping options
-    const { defaultCategoryId, page, page_size } = req.body || {};
+    const { defaultCategoryId, page, page_size, dryRun } = req.body || {};
+    const dry = !!dryRun || String(req.query?.dryRun || '').toLowerCase() === 'true';
     // Fetch items list from Rivhit (may be paginated); for MVP, one page
     const items = await listItems({ page, page_size });
+    const sampleKeys = Array.isArray(items) && items[0] ? Object.keys(items[0]) : [];
     // Build a map of existing rivhitItemIds to skip duplicates
     const ids = items
-      .map((it) => Number(it?.id_item || it?.item_id || it?.id))
+      .map((it) => Number(it?.id_item ?? it?.item_id ?? it?.id))
       .filter((n) => Number.isFinite(n) && n > 0);
+    const codes = items
+      .map((it) => String(it?.item_code ?? it?.code ?? it?.ItemCode ?? '').trim())
+      .filter(Boolean);
     const uniqueIds = Array.from(new Set(ids));
-    const existing = await Product.find({ rivhitItemId: { $in: uniqueIds } }).select('rivhitItemId');
-    const existingSet = new Set(existing.map((p) => Number(p.rivhitItemId)));
+    const uniqueCodes = Array.from(new Set(codes));
+    const existing = await Product.find({ $or: [
+      uniqueIds.length ? { rivhitItemId: { $in: uniqueIds } } : null,
+      uniqueCodes.length ? { rivhitItemCode: { $in: uniqueCodes } } : null
+    ].filter(Boolean) }).select('rivhitItemId rivhitItemCode');
+    const existingIdSet = new Set(existing.map((p) => Number(p.rivhitItemId)).filter((n) => Number.isFinite(n) && n > 0));
+    const existingCodeSet = new Set(existing.map((p) => (p.rivhitItemCode ? String(p.rivhitItemCode) : '')).filter(Boolean));
     // Pick a default category if provided, else first category
     let categoryId = null;
     if (typeof defaultCategoryId === 'string' && /^[a-fA-F0-9]{24}$/.test(defaultCategoryId)) {
@@ -136,10 +146,13 @@ router.post('/sync-items', adminAuth, async (req, res) => {
     if (!categoryId) return res.status(400).json({ message: 'No category available; create a category first or pass defaultCategoryId' });
 
     const toInsert = [];
+    let skippedByMissingKey = 0;
+    let skippedAsDuplicate = 0;
     for (const it of items) {
-      const rid = Number(it?.id_item || it?.item_id || it?.id);
-      if (!Number.isFinite(rid) || rid <= 0) continue;
-      if (existingSet.has(rid)) continue; // skip duplicates
+      const rid = Number(it?.id_item ?? it?.item_id ?? it?.id);
+      const rcode = String(it?.item_code ?? it?.code ?? it?.ItemCode ?? '').trim();
+      if ((!Number.isFinite(rid) || rid <= 0) && !rcode) { skippedByMissingKey++; continue; }
+      if ((Number.isFinite(rid) && rid > 0 && existingIdSet.has(rid)) || (rcode && existingCodeSet.has(rcode))) { skippedAsDuplicate++; continue; }
       // Map fields with safe defaults
       const name = (it?.item_name || it?.name || `Item ${rid}`).toString().trim() || `Item ${rid}`;
       const desc = (it?.description || it?.item_description || '').toString();
@@ -148,7 +161,7 @@ router.post('/sync-items', adminAuth, async (req, res) => {
       const stockRaw = Number(it?.quantity || it?.stock || it?.Quantity);
       const stock = Number.isFinite(stockRaw) && stockRaw >= 0 ? stockRaw : 0;
       const images = Array.isArray(it?.images) && it.images.length ? it.images.map(String) : [];
-      toInsert.push({
+      const doc = {
         name,
         description: desc || 'Imported from Rivhit',
         price,
@@ -158,7 +171,24 @@ router.post('/sync-items', adminAuth, async (req, res) => {
         stock,
         relatedProducts: [],
         isActive: true,
-        rivhitItemId: rid
+        rivhitItemId: Number.isFinite(rid) && rid > 0 ? rid : undefined,
+        rivhitItemCode: rcode || undefined
+      };
+      toInsert.push(doc);
+    }
+    if (dry) {
+      return res.json({
+        dryRun: true,
+        total: items.length,
+        uniqueIds: uniqueIds.length,
+        uniqueCodes: uniqueCodes.length,
+        existingById: existingIdSet.size,
+        existingByCode: existingCodeSet.size,
+        toInsert: toInsert.length,
+        skippedByMissingKey,
+        skippedAsDuplicate,
+        sampleKeys,
+        sampleNew: toInsert.slice(0, 3).map(x => ({ name: x.name, rivhitItemId: x.rivhitItemId, rivhitItemCode: x.rivhitItemCode }))
       });
     }
     let created = [];
@@ -172,7 +202,17 @@ router.post('/sync-items', adminAuth, async (req, res) => {
         throw e;
       });
     }
-    res.json({ total: items.length, existing: existingSet.size, created: created.length, skipped: items.length - created.length });
+    res.json({
+      total: items.length,
+      existingById: existingIdSet.size,
+      existingByCode: existingCodeSet.size,
+      created: created.length,
+      skipped: items.length - created.length,
+      skippedByMissingKey,
+      skippedAsDuplicate,
+      sampleKeys,
+      sampleNew: toInsert.slice(0, 3).map(x => ({ name: x.name, rivhitItemId: x.rivhitItemId, rivhitItemCode: x.rivhitItemCode }))
+    });
   } catch (e) {
     res.status(400).json({ message: e?.message || 'sync_items_failed' });
   }

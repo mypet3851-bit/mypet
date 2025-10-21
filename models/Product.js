@@ -238,6 +238,11 @@ productSchema.add({ rivhitItemId: { type: Number } });
 // Prevent duplicates when importing from Rivhit; allow sparse so most products can be without mapping
 try { productSchema.index({ rivhitItemId: 1 }, { unique: true, sparse: true }); } catch {}
 
+// Some Rivhit deployments expose a string code instead of numeric id in Item.List
+// Track a unique string code as a fallback key for deduplication
+productSchema.add({ rivhitItemCode: { type: String, trim: true } });
+try { productSchema.index({ rivhitItemCode: 1 }, { unique: true, sparse: true }); } catch {}
+
 // Virtual for average rating
 productSchema.virtual('averageRating').get(function() {
   if (!this.reviews || this.reviews.length === 0) return 0;
