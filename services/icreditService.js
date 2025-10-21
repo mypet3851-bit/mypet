@@ -59,23 +59,38 @@ export function buildICreditCandidates(apiUrl) {
   const u = String(apiUrl || '').trim().replace(/\s+/g, '');
   const list = new Set();
   const push = (v) => { if (v) list.add(v.replace(/\s+/g, '')); };
+
+  // Normalize common misconfigurations: missing .svc or wrong path segment
+  const addNormalizedVariants = (base) => {
+    // If configured without .svc (e.g., .../PaymentPageRequest/GetUrl), add .svc JSON and .svc classic
+    if (/\/PaymentPageRequest\/GetUrl$/i.test(base)) {
+      const root = base.replace(/\/PaymentPageRequest\/GetUrl$/i, '/API/PaymentPageRequest.svc');
+      push(root + '/JSON/GetUrl');
+      push(root + '/GetUrl');
+    }
+    // If configured without /API prefix, add it
+    if (/\/PaymentPageRequest\.svc\/?(GetUrl)?$/i.test(base) && !/\/API\//i.test(base)) {
+      const withApi = base.replace(/https:\/\/([^/]+)\//i, (m, host) => `https://${host}/API/`);
+      push(withApi);
+      push(withApi.replace(/\/GetUrl$/i, '/JSON/GetUrl'));
+    }
+  };
+
+  // Prefer JSON endpoints up front
+  push(u.replace(/\/API\//i, '/API/JSON/'));
+  push(u.replace(/\/GetUrl$/i, '/JSON/GetUrl'));
   // Base as configured
   push(u);
-  // If exact GetUrl path, try adding /JSON segment
-  push(u.replace(/\/GetUrl$/i, '/JSON/GetUrl'));
-  // Insert /JSON after API
-  push(u.replace(/\/API\//i, '/API/JSON/'));
   // Lowercase json variant used by some deployments
   push(u.replace(/\/GetUrl$/i, '/json/GetUrl'));
   // Some WCF deployments use /PaymentPageRequest.svc/JSON/GetUrl (segment after .svc)
   push(u.replace(/\/API\/PaymentPageRequest\.svc\/GetUrl$/i, '/API/PaymentPageRequest.svc/JSON/GetUrl'));
   push(u.replace(/\/API\/PaymentPageRequest\.svc\/GetUrl$/i, '/API/PaymentPageRequest.svc/json/GetUrl'));
-  // If base ends with PaymentPageRequest.svc (no trailing GetUrl)
   // If missing GetUrl (base ends with PaymentPageRequest.svc), append both
   if (/PaymentPageRequest\.svc$/i.test(u)) {
-    push(u + '/GetUrl');
     push(u + '/JSON/GetUrl');
     push(u + '/json/GetUrl');
+    push(u + '/GetUrl');
   }
   // If base missed /API prefix but contains PaymentPageRequest.svc
   if (/PaymentPageRequest\.svc\/?$/i.test(u) && !/\/API\//i.test(u)) {
@@ -87,6 +102,10 @@ export function buildICreditCandidates(apiUrl) {
   // Test environment variants (useful during development). If production host is configured, also try the test host.
   push(u.replace('https://icredit.rivhit.co.il/', 'https://testicredit.rivhit.co.il/'));
   push(u.replace('https://online.rivhit.co.il/', 'https://testicredit.rivhit.co.il/'));
+
+  // Add normalized variants based on current base
+  addNormalizedVariants(u);
+
   return Array.from(list);
 }
 
@@ -208,10 +227,10 @@ export async function requestICreditPaymentUrl({ order, settings, overrides = {}
   const candidates = buildICreditCandidates(apiUrl).slice(0, 8);
   // Enforce a total time budget so the browser doesn't hit axios 30s timeout and surface a generic "Network error"
   // Give slow WCF endpoints more breathing room by default; still tunable via env
-  const MAX_TOTAL_MS = Number(process.env.ICREDIT_MAX_MS || 45000);
+  const MAX_TOTAL_MS = Number(process.env.ICREDIT_MAX_MS || 60000);
   // Allow tuning per-attempt timeout via env; defaults chosen to balance speed vs flaky WCF endpoints
-  const PER_ATTEMPT_MAX_MS = Number(process.env.ICREDIT_PER_ATTEMPT_MAX_MS || 15000);
-  const PER_ATTEMPT_MIN_MS = Number(process.env.ICREDIT_PER_ATTEMPT_MIN_MS || 5000);
+  const PER_ATTEMPT_MAX_MS = Number(process.env.ICREDIT_PER_ATTEMPT_MAX_MS || 20000);
+  const PER_ATTEMPT_MIN_MS = Number(process.env.ICREDIT_PER_ATTEMPT_MIN_MS || 10000);
   const startTs = Date.now();
   const elapsed = () => Date.now() - startTs;
   const remaining = () => Math.max(0, MAX_TOTAL_MS - elapsed());
