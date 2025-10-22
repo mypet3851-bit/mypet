@@ -284,17 +284,26 @@ router.post('/icredit/create-session-from-cart', async (req, res) => {
       shippingFee: ps.shippingFee
     };
 
-    const settings = await loadSettings();
+  const settings = await loadSettings();
 
     // Compute RedirectURL to our frontend return page, preserving any configured base
     const origin = deriveOrigin(req);
     const frontendReturn = origin ? `${origin}/payment/return` : (settings?.payments?.icredit?.redirectURL || '');
 
+    // Allow client to pass optional overrides (e.g., deep links) and support placeholder replacement
+    const clientOverrides = (body && typeof body.overrides === 'object' && body.overrides) ? { ...body.overrides } : {};
     const overrides = {
-        RedirectURL: frontendReturn,
-        Custom1: String(ps._id),
-        Reference: ps.reference
+      RedirectURL: frontendReturn,
+      Custom1: String(ps._id),
+      Reference: ps.reference,
+      ...clientOverrides
     };
+    try {
+      // Replace {sessionId} placeholder in RedirectURL/FailRedirectURL if present
+      const sid = String(ps._id);
+      if (typeof overrides.RedirectURL === 'string') overrides.RedirectURL = overrides.RedirectURL.replace('{sessionId}', sid);
+      if (typeof overrides.FailRedirectURL === 'string') overrides.FailRedirectURL = overrides.FailRedirectURL.replace('{sessionId}', sid);
+    } catch {}
 
       // Ensure IPNURL is a valid public HTTPS if not configured in settings
       try {
