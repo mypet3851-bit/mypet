@@ -103,9 +103,10 @@ router.post('/icredit/create-session', async (req, res) => {
     // Diagnostic: log incoming request context (mask sensitive headers)
     try {
       const hdrAuth = req.header('Authorization');
+      const clientIp = getClientIp(req);
       console.log('[payments][icredit][create-session] incoming', {
         time: new Date().toISOString(),
-        ip: req.ip,
+        ip: clientIp || req.ip,
         ua: req.headers['user-agent'],
         origin: req.headers.origin || '',
         referer: req.headers.referer || '',
@@ -121,7 +122,9 @@ router.post('/icredit/create-session', async (req, res) => {
 
     const settings = await loadSettings();
     try {
-      const { url } = await requestICreditPaymentUrl({ order, settings, overrides });
+      const clientIp = getClientIp(req);
+      const ipOverrides = clientIp ? { ...overrides, IPAddress: clientIp } : (overrides || {});
+      const { url } = await requestICreditPaymentUrl({ order, settings, overrides: ipOverrides });
       try { console.log('[payments][icredit][create-session] success url=%s', url); } catch {}
       return res.json({ ok: true, url });
     } catch (e) {
@@ -151,6 +154,31 @@ function deriveOrigin(req) {
   const proto = (h['x-forwarded-proto'] || '').split(',')[0] || 'http';
   if (host) return `${proto}://${host}`;
   return process.env.FRONTEND_BASE_URL || '';
+}
+
+// Best-effort client IPv4 extractor (for gateways that require an IPAddress field)
+function getClientIp(req) {
+  try {
+    const h = req.headers || {};
+    let ip = (h['x-forwarded-for'] || h['cf-connecting-ip'] || req.socket?.remoteAddress || req.ip || '')
+      .toString()
+      .split(',')[0]
+      .trim();
+    // Normalize IPv6-embedded IPv4
+    if (/^::ffff:/.test(ip)) ip = ip.replace(/^::ffff:/, '');
+    // Strip IPv6 zone indexes if any
+    if (/^\[.*\]$/.test(ip)) ip = ip.replace(/^\[|\]$/g, '');
+    // Simple IPv4 validation
+    const m = ip.match(/^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$/);
+    if (!m) return undefined;
+    for (let i = 1; i <= 4; i++) {
+      const n = Number(m[i]);
+      if (!Number.isFinite(n) || n < 0 || n > 255) return undefined;
+    }
+    return ip;
+  } catch {
+    return undefined;
+  }
 }
 
 // Create hosted payment session WITHOUT creating an Order upfront
@@ -247,7 +275,10 @@ router.post('/icredit/create-session-from-cart', async (req, res) => {
         }
       } catch {}
 
-    const { url } = await requestICreditPaymentUrl({ order: orderLike, settings, overrides });
+    // Include client IP if available (some gateways require it)
+    const clientIp = getClientIp(req);
+    const overridesWithIp = clientIp ? { ...overrides, IPAddress: clientIp } : overrides;
+    const { url } = await requestICreditPaymentUrl({ order: orderLike, settings, overrides: overridesWithIp });
     return res.json({ ok: true, url, sessionId: String(ps._id) });
   } catch (e) {
     try { console.error('[payments][icredit][create-session-from-cart] error', e?.message || e); } catch {}

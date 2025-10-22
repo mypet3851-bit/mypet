@@ -150,6 +150,11 @@ export function buildICreditRequest({ order, settings, overrides = {} }) {
 	req.AgentId = Number(overrides.AgentId || 0) || 0;
 	req.ProjectId = Number(overrides.ProjectId || 0) || 0;
 
+	// Some iCredit setups expect the originating Client IP
+	if (typeof overrides.IPAddress === 'string' && overrides.IPAddress) {
+		req.IPAddress = overrides.IPAddress;
+	}
+
 	// Prune undefined keys to keep payload clean
 	Object.keys(req).forEach((k) => {
 		if (req[k] === undefined) delete req[k];
