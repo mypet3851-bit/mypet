@@ -285,17 +285,27 @@ export async function requestICreditPaymentUrl({ order, settings, overrides = {}
 				for (const baseSvc of bases) {
 					for (const body of bodyVariants) {
 						const envelope = `<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<soap:Envelope xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\" xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\">\n  <soap:Body>\n${body}\n  </soap:Body>\n</soap:Envelope>`;
-						for (const h of headersVariants) {
+								for (const h of headersVariants) {
 							try {
-								const resp = await axios.post(baseSvc, envelope, { timeout: timeoutMs, httpsAgent: agent, headers: h, validateStatus: () => true });
-								if ((resp.status || 0) >= 200 && (resp.status || 0) < 300) {
+										const resp = await axios.post(baseSvc, envelope, { timeout: timeoutMs, httpsAgent: agent, headers: h, maxRedirects: 0, validateStatus: () => true });
+										const st = resp.status || 0;
+										// Handle 3xx redirects by reading Location header (some WCF setups redirect to hosted page URL)
+										if (st >= 300 && st < 400) {
+											const loc = resp.headers?.location || resp.headers?.Location;
+											if (loc && /^https?:\/\//i.test(String(loc))) return { url: String(loc) };
+										}
+										if (st >= 200 && st < 300) {
 									const xml = String(resp.data || '');
 									// Extract any https URL present in the response
 									const m = xml.match(/https?:\/\/[^<\s]+/i);
 									if (m && m[0]) return { url: m[0] };
 								}
-							} catch (e2) {
-								lastErr = e2; continue;
+									} catch (e2) {
+										// If axios threw due to redirect limit but provided a response with Location, use it
+										const r = e2?.response;
+										const loc = r?.headers?.location || r?.headers?.Location;
+										if (loc && /^https?:\/\//i.test(String(loc))) return { url: String(loc) };
+										lastErr = e2; continue;
 							}
 						}
 					}
