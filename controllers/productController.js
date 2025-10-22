@@ -179,7 +179,9 @@ export const getProducts = async (req, res) => {
       .populate({ path: 'reviews.user', select: 'name email image' })
       .sort({ isFeatured: -1, order: 1, createdAt: -1 });
 
-  const allowAutoTranslate = isDeepseekConfigured();
+  // Only auto-translate on demand to avoid slowing product listing with external API calls.
+  // Enable by passing ?autoTranslate=true along with lang.
+  const allowAutoTranslate = isDeepseekConfigured() && String(req.query.autoTranslate || 'false').toLowerCase() === 'true';
     const productsWithInventory = await Promise.all(
       products.map(async (product) => {
         const inventory = await Inventory.find({ product: product._id });
@@ -403,8 +405,9 @@ export const getProduct = async (req, res) => {
         const desc = productObj.description_i18n?.get?.(reqLang) || (productObj.description_i18n && productObj.description_i18n[reqLang]);
         if (nm) productObj.name = nm;
         if (desc) productObj.description = desc;
-        // Optionally auto-translate and persist when missing
-  if ((!nm || !desc) && isDeepseekConfigured()) {
+    // Optionally auto-translate and persist when missing (opt-in via ?autoTranslate=true)
+    const allowAutoTranslate = isDeepseekConfigured() && String(req.query.autoTranslate || 'false').toLowerCase() === 'true';
+    if ((!nm || !desc) && allowAutoTranslate) {
           let changed = false;
           if (!nm && typeof product.name === 'string' && product.name.trim()) {
             try {
