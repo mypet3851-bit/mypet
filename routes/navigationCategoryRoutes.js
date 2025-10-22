@@ -38,8 +38,9 @@ async function ensureUniqueSlug(desired, excludeId) {
 // Get all navigation categories
 router.get('/', async (req, res) => {
   try {
-    const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
-    const allowAuto = isDeepseekConfigured();
+  const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
+  // Only auto-translate when explicitly requested to avoid slowing default responses
+  const allowAuto = isDeepseekConfigured() && String(req.query.autoTranslate || 'false').toLowerCase() === 'true';
     const categories = await NavigationCategory.find()
       .populate('categories', '_id name slug path')
       .populate('slugGroups.categories', '_id name slug path')

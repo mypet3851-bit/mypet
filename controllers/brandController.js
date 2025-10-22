@@ -14,7 +14,8 @@ function slugify(input) {
 
 export const listBrands = asyncHandler(async (req, res) => {
   const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
-  const allowAuto = process.env.ALLOW_RUNTIME_PRODUCT_TRANSLATE === 'true';
+  // Only auto-translate when explicitly requested to keep default loads fast
+  const allowAuto = (process.env.ALLOW_RUNTIME_PRODUCT_TRANSLATE === 'true') && String(req.query.autoTranslate || 'false').toLowerCase() === 'true';
   const brands = await Brand.find().sort({ order: 1, createdAt: 1 });
   if (reqLang) {
     for (const b of brands) {
@@ -35,7 +36,7 @@ export const listBrands = asyncHandler(async (req, res) => {
 
 export const listActiveBrands = asyncHandler(async (req, res) => {
   const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
-  const allowAuto = process.env.ALLOW_RUNTIME_PRODUCT_TRANSLATE === 'true';
+  const allowAuto = (process.env.ALLOW_RUNTIME_PRODUCT_TRANSLATE === 'true') && String(req.query.autoTranslate || 'false').toLowerCase() === 'true';
   const brands = await Brand.find({ isActive: true }).sort({ order: 1, createdAt: 1 });
   if (reqLang) {
     for (const b of brands) {
@@ -102,7 +103,7 @@ export const getBrandBySlug = asyncHandler(async (req, res) => {
   const { slug } = req.params;
   if (!slug) return res.status(400).json({ message: 'Slug is required' });
   const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
-  const allowAuto = process.env.ALLOW_RUNTIME_PRODUCT_TRANSLATE === 'true';
+  const allowAuto = (process.env.ALLOW_RUNTIME_PRODUCT_TRANSLATE === 'true') && String(req.query.autoTranslate || 'false').toLowerCase() === 'true';
   const brand = await Brand.findOne({ slug: String(slug).toLowerCase() });
   if (!brand) return res.status(404).json({ message: 'Brand not found' });
   const obj = brand.toObject();

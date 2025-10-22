@@ -52,8 +52,8 @@ export const remove = async (req, res) => {
 
 export const publicActiveList = async (req, res) => {
   try {
-    const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
-    const allowAutoTranslate = isDeepseekConfigured();
+  const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
+  const allowAutoTranslate = isDeepseekConfigured() && String(req.query.autoTranslate || 'false').toLowerCase() === 'true';
     const now = new Date();
     const sales = await FlashSale.find({ active: true, startDate: { $lte: now }, endDate: { $gte: now } })
       .sort({ startDate: 1 })
@@ -116,8 +116,8 @@ export const publicActiveList = async (req, res) => {
 // Public: get a specific active flash sale by id (only returns if currently active)
 export const publicGetById = async (req, res) => {
   try {
-    const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
-    const allowAutoTranslate = isDeepseekConfigured();
+  const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
+  const allowAutoTranslate = isDeepseekConfigured() && String(req.query.autoTranslate || 'false').toLowerCase() === 'true';
     const { id } = req.params;
     const now = new Date();
     const s = await FlashSale.findOne({ _id: id, active: true, startDate: { $lte: now }, endDate: { $gte: now } })

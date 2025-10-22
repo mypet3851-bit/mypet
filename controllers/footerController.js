@@ -5,8 +5,8 @@ import { deepseekTranslate, isDeepseekConfigured } from '../services/translate/d
 // Get footer settings
 export const getFooterSettings = async (req, res) => {
   try {
-    const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
-    const allowAuto = isDeepseekConfigured();
+  const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
+  const allowAuto = isDeepseekConfigured() && String(req.query.autoTranslate || 'false').toLowerCase() === 'true';
     let settings = await FooterSettings.findOne();
     if (!settings) {
       settings = await FooterSettings.create({});
@@ -94,8 +94,8 @@ export const updateFooterSettings = async (req, res) => {
 // Get all footer links
 export const getFooterLinks = async (req, res) => {
   try {
-    const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
-    const allowAuto = isDeepseekConfigured();
+  const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
+  const allowAuto = isDeepseekConfigured() && String(req.query.autoTranslate || 'false').toLowerCase() === 'true';
     const links = await FooterLink.find().sort('order');
     if (reqLang) {
       for (const l of links) {

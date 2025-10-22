@@ -97,8 +97,8 @@ async function translateAndPersistCategories(categories, lang, allowAuto) {
 // Get all categories
 export const getAllCategories = async (req, res) => {
   try {
-    const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
-    const allowAuto = isDeepseekConfigured();
+  const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
+  const allowAuto = isDeepseekConfigured() && String(req.query.autoTranslate || 'false').toLowerCase() === 'true';
     // Optional: asTree=true to return nested structure, otherwise flat list
     const asTree = String(req.query.asTree || '').toLowerCase() === 'true';
     const categories = await Category.find().sort({ depth: 1, order: 1, name: 1 }).lean();
@@ -132,8 +132,8 @@ export const getAllCategories = async (req, res) => {
 // Get single category
 export const getCategory = async (req, res) => {
   try {
-    const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
-    const allowAuto = isDeepseekConfigured();
+  const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
+  const allowAuto = isDeepseekConfigured() && String(req.query.autoTranslate || 'false').toLowerCase() === 'true';
     const category = await Category.findById(req.params.id);
     if (!category) {
       return res.status(404).json({ message: 'Category not found' });

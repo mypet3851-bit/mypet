@@ -166,8 +166,21 @@ export const getProducts = async (req, res) => {
       return res.json([]);
     }
   const query = await buildProductQuery(req.query);
+    // Optional pagination controls
+    let limit = 0;
+    let skip = 0;
+    try {
+      const ql = Number(req.query.limit);
+      const qp = Number(req.query.page);
+      if (Number.isFinite(ql) && ql > 0) {
+        limit = Math.min(Math.floor(ql), 60);
+        if (Number.isFinite(qp) && qp > 1) {
+          skip = (qp - 1) * limit;
+        }
+      }
+    } catch {}
 
-    const products = await Product.find(query)
+    let q = Product.find(query)
       .select('+colors.name +colors.code +colors.images +colors.sizes')
       // Populate primary & additional categories so client can show names
       .populate('category')
@@ -178,6 +191,9 @@ export const getProducts = async (req, res) => {
       .populate('relatedProducts')
       .populate({ path: 'reviews.user', select: 'name email image' })
       .sort({ isFeatured: -1, order: 1, createdAt: -1 });
+    if (skip > 0) q = q.skip(skip);
+    if (limit > 0) q = q.limit(limit);
+    const products = await q;
 
   // Only auto-translate on demand to avoid slowing product listing with external API calls.
   // Enable by passing ?autoTranslate=true along with lang.
