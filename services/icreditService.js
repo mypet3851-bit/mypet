@@ -99,6 +99,7 @@ export function buildICreditCandidates(apiUrl) {
   const u = String(apiUrl || '').trim().replace(/\s+/g, '');
   const list = new Set();
   const push = (v) => { if (v) list.add(v.replace(/\s+/g, '')); };
+  const FORCE_TEST = String(process.env.ICREDIT_FORCE_TEST || '').trim() === '1';
 
   // Normalize common misconfigurations: missing .svc or wrong path segment
   const addNormalizedVariants = (base) => {
@@ -137,11 +138,23 @@ export function buildICreditCandidates(apiUrl) {
     push(u.replace(/PaymentPageRequest\.svc\/?$/i, 'PaymentPageRequest.svc/JSON/GetUrl'));
   }
   // Alternate host variations that sometimes work
-  push(u.replace('https://icredit.rivhit.co.il/', 'https://online.rivhit.co.il/'));
-  push(u.replace('https://online.rivhit.co.il/', 'https://icredit.rivhit.co.il/'));
+  const toOnline = u.replace('https://icredit.rivhit.co.il/', 'https://online.rivhit.co.il/');
+  const toICredit = u.replace('https://online.rivhit.co.il/', 'https://icredit.rivhit.co.il/');
+  const toTestFromProd = u.replace('https://icredit.rivhit.co.il/', 'https://testicredit.rivhit.co.il/');
+  const toTestFromOnline = u.replace('https://online.rivhit.co.il/', 'https://testicredit.rivhit.co.il/');
+
+  // Prefer test endpoints first when forcing test mode
+  if (FORCE_TEST) {
+    push(toTestFromProd);
+    push(toTestFromOnline);
+  }
+  push(toOnline);
+  push(toICredit);
   // Test environment variants (useful during development). If production host is configured, also try the test host.
-  push(u.replace('https://icredit.rivhit.co.il/', 'https://testicredit.rivhit.co.il/'));
-  push(u.replace('https://online.rivhit.co.il/', 'https://testicredit.rivhit.co.il/'));
+  if (!FORCE_TEST) {
+    push(toTestFromProd);
+    push(toTestFromOnline);
+  }
 
   // Add normalized variants based on current base
   addNormalizedVariants(u);
@@ -252,7 +265,13 @@ export async function requestICreditPaymentUrl({ order, settings, overrides = {}
   const cfg = settings?.payments?.icredit || {};
   if (!cfg?.enabled) throw new Error('icredit_disabled');
   if (!cfg?.groupPrivateToken) throw new Error('missing_token');
-  const apiUrl = cfg.apiUrl || 'https://icredit.rivhit.co.il/API/PaymentPageRequest.svc/GetUrl';
+  let apiUrl = cfg.apiUrl || 'https://icredit.rivhit.co.il/API/PaymentPageRequest.svc/GetUrl';
+  // Optional override to force using the test host regardless of configured URL (handy for staging)
+  if (String(process.env.ICREDIT_FORCE_TEST || '').trim() === '1') {
+    apiUrl = apiUrl
+      .replace('https://icredit.rivhit.co.il', 'https://testicredit.rivhit.co.il')
+      .replace('https://online.rivhit.co.il', 'https://testicredit.rivhit.co.il');
+  }
   // Allow env override to force transport without redeploying settings
   const transport = (process.env.ICREDIT_TRANSPORT || cfg.transport || 'auto').toLowerCase();
   const payload = buildICreditRequest({ order, settings, overrides });
@@ -404,6 +423,16 @@ export async function requestICreditPaymentUrl({ order, settings, overrides = {}
       'https://online.rivhit.co.il/API/PaymentPageRequest/GetUrl',
       'http://online.rivhit.co.il/API/PaymentPageRequest/GetUrl'
     ];
+    // If forcing test mode, prioritize SOAPAction variants that use the test host
+    if (String(process.env.ICREDIT_FORCE_TEST || '').trim() === '1') {
+      const prefer = [
+        'https://testicredit.rivhit.co.il/API/PaymentPageRequest/GetUrl',
+        'http://testicredit.rivhit.co.il/API/PaymentPageRequest/GetUrl'
+      ];
+      // Stable order: preferred first, then the rest without duplicates
+      const set = new Set(prefer.concat(soapActions));
+      soapActions.splice(0, soapActions.length, ...Array.from(set));
+    }
     const namespaces = [
       'https://icredit.rivhit.co.il/API/',
       'http://tempuri.org/'
