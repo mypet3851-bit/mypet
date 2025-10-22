@@ -1,6 +1,15 @@
 import Settings from '../models/Settings.js';
+import https from 'https';
 // Prefer built-in fetch in modern Node; fall back to node-fetch only if needed
 let __fetch = globalThis.fetch;
+// Optional insecure TLS mode for staging/test hosts that use mismatched/self-signed certs.
+// Enable ONLY for debugging by setting ICREDIT_INSECURE_TLS=1 in env.
+const ICREDIT_INSECURE = String(process.env.ICREDIT_INSECURE_TLS || '').trim() === '1';
+if (ICREDIT_INSECURE) {
+  // As a safety, also disable TLS verification globally for legacy HTTPS stacks used by some libraries.
+  // This is process-wide; do not enable in production.
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+}
 if (!__fetch) {
   try {
     const mod = await import('node-fetch');
@@ -15,11 +24,42 @@ if (!__fetch) {
 // doesn't hit its own 30s axios timeout and surface a generic "Network error".
 // We prefer to fail fast on the server (returning a 4xx with detail) so the UI
 // can show a clear message and allow a quick retry.
+// Reusable insecure agents/dispatchers
+let insecureHttpsAgent = null;
+let insecureUndiciDispatcher = null;
+
+async function getInsecureUndiciDispatcher() {
+  if (insecureUndiciDispatcher) return insecureUndiciDispatcher;
+  try {
+    const undici = await import('undici');
+    const Agent = undici.Agent || undici.default?.Agent;
+    if (Agent) {
+      insecureUndiciDispatcher = new Agent({ connect: { rejectUnauthorized: false } });
+      return insecureUndiciDispatcher;
+    }
+  } catch {}
+  return null;
+}
+
+function ensureInsecureHttpsAgent() {
+  if (!insecureHttpsAgent) insecureHttpsAgent = new https.Agent({ rejectUnauthorized: false });
+  return insecureHttpsAgent;
+}
+
 function fetchWithTimeout(url, options = {}, timeoutMs = 20000) {
   if (!__fetch) throw new Error('fetch_not_available');
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeoutMs);
   const opts = { ...options, signal: controller.signal };
+  // If insecure TLS is enabled, attach appropriate agent/dispatcher (both are safe to include; ignored when unsupported)
+  if (ICREDIT_INSECURE) {
+    try {
+      opts.agent = ensureInsecureHttpsAgent(); // node-fetch / legacy
+    } catch {}
+    // undici (Node 18+ global fetch) uses dispatcher
+    // Best-effort: this is async to build once; if not ready, request still proceeds due to global env var above
+    getInsecureUndiciDispatcher().then((d) => { if (d) opts.dispatcher = d; }).catch(() => {});
+  }
   return __fetch(url, opts)
     .finally(() => clearTimeout(id));
 }
@@ -357,7 +397,12 @@ export async function requestICreditPaymentUrl({ order, settings, overrides = {}
       'https://icredit.rivhit.co.il/API/GetUrl',
       'http://icredit.rivhit.co.il/API/IPaymentPageRequest/GetUrl',
       'http://icredit.rivhit.co.il/API/PaymentPageRequest/GetUrl',
-      'http://tempuri.org/IPaymentPageRequest/GetUrl'
+      'http://tempuri.org/IPaymentPageRequest/GetUrl',
+      // Explicit test/online host variants seen on sandbox environments
+      'https://testicredit.rivhit.co.il/API/PaymentPageRequest/GetUrl',
+      'http://testicredit.rivhit.co.il/API/PaymentPageRequest/GetUrl',
+      'https://online.rivhit.co.il/API/PaymentPageRequest/GetUrl',
+      'http://online.rivhit.co.il/API/PaymentPageRequest/GetUrl'
     ];
     const namespaces = [
       'https://icredit.rivhit.co.il/API/',
