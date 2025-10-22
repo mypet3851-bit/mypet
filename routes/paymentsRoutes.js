@@ -292,6 +292,13 @@ router.post('/icredit/create-session-from-cart', async (req, res) => {
 
     // Allow client to pass optional overrides (e.g., deep links) and support placeholder replacement
     const clientOverrides = (body && typeof body.overrides === 'object' && body.overrides) ? { ...body.overrides } : {};
+    // Sanitize any incoming IPAddress override (accept only valid IPv4)
+    try {
+      if (typeof clientOverrides.IPAddress !== 'undefined') {
+        const valid = validateIPv4(String(clientOverrides.IPAddress));
+        if (!valid) delete clientOverrides.IPAddress; else clientOverrides.IPAddress = valid;
+      }
+    } catch {}
     const overrides = {
       RedirectURL: frontendReturn,
       Custom1: String(ps._id),
