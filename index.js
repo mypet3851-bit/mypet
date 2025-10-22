@@ -85,6 +85,8 @@ dotenv.config({ path: path.resolve(__dirname, './.env'), override: true });
 const app = express();
 
 // Middleware
+// Behind proxies (Render/Netlify/etc.) trust X-Forwarded-* to populate req.ip properly
+app.set('trust proxy', true);
 // Lightweight request logging & version header
 let APP_VERSION = process.env.APP_VERSION || '';
 try {

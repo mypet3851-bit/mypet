@@ -122,7 +122,7 @@ router.post('/icredit/create-session', async (req, res) => {
 
     const settings = await loadSettings();
     try {
-      const clientIp = getClientIp(req);
+      const clientIp = getClientIp(req) || getFallbackIpFromEnv();
       const ipOverrides = clientIp ? { ...overrides, IPAddress: clientIp } : (overrides || {});
       const { url } = await requestICreditPaymentUrl({ order, settings, overrides: ipOverrides });
       try { console.log('[payments][icredit][create-session] success url=%s', url); } catch {}
@@ -160,25 +160,48 @@ function deriveOrigin(req) {
 function getClientIp(req) {
   try {
     const h = req.headers || {};
-    let ip = (h['x-forwarded-for'] || h['cf-connecting-ip'] || req.socket?.remoteAddress || req.ip || '')
-      .toString()
-      .split(',')[0]
-      .trim();
-    // Normalize IPv6-embedded IPv4
-    if (/^::ffff:/.test(ip)) ip = ip.replace(/^::ffff:/, '');
-    // Strip IPv6 zone indexes if any
-    if (/^\[.*\]$/.test(ip)) ip = ip.replace(/^\[|\]$/g, '');
-    // Simple IPv4 validation
-    const m = ip.match(/^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$/);
-    if (!m) return undefined;
-    for (let i = 1; i <= 4; i++) {
-      const n = Number(m[i]);
-      if (!Number.isFinite(n) || n < 0 || n > 255) return undefined;
+    const candidates = [];
+    const xff = (h['x-forwarded-for'] || '').toString();
+    if (xff) candidates.push(...xff.split(',').map(s => s.trim()).filter(Boolean));
+    const cf = (h['cf-connecting-ip'] || '').toString().trim();
+    if (cf) candidates.push(cf);
+    const xri = (h['x-real-ip'] || '').toString().trim();
+    if (xri) candidates.push(xri);
+    const xci = (h['x-client-ip'] || '').toString().trim();
+    if (xci) candidates.push(xci);
+    const sock = (req.socket?.remoteAddress || '').toString().trim();
+    if (sock) candidates.push(sock);
+    const rip = (req.ip || '').toString().trim();
+    if (rip) candidates.push(rip);
+
+    for (let raw of candidates) {
+      if (!raw) continue;
+      // Remove brackets and ports (e.g., 1.2.3.4:1234)
+      let ip = raw.replace(/^\[|\]$/g, '').replace(/:\d+$/, '');
+      if (/^::ffff:/.test(ip)) ip = ip.replace(/^::ffff:/, '');
+      // Accept only IPv4
+      const m = ip.match(/^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$/);
+      if (!m) continue;
+      let ok = true;
+      for (let i = 1; i <= 4; i++) {
+        const n = Number(m[i]);
+        if (!Number.isFinite(n) || n < 0 || n > 255) { ok = false; break; }
+      }
+      if (ok) return ip;
     }
-    return ip;
+    return undefined;
   } catch {
     return undefined;
   }
+}
+
+function getFallbackIpFromEnv() {
+  const ip = String(process.env.ICREDIT_DEFAULT_IP || '').trim();
+  if (!ip) return undefined;
+  const m = ip.match(/^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$/);
+  if (!m) return undefined;
+  for (let i = 1; i <= 4; i++) { const n = Number(m[i]); if (!Number.isFinite(n) || n < 0 || n > 255) return undefined; }
+  return ip;
 }
 
 // Create hosted payment session WITHOUT creating an Order upfront
@@ -275,9 +298,9 @@ router.post('/icredit/create-session-from-cart', async (req, res) => {
         }
       } catch {}
 
-    // Include client IP if available (some gateways require it)
-    const clientIp = getClientIp(req);
-    const overridesWithIp = clientIp ? { ...overrides, IPAddress: clientIp } : overrides;
+  // Include client IP if available (some gateways require it)
+  const clientIp = getClientIp(req) || getFallbackIpFromEnv();
+  const overridesWithIp = clientIp ? { ...overrides, IPAddress: clientIp } : overrides;
     const { url } = await requestICreditPaymentUrl({ order: orderLike, settings, overrides: overridesWithIp });
     return res.json({ ok: true, url, sessionId: String(ps._id) });
   } catch (e) {
