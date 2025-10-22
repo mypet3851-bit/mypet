@@ -122,7 +122,11 @@ router.post('/icredit/create-session', async (req, res) => {
 
     const settings = await loadSettings();
     try {
-      const clientIp = getClientIp(req) || getFallbackIpFromEnv();
+      let clientIp = getClientIp(req) || getFallbackIpFromEnv();
+      if (!clientIp) {
+        const bodyIp = validateIPv4(req.body?.clientIp || req.body?.ip || req.body?.ipAddress);
+        if (bodyIp) clientIp = bodyIp;
+      }
       const ipOverrides = clientIp ? { ...overrides, IPAddress: clientIp } : (overrides || {});
       const { url } = await requestICreditPaymentUrl({ order, settings, overrides: ipOverrides });
       try { console.log('[payments][icredit][create-session] success url=%s', url); } catch {}
@@ -198,6 +202,16 @@ function getClientIp(req) {
 function getFallbackIpFromEnv() {
   const ip = String(process.env.ICREDIT_DEFAULT_IP || '').trim();
   if (!ip) return undefined;
+  const m = ip.match(/^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$/);
+  if (!m) return undefined;
+  for (let i = 1; i <= 4; i++) { const n = Number(m[i]); if (!Number.isFinite(n) || n < 0 || n > 255) return undefined; }
+  return ip;
+}
+
+function validateIPv4(val) {
+  if (typeof val !== 'string' || !val.trim()) return undefined;
+  let ip = val.trim().replace(/^\[|\]$/g, '').replace(/:\d+$/, '');
+  if (/^::ffff:/.test(ip)) ip = ip.replace(/^::ffff:/, '');
   const m = ip.match(/^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$/);
   if (!m) return undefined;
   for (let i = 1; i <= 4; i++) { const n = Number(m[i]); if (!Number.isFinite(n) || n < 0 || n > 255) return undefined; }
@@ -298,9 +312,13 @@ router.post('/icredit/create-session-from-cart', async (req, res) => {
         }
       } catch {}
 
-  // Include client IP if available (some gateways require it)
-  const clientIp = getClientIp(req) || getFallbackIpFromEnv();
-  const overridesWithIp = clientIp ? { ...overrides, IPAddress: clientIp } : overrides;
+    // Include client IP if available (some gateways require it)
+    let clientIp = getClientIp(req) || getFallbackIpFromEnv();
+    if (!clientIp) {
+      const bodyIp = validateIPv4(req.body?.clientIp || req.body?.ip || req.body?.ipAddress);
+      if (bodyIp) clientIp = bodyIp;
+    }
+    const overridesWithIp = clientIp ? { ...overrides, IPAddress: clientIp } : overrides;
     const { url } = await requestICreditPaymentUrl({ order: orderLike, settings, overrides: overridesWithIp });
     return res.json({ ok: true, url, sessionId: String(ps._id) });
   } catch (e) {
