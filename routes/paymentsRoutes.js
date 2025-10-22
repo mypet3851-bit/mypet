@@ -41,6 +41,31 @@ router.get('/icredit/diagnose', adminAuth, async (req, res) => {
   }
 });
 
+// Preview the exact JSON payload we would send to iCredit GetUrl for a given order (admin only)
+router.get('/icredit/preview-request', adminAuth, async (req, res) => {
+  try {
+    const orderId = String(req.query.orderId || '').trim();
+    if (!orderId) return res.status(400).json({ message: 'orderId required' });
+    const order = await Order.findById(orderId);
+    if (!order) return res.status(404).json({ message: 'order_not_found' });
+
+    const settings = await loadSettings();
+    const payload = buildICreditRequest({ order, settings, overrides: {} });
+    const base = settings?.payments?.icredit?.apiUrl || 'https://icredit.rivhit.co.il/API/PaymentPageRequest.svc/GetUrl';
+    const candidates = buildICreditCandidates(base).slice(0, 8);
+    // Mask sensitive values in settings snapshot
+    const snap = {
+      enabled: !!settings?.payments?.icredit?.enabled,
+      apiUrl: base,
+      transport: settings?.payments?.icredit?.transport || 'auto',
+      groupPrivateToken: settings?.payments?.icredit?.groupPrivateToken ? '***' : ''
+    };
+    return res.json({ ok: true, orderId, settings: snap, payload, candidates });
+  } catch (e) {
+    res.status(500).json({ ok: false, message: e?.message || 'preview_error' });
+  }
+});
+
 // Create hosted payment session for iCredit from an existing order
 router.post('/icredit/create-session', async (req, res) => {
   try {
