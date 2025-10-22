@@ -1,7 +1,7 @@
 import express from 'express';
 import Order from '../models/Order.js';
 import { adminAuth } from '../middleware/auth.js';
-import { loadSettings, requestICreditPaymentUrl, buildICreditRequest, buildICreditCandidates, diagnoseICreditConnectivity } from '../services/icreditService.js';
+import { loadSettings, requestICreditPaymentUrl, buildICreditRequest, buildICreditCandidates, diagnoseICreditConnectivity, pingICredit } from '../services/icreditService.js';
 
 const router = express.Router();
 
@@ -38,6 +38,17 @@ router.get('/icredit/diagnose', adminAuth, async (req, res) => {
     return res.json({ ok: true, ...diag });
   } catch (e) {
     res.status(500).json({ ok: false, message: e?.message || 'diagnose_error' });
+  }
+});
+
+// Admin-only: quick ping of iCredit endpoints (JSON and SOAP) with minimal payload
+router.get('/icredit/ping', adminAuth, async (req, res) => {
+  try {
+    const useReal = String(req.query.useReal || '').trim() === '1' || String(req.query.real || '').trim() === '1';
+    const out = await pingICredit({ useRealToken: useReal });
+    return res.json(out);
+  } catch (e) {
+    res.status(500).json({ ok: false, message: e?.message || 'ping_error' });
   }
 });
 

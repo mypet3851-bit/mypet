@@ -537,3 +537,83 @@ export async function diagnoseICreditConnectivity(baseUrl) {
 
   return { baseUrl, candidates, origins, dns: dnsResults, http: httpResults };
 }
+
+// Admin-only quick probe: attempt a minimal JSON and SOAP POST to verify TLS/HTTP reachability to iCredit.
+// Defaults to using an obviously invalid token to avoid creating real sessions. Set useRealToken=true to
+// validate end-to-end with configured token (still uses tiny payload). Returns timing and compact body snippets.
+export async function pingICredit({ useRealToken = false } = {}) {
+  const settings = await loadSettings();
+  const cfg = settings?.payments?.icredit || {};
+  const base = cfg.apiUrl || 'https://icredit.rivhit.co.il/API/PaymentPageRequest.svc/GetUrl';
+  const candidates = buildICreditCandidates(base).slice(0, 4);
+  const transport = (process.env.ICREDIT_TRANSPORT || cfg.transport || 'auto').toLowerCase();
+  const tok = useRealToken && cfg.groupPrivateToken ? cfg.groupPrivateToken : 'x';
+  const jsonBody = { request: { GroupPrivateToken: tok, Items: [], RedirectURL: '' } };
+  const attempts = [];
+  const started = Date.now();
+  const until = (t)=> Math.max(0, t - (Date.now()-started));
+  const budgetMs = Number(process.env.ICREDIT_PING_MAX_MS || 20000);
+  // JSON probe (2 variants max)
+  if (transport !== 'soap') {
+    for (let i=0; i<Math.min(2, candidates.length); i++) {
+      const url = candidates[i];
+      const t0 = Date.now();
+      try {
+        const r = await fetchWithTimeout(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Accept': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest'
+          },
+          body: JSON.stringify(jsonBody)
+        }, Math.max(4000, until(budgetMs)));
+        const text = await r.text();
+        attempts.push({ kind:'json', url, status: r.status, ok: r.ok, ms: Date.now()-t0, ct: r.headers.get('content-type')||'', body: text.slice(0,160).replace(/\s+/g,' ') });
+        if (attempts.length >= 2) break;
+      } catch (e) {
+        const code = e?.code || e?.cause?.code || e?.errno;
+        attempts.push({ kind:'json', url, error: (code? code+': ' : '') + (e?.message||String(e)), ms: Date.now()-t0 });
+      }
+      if (Date.now()-started > budgetMs) break;
+    }
+  }
+
+  // SOAP probe (1 endpoint/action)
+  if (transport !== 'json' && Date.now()-started < budgetMs) {
+    const base1 = base.replace(/\/JSON\//i, '/').replace(/\/GetUrl$/i, '');
+    const svcMatch = base1.match(/^(.*PaymentPageRequest\.svc)(?:\/?|$)/i);
+    const svcRoot = svcMatch ? svcMatch[1] : base1.replace(/\/?$/,'') + '/PaymentPageRequest.svc';
+    const ep = svcRoot;
+    const action = 'GetUrl';
+    const inner = '<request><GroupPrivateToken>'+xmlEscape(tok)+'</GroupPrivateToken></request>';
+    const envelope = buildSoapEnvelope(action, inner, 'https://icredit.rivhit.co.il/API/');
+    const t0 = Date.now();
+    try {
+      const r = await fetchWithTimeout(ep, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/xml; charset=utf-8', 'Accept': 'text/xml', 'SOAPAction': 'https://icredit.rivhit.co.il/API/PaymentPageRequest/GetUrl' },
+        body: envelope
+      }, Math.max(4000, until(budgetMs)));
+      const text = await r.text();
+      attempts.push({ kind:'soap', url: ep, action: 'PaymentPageRequest/GetUrl', status: r.status, ok: r.ok, ms: Date.now()-t0, body: text.slice(0,200).replace(/\s+/g,' ') });
+    } catch (e) {
+      const code = e?.code || e?.cause?.code || e?.errno;
+      attempts.push({ kind:'soap', url: ep, action: 'PaymentPageRequest/GetUrl', error: (code? code+': ' : '') + (e?.message||String(e)), ms: Date.now()-t0 });
+    }
+  }
+
+  // Include DNS + origin GET check for context
+  const diag = await diagnoseICreditConnectivity(base).catch(()=>null);
+  return {
+    ok: true,
+    settings: {
+      enabled: !!cfg.enabled,
+      apiUrl: base,
+      transport,
+      token: useRealToken && cfg.groupPrivateToken ? 'present' : 'not-used'
+    },
+    attempts,
+    diag
+  };
+}
