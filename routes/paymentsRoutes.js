@@ -226,10 +226,26 @@ router.post('/icredit/create-session-from-cart', async (req, res) => {
     const frontendReturn = origin ? `${origin}/payment/return` : (settings?.payments?.icredit?.redirectURL || '');
 
     const overrides = {
-      RedirectURL: frontendReturn,
-      Custom1: String(ps._id),
-      Reference: ps.reference
+        RedirectURL: frontendReturn,
+        Custom1: String(ps._id),
+        Reference: ps.reference
     };
+
+      // Ensure IPNURL is a valid public HTTPS if not configured in settings
+      try {
+        const cfgIpn = String(settings?.payments?.icredit?.ipnURL || '').trim();
+        if (cfgIpn) {
+          overrides.IPNURL = cfgIpn;
+        } else {
+          const h = req.headers || {};
+          const host = String(h['x-forwarded-host'] || h.host || '').trim();
+          const proto = (String(h['x-forwarded-proto'] || '')).split(',')[0] || 'https';
+          if (host) {
+            const base = `${proto}://${host}`.replace(/\/$/, '');
+            overrides.IPNURL = `${base}/api/payments/icredit/ipn`;
+          }
+        }
+      } catch {}
 
     const { url } = await requestICreditPaymentUrl({ order: orderLike, settings, overrides });
     return res.json({ ok: true, url, sessionId: String(ps._id) });
