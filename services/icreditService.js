@@ -1,659 +1,174 @@
-import Settings from '../models/Settings.js';
-import https from 'https';
-// Prefer built-in fetch in modern Node; fall back to node-fetch only if needed
-let __fetch = globalThis.fetch;
-// Optional insecure TLS mode for staging/test hosts that use mismatched/self-signed certs.
-// Enable ONLY for debugging by setting ICREDIT_INSECURE_TLS=1 in env.
-const ICREDIT_INSECURE = String(process.env.ICREDIT_INSECURE_TLS || '').trim() === '1';
-// Some platforms have flaky IPv6 DNS to Rivhit; allow forcing IPv4 sockets
-const ICREDIT_FORCE_IPV4 = String(process.env.ICREDIT_FORCE_IPV4 || '').trim() === '1';
-if (ICREDIT_INSECURE) {
-  // As a safety, also disable TLS verification globally for legacy HTTPS stacks used by some libraries.
-  // This is process-wide; do not enable in production.
-  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
-}
-if (!__fetch) {
-  try {
-    const mod = await import('node-fetch');
-    __fetch = mod?.default || mod;
-  } catch (e) {
-    // Will throw later if fetch is actually used with no implementation
-    __fetch = null;
-  }
-}
+import React from 'react';
+import { Save, ToggleLeft, ToggleRight, RefreshCw, Shield } from 'lucide-react';
+import { getICreditConfig, updateICreditConfig, testICreditConfig, type ICreditConfigView } from '../../../services/paymentsService';
+import { toast } from 'react-hot-toast';
 
-// Small helper to add a timeout to node-fetch requests so the browser client
-// doesn't hit its own 30s axios timeout and surface a generic "Network error".
-// We prefer to fail fast on the server (returning a 4xx with detail) so the UI
-// can show a clear message and allow a quick retry.
-// Reusable insecure agents/dispatchers
-let insecureHttpsAgent = null;
-let undiciDispatcher = null;
+export function ICreditSettings() {
+  const [loading, setLoading] = React.useState(true);
+  const [saving, setSaving] = React.useState(false);
+  const [testing, setTesting] = React.useState(false);
+  const [cfg, setCfg] = React.useState<ICreditConfigView>({
+    enabled: false,
+    apiUrl: 'https://icredit.rivhit.co.il/API/PaymentPageRequest.svc/GetUrl',
+    transport: 'auto',
+    groupPrivateToken: '',
+    redirectURL: '',
+    ipnURL: '',
+    exemptVAT: false,
+    maxPayments: 1,
+    creditFromPayment: 0,
+    documentLanguage: 'he',
+    createToken: false,
+    hideItemList: false,
+    emailBcc: '',
+    defaultDiscount: 0
+  });
 
-async function getUndiciDispatcher() {
-  if (undiciDispatcher) return undiciDispatcher;
-  try {
-    const undici = await import('undici');
-    const Agent = undici.Agent || undici.default?.Agent;
-    if (Agent) {
-      // Configure dispatcher per env flags
-      const connect = {};
-      if (ICREDIT_INSECURE) connect.rejectUnauthorized = false;
-      if (ICREDIT_FORCE_IPV4) connect.family = 4;
-      undiciDispatcher = new Agent({ connect });
-      return undiciDispatcher;
-    }
-  } catch {}
-  return null;
-}
-
-function ensureInsecureHttpsAgent() {
-  if (!insecureHttpsAgent) insecureHttpsAgent = new https.Agent({ rejectUnauthorized: false });
-  return insecureHttpsAgent;
-}
-
-function fetchWithTimeout(url, options = {}, timeoutMs = 20000) {
-  if (!__fetch) throw new Error('fetch_not_available');
-  const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), timeoutMs);
-  const opts = { ...options, signal: controller.signal };
-  // If insecure TLS is enabled, attach appropriate agent/dispatcher (both are safe to include; ignored when unsupported)
-  if (ICREDIT_INSECURE) {
-    try { opts.agent = ensureInsecureHttpsAgent(); } catch {}
-  }
-  // undici (Node 18+ global fetch) uses dispatcher; we may set one for IPv4 forcing or insecure TLS
-  // Best-effort: build once; if not ready, request proceeds with defaults
-  getUndiciDispatcher().then((d) => { if (d) opts.dispatcher = d; }).catch(() => {});
-  return __fetch(url, opts)
-    .finally(() => clearTimeout(id));
-}
-
-// Build SOAP envelope for iCredit PaymentPageRequest.GetUrl
-function buildSoapEnvelope(action, innerXml, ns = 'https://icredit.rivhit.co.il/API/') {
-  return (
-    '<?xml version="1.0" encoding="utf-8"?>' +
-    '<soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">' +
-    '<soap:Body>' +
-    `<${action} xmlns="${ns}">` +
-    innerXml +
-    `</${action}>` +
-    '</soap:Body>' +
-    '</soap:Envelope>'
-  );
-}
-
-function xmlEscape(s) {
-  return String(s || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
-}
-
-function maskToken(s) {
-  if (!s) return '';
-  const t = String(s);
-  if (t.length <= 6) return '***';
-  return t.slice(0, 3) + '***' + t.slice(-3);
-}
-
-// Generate likely API URL variants for JSON and SOAP
-export function buildICreditCandidates(apiUrl) {
-  // Normalize common host misconfiguration: icredit.co.il -> icredit.rivhit.co.il
-  let u = String(apiUrl || '').trim();
-  try {
-    const parsed = new URL(u);
-    const host = parsed.hostname.toLowerCase();
-    if (host === 'icredit.co.il' || host === 'www.icredit.co.il') {
-      parsed.hostname = 'icredit.rivhit.co.il';
-      u = parsed.toString();
-    }
-  } catch {}
-  u = u.replace(/\s+/g, '');
-  const list = new Set();
-  const push = (v) => { if (v) list.add(v.replace(/\s+/g, '')); };
-  const FORCE_TEST = String(process.env.ICREDIT_FORCE_TEST || '').trim() === '1';
-  const ALLOW_HOST_FALLBACK = String(process.env.ICREDIT_ALLOW_HOST_FALLBACK || '').trim() === '1';
-
-  // Normalize common misconfigurations: missing .svc or wrong path segment
-  const addNormalizedVariants = (base) => {
-    // If configured without .svc (e.g., .../PaymentPageRequest/GetUrl), add .svc JSON and .svc classic
-    if (/\/PaymentPageRequest\/GetUrl$/i.test(base)) {
-      const root = base.replace(/\/PaymentPageRequest\/GetUrl$/i, '/API/PaymentPageRequest.svc');
-      push(root + '/JSON/GetUrl');
-      push(root + '/GetUrl');
-    }
-    // If configured without /API prefix, add it
-    if (/\/PaymentPageRequest\.svc\/?(GetUrl)?$/i.test(base) && !/\/API\//i.test(base)) {
-      const withApi = base.replace(/https:\/\/([^/]+)\//i, (m, host) => `https://${host}/API/`);
-      push(withApi);
-      push(withApi.replace(/\/GetUrl$/i, '/JSON/GetUrl'));
-    }
-  };
-
-  // Prefer JSON endpoints up front
-  push(u.replace(/\/API\//i, '/API/JSON/'));
-  push(u.replace(/\/GetUrl$/i, '/JSON/GetUrl'));
-  // Base as configured
-  push(u);
-  // Lowercase json variant used by some deployments
-  push(u.replace(/\/GetUrl$/i, '/json/GetUrl'));
-  // Some WCF deployments use /PaymentPageRequest.svc/JSON/GetUrl (segment after .svc)
-  push(u.replace(/\/API\/PaymentPageRequest\.svc\/GetUrl$/i, '/API/PaymentPageRequest.svc/JSON/GetUrl'));
-  push(u.replace(/\/API\/PaymentPageRequest\.svc\/GetUrl$/i, '/API/PaymentPageRequest.svc/json/GetUrl'));
-  // If missing GetUrl (base ends with PaymentPageRequest.svc), append both
-  if (/PaymentPageRequest\.svc$/i.test(u)) {
-    push(u + '/JSON/GetUrl');
-    push(u + '/json/GetUrl');
-    push(u + '/GetUrl');
-  }
-  // If base missed /API prefix but contains PaymentPageRequest.svc
-  if (/PaymentPageRequest\.svc\/?$/i.test(u) && !/\/API\//i.test(u)) {
-    push(u.replace(/PaymentPageRequest\.svc\/?$/i, 'PaymentPageRequest.svc/JSON/GetUrl'));
-  }
-  // Alternate host variations that sometimes work
-  // Important: PaymentPageRequest is hosted under icredit.rivhit.co.il. Converting FROM icredit -> online
-  // typically results in 404. We therefore DO NOT push icredit->online variants by default.
-  // However, we still convert FROM online -> icredit, because some users mistakenly configure the online host.
-  const toOnline = u.replace('https://icredit.rivhit.co.il/', 'https://online.rivhit.co.il/');
-  const toICredit = u.replace('https://online.rivhit.co.il/', 'https://icredit.rivhit.co.il/');
-  const toTestFromProd = u.replace('https://icredit.rivhit.co.il/', 'https://testicredit.rivhit.co.il/');
-  const toTestFromOnline = u.replace('https://online.rivhit.co.il/', 'https://testicredit.rivhit.co.il/');
-
-  // Prefer test endpoints first when forcing test mode
-  if (FORCE_TEST) {
-    push(toTestFromProd);
-    push(toTestFromOnline);
-  }
-  // Only allow trying icredit->online when explicitly requested via env flag
-  if (ALLOW_HOST_FALLBACK) push(toOnline);
-  // Always normalize online->icredit (common misconfiguration)
-  push(toICredit);
-  // Only include test host variants when FORCE_TEST is active
-
-  // Add normalized variants based on current base
-  addNormalizedVariants(u);
-
-  return Array.from(list);
-}
-
-export function buildICreditRequest({ order, settings, overrides = {} }) {
-  if (!order) throw new Error('order_required');
-  const s = settings || {};
-  const pay = s.payments || {};
-  const ic = pay.icredit || {};
-  if (!ic.groupPrivateToken) {
-    throw new Error('Missing GroupPrivateToken in settings');
-  }
-
-  const val = (v, def) => (typeof v === 'undefined' || v === null ? def : v);
-  const mapCurrency = (code) => {
-    const c = String(code || '').toUpperCase();
-    switch (c) {
-      case 'ILS':
-      case 'NIS':
-      case '₪':
-        return 1;
-      case 'USD':
-      case '$':
-        return 2;
-      case 'EUR':
-      case '€':
-        return 3;
-      case 'GBP':
-        return 4;
-      case 'AUD':
-        return 5;
-      case 'CAD':
-        return 6;
-      default:
-        return undefined; // let iCredit default to ILS when not provided
-    }
-  };
-
-  const items = (order.items || []).map((it) => ({
-    Id: 0,
-    CatalogNumber: it.sku || it.variantId || String(it.product),
-    UnitPrice: Number(it.price) || 0,
-    Quantity: Number(it.quantity) || 0,
-    Description: it.name || ''
-  }));
-
-  const body = {
-    GroupPrivateToken: ic.groupPrivateToken,
-    Items: items,
-    RedirectURL: val(overrides.RedirectURL, ic.redirectURL || ''),
-  FailRedirectURL: overrides.FailRedirectURL || '',
-    IPNURL: val(overrides.IPNURL, ic.ipnURL || ''),
-  IPNFailureURL: overrides.IPNFailureURL || '',
-    ExemptVAT: val(overrides.ExemptVAT, !!ic.exemptVAT),
-    MaxPayments: val(overrides.MaxPayments, ic.maxPayments || 1),
-    CreditFromPayment: val(overrides.CreditFromPayment, ic.creditFromPayment || 0),
-  Currency: overrides.Currency || mapCurrency(order.currency),
-    EmailAddress: order.customerInfo?.email || '',
-    CustomerLastName: order.customerInfo?.lastName || '',
-    CustomerFirstName: order.customerInfo?.firstName || '',
-    Address: order.shippingAddress?.street || '',
-    City: order.shippingAddress?.city || '',
-    Zipcode: overrides.Zipcode || '',
-    PhoneNumber: order.customerInfo?.mobile || '',
-    PhoneNumber2: '',
-    FaxNumber: '',
-    IdNumber: overrides.IdNumber || '',
-    VatNumber: overrides.VatNumber || '',
-    Comments: overrides.Comments || `Order ${order.orderNumber}`,
-    HideItemList: val(overrides.HideItemList, !!ic.hideItemList),
-    DocumentLanguage: val(overrides.DocumentLanguage, ic.documentLanguage || 'he'),
-    CreateToken: val(overrides.CreateToken, !!ic.createToken),
-    Discount: val(overrides.Discount, Number(ic.defaultDiscount || 0)),
-    Custom1: overrides.Custom1 || order._id?.toString(),
-    Custom2: overrides.Custom2 || '',
-    Custom3: overrides.Custom3 || '',
-    Custom4: overrides.Custom4 || '',
-    Custom5: overrides.Custom5 || '',
-    Custom6: overrides.Custom6 || '',
-    Custom7: overrides.Custom7 || '',
-    Custom8: overrides.Custom8 || '',
-    Custom9: overrides.Custom9 || '',
-    Reference: overrides.Reference || order.orderNumber,
-    Order: overrides.Order || `Ecommerce order ${order.orderNumber}`,
-    EmailBcc: val(overrides.EmailBcc, ic.emailBcc || ''),
-    CustomerId: overrides.CustomerId || '',
-    AgentId: overrides.AgentId || 0,
-    ProjectId: overrides.ProjectId || 0
-  };
-
-  // Remove empty fields to keep payload tidy
-  const clean = Object.fromEntries(Object.entries(body).filter(([_, v]) => v !== '' && v !== null && typeof v !== 'undefined'));
-  return clean;
-}
-
-export async function loadSettings() {
-  let settings = await Settings.findOne();
-  if (!settings) settings = await Settings.create({});
-  return settings;
-}
-
-// Validate that admin configuration contains all critical fields required for iCredit
-export function validateICreditConfig(settings, { requireRedirect = false } = {}) {
-  const issues = [];
-  const cfg = settings?.payments?.icredit || {};
-  if (!cfg.enabled) issues.push('icredit_disabled');
-  if (!cfg.groupPrivateToken || String(cfg.groupPrivateToken).trim().length < 6) issues.push('missing_token');
-  const apiUrl = String(cfg.apiUrl || '').trim();
-  if (!apiUrl) issues.push('missing_api_url');
-  else if (!/PaymentPageRequest\.svc(\/GetUrl)?$/i.test(apiUrl) && !/PaymentPageRequest\/GetUrl$/i.test(apiUrl)) issues.push('invalid_api_url');
-  if (requireRedirect) {
-    const r = String(cfg.redirectURL || '').trim();
-    if (!r) issues.push('missing_redirect_url');
-  }
-  // IPN is optional but recommended; warn only when requireRedirect is true (storefront flow)
-  const ipn = String(cfg.ipnURL || '').trim();
-  if (requireRedirect && !ipn) issues.push('missing_ipn_url');
-  return { ok: issues.length === 0, issues, config: { enabled: !!cfg.enabled, apiUrl, redirectURL: cfg.redirectURL || '', ipnURL: ipn ? 'present' : '' } };
-}
-
-// Attempt to create an iCredit hosted payment session and return the redirect URL.
-// Tries multiple JSON path variants and finally SOAP when JSON endpoints return HTML Request Error.
-export async function requestICreditPaymentUrl({ order, settings, overrides = {} }) {
-  const cfg = settings?.payments?.icredit || {};
-  // Strict configuration validation (require RedirectURL only if not provided via overrides)
-  const needRedirect = !overrides?.RedirectURL;
-  const v = validateICreditConfig(settings, { requireRedirect: needRedirect });
-  if (!v.ok) {
-    const err = new Error('invalid_icredit_configuration: ' + v.issues.join(','));
-    err.status = 400;
-    throw err;
-  }
-  if (!cfg?.enabled) { const e = new Error('icredit_disabled'); e.status = 400; throw e; }
-  if (!cfg?.groupPrivateToken) { const e = new Error('missing_token'); e.status = 400; throw e; }
-  let apiUrl = String(cfg.apiUrl || '').trim();
-  if (!apiUrl) { const e = new Error('missing_api_url'); e.status = 400; throw e; }
-  // Optional override to force using the test host regardless of configured URL (handy for staging)
-  if (String(process.env.ICREDIT_FORCE_TEST || '').trim() === '1') {
-    apiUrl = apiUrl
-      .replace('https://icredit.rivhit.co.il', 'https://testicredit.rivhit.co.il')
-      .replace('https://online.rivhit.co.il', 'https://testicredit.rivhit.co.il');
-  }
-  // Allow env override to force transport without redeploying settings
-  const transport = (process.env.ICREDIT_TRANSPORT || cfg.transport || 'auto').toLowerCase();
-  const payload = buildICreditRequest({ order, settings, overrides });
-  try { console.log('[icredit] starting create-session via %s token=%s', apiUrl, maskToken(cfg.groupPrivateToken)); } catch {}
-
-  // Build wrappers expected by some WCF JSON endpoints
-  const wrappers = [
-    (b) => b, // plain object
-    (b) => ({ request: b }), // wrapped in { request: ... }
-    (b) => ({ Request: b }) // PascalCase wrapper just in case
-  ];
-
-  // Build candidate endpoints and cap how many we try to avoid client-side 30s timeout
-  const candidates = buildICreditCandidates(apiUrl).slice(0, 8);
-  // Enforce a total time budget so the browser doesn't hit axios 30s timeout and surface a generic "Network error"
-  // Give slow WCF endpoints more breathing room by default; still tunable via env
-  const MAX_TOTAL_MS = Number(process.env.ICREDIT_MAX_MS || 60000);
-  // Allow tuning per-attempt timeout via env; defaults chosen to balance speed vs flaky WCF endpoints
-  const PER_ATTEMPT_MAX_MS = Number(process.env.ICREDIT_PER_ATTEMPT_MAX_MS || 20000);
-  const PER_ATTEMPT_MIN_MS = Number(process.env.ICREDIT_PER_ATTEMPT_MIN_MS || 10000);
-  const startTs = Date.now();
-  const elapsed = () => Date.now() - startTs;
-  const remaining = () => Math.max(0, MAX_TOTAL_MS - elapsed());
-  let lastErr = null;
-
-  // Try JSON candidates (skip if transport=soap)
-  if (transport !== 'soap') {
-    // Heuristic: if multiple HTML "Request Error" pages are received, JSON is likely not enabled;
-    // switch to SOAP sooner to avoid hitting the 60s budget and the client's 30s axios timeout.
-    let htmlResponses = 0;
-    for (let i = 0; i < candidates.length; i++) {
-      const url = candidates[i];
-      if (remaining() <= 250) break; // out of budget
-      for (let w = 0; w < wrappers.length; w++) {
-        const bodyWrapped = wrappers[w](payload);
-        try {
-          const perAttempt = Math.min(PER_ATTEMPT_MAX_MS, Math.max(PER_ATTEMPT_MIN_MS, remaining()));
-          const r = await fetchWithTimeout(url, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json; charset=utf-8',
-              'Accept': 'application/json',
-              // Hint WCF that this is an AJAX JSON call to avoid HTML error pages in some deployments
-              'X-Requested-With': 'XMLHttpRequest'
-            },
-            body: JSON.stringify(bodyWrapped)
-          }, perAttempt);
-          const text = await r.text();
-          // Some deployments return JSON with { Url: '...' }, others plain URL in body
-          let urlOut = '';
-          if (/application\/json/i.test(r.headers.get('content-type') || '')) {
-            try {
-              const j = JSON.parse(text);
-              // Prefer official response shape with Status and URL
-              if ((j?.Status === 0 || j?.status === 0) && (j?.URL || j?.Url)) {
-                urlOut = j.URL || j.Url;
-              } else {
-                urlOut = j?.URL || j?.Url || j?.url || j?.PaymentUrl || '';
-              }
-            } catch {
-              // fall back below
-            }
-          }
-          if (!urlOut && /^https?:\/\//i.test(text.trim())) {
-            urlOut = text.trim();
-          }
-          if (r.ok && urlOut) {
-            try { console.log('[icredit] JSON success via %s wrapper=%d token=%s', url, w + 1, maskToken(cfg.groupPrivateToken)); } catch {}
-            return { url: urlOut };
-          }
-          // If HTML "Request Error" page, try next variant
-          const isHtml = /<html|Request Error|The incoming message has an unexpected message format/i.test(text) || /text\/html/i.test(r.headers.get('content-type') || '');
-          if (isHtml) {
-            htmlResponses++;
-            try { console.warn('[icredit] HTML response at %s wrapper=%d; trying next variant (htmlResponses=%d)', url, w + 1, htmlResponses); } catch {}
-            // After a few HTML responses across variants, bail to SOAP quickly
-            if (transport === 'auto' && htmlResponses >= 3) {
-              i = candidates.length; // break outer loop
-              break;
-            }
-            continue;
-          }
-          // Non-HTML error — capture a snippet and continue trying variants
-          lastErr = new Error(`HTTP ${r.status} ${r.statusText} at ${url}: ${text.slice(0, 180).replace(/\s+/g,' ')}`);
-        } catch (e) {
-          // Normalize abort/timeout errors with context so UI can show an actionable hint
-          const code = e?.code || e?.cause?.code || e?.errno;
-          const causeMsg = e?.cause?.message ? `; cause=${String(e.cause.message).split('\n')[0]}` : '';
-          const name = e?.name;
-          const extra = code ? ` code=${code}` : '';
-          if (e && (name === 'AbortError' || /aborted|AbortError/i.test(String(e.message || '')))) {
-            lastErr = new Error(`timeout after ${Math.min(PER_ATTEMPT_MAX_MS, Math.max(PER_ATTEMPT_MIN_MS, remaining()))}ms at ${url}`);
-          } else if (/ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ETIMEDOUT|CERT_|UNABLE_TO_VERIFY/i.test(String(code || ''))) {
-            lastErr = new Error(`network_error${extra} at ${url}`);
-          } else {
-            lastErr = new Error(`fetch_failed${extra} at ${url}: ${(e?.message || '').split('\n')[0]}${causeMsg}`);
-          }
-          // If we've exhausted our total budget, stop trying
-          if (remaining() <= 250) break;
-          continue;
-        }
-      }
-      if (remaining() <= 250) break;
-    }
-    // If JSON only is requested, skip SOAP
-    if (transport === 'json') {
-      const err = new Error(`icredit_call_failed${lastErr ? ': ' + (lastErr.message || lastErr) : ''}`);
-      err.status = 400;
-      throw err;
-    }
-  }
-
-  // SOAP fallback (or primary if transport=soap)
-  try {
-    if (remaining() <= 250) throw lastErr || new Error('budget_exhausted');
-    const action = 'GetUrl';
-    const inner =
-      '<request>' +
-      Object.entries(payload)
-        .map(([k, v]) => `<${k}>${xmlEscape(v)}</${k}>`)
-        .join('') +
-      '</request>';
-
-    // Build endpoint candidates for SOAP
-    const base1 = apiUrl.replace(/\/JSON\//i, '/').replace(/\/GetUrl$/i, '');
-    // Ensure we point to the service root (ending with PaymentPageRequest.svc)
-    const svcMatch = base1.match(/^(.*PaymentPageRequest\.svc)(?:\/?|$)/i);
-    const svcRoot = svcMatch ? svcMatch[1] : base1.replace(/\/?$/,'') + '/PaymentPageRequest.svc';
-    const soapEndpoints = Array.from(new Set([
-      svcRoot,
-      // Occasionally path without /API prefix is configured
-      svcRoot.replace('/API/PaymentPageRequest.svc', '/PaymentPageRequest.svc'),
-      // Test environment host fallbacks
-      svcRoot.replace('https://icredit.rivhit.co.il', 'https://testicredit.rivhit.co.il'),
-      svcRoot.replace('https://online.rivhit.co.il', 'https://testicredit.rivhit.co.il')
-    ]));
-
-    // Try common SOAPAction namespaces used by WCF variations
-    const soapActions = [
-      // Common WCF SOAPAction variations observed in the wild
-      'https://icredit.rivhit.co.il/API/IPaymentPageRequest/GetUrl',
-      'https://icredit.rivhit.co.il/API/PaymentPageRequest/GetUrl',
-      'https://icredit.rivhit.co.il/API/GetUrl',
-      'http://icredit.rivhit.co.il/API/IPaymentPageRequest/GetUrl',
-      'http://icredit.rivhit.co.il/API/PaymentPageRequest/GetUrl',
-      'http://tempuri.org/IPaymentPageRequest/GetUrl',
-      // Explicit test/online host variants seen on sandbox environments
-      'https://testicredit.rivhit.co.il/API/PaymentPageRequest/GetUrl',
-      'http://testicredit.rivhit.co.il/API/PaymentPageRequest/GetUrl',
-      'https://online.rivhit.co.il/API/PaymentPageRequest/GetUrl',
-      'http://online.rivhit.co.il/API/PaymentPageRequest/GetUrl'
-    ];
-    // If forcing test mode, prioritize SOAPAction variants that use the test host
-    if (String(process.env.ICREDIT_FORCE_TEST || '').trim() === '1') {
-      const prefer = [
-        'https://testicredit.rivhit.co.il/API/PaymentPageRequest/GetUrl',
-        'http://testicredit.rivhit.co.il/API/PaymentPageRequest/GetUrl'
-      ];
-      // Stable order: preferred first, then the rest without duplicates
-      const set = new Set(prefer.concat(soapActions));
-      soapActions.splice(0, soapActions.length, ...Array.from(set));
-    }
-    const namespaces = [
-      'https://icredit.rivhit.co.il/API/',
-      'http://tempuri.org/'
-    ];
-
-    let lastSoapErr = null;
-    for (const ep of soapEndpoints) {
-      if (remaining() <= 250) break;
-      for (const ns of namespaces) {
-        if (remaining() <= 250) break;
-        const envelope = buildSoapEnvelope(action, inner, ns);
-        for (const act of soapActions) {
-          if (remaining() <= 250) break;
-          try {
-            const perAttempt = Math.min(PER_ATTEMPT_MAX_MS, Math.max(PER_ATTEMPT_MIN_MS, remaining()));
-            const r = await fetchWithTimeout(ep, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'text/xml; charset=utf-8',
-                'Accept': 'text/xml',
-                'SOAPAction': act
-              },
-              body: envelope
-            }, perAttempt);
-            const xml = await r.text();
-            const m = xml.match(/<GetUrlResult>(https?:[^<]+)<\/GetUrlResult>/i);
-            if (r.ok && m && m[1]) {
-              try { console.log('[icredit] SOAP success via %s action=%s ns=%s', ep, act, ns); } catch {}
-              return { url: m[1] };
-            }
-            // Capture a compact error body for diagnostics
-            const snippet = xml.slice(0, 300).replace(/\s+/g, ' ');
-            lastSoapErr = new Error(`SOAP ${r.status} at ${ep} action=${act}: ${snippet}`);
-          } catch (e) {
-            const code = e?.code || e?.cause?.code || e?.errno;
-            const causeMsg = e?.cause?.message ? `; cause=${String(e.cause.message).split('\n')[0]}` : '';
-            const name = e?.name;
-            const extra = code ? ` code=${code}` : '';
-            if (e && (name === 'AbortError' || /aborted|AbortError/i.test(String(e.message || '')))) {
-              lastSoapErr = new Error(`timeout after ${Math.min(PER_ATTEMPT_MAX_MS, Math.max(PER_ATTEMPT_MIN_MS, remaining()))}ms at ${ep} action=${act}`);
-            } else if (/ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ETIMEDOUT|CERT_|UNABLE_TO_VERIFY/i.test(String(code || ''))) {
-              lastSoapErr = new Error(`network_error${extra} at ${ep} action=${act}`);
-            } else {
-              lastSoapErr = new Error(`fetch_failed${extra} at ${ep} action=${act}: ${(e?.message || '').split('\n')[0]}${causeMsg}`);
-            }
-          }
-        }
-      }
-    }
-    if (lastSoapErr) throw lastSoapErr;
-  } catch (e) {
-    lastErr = e;
-  }
-
-  const err = new Error(`icredit_call_failed${lastErr ? ': ' + (lastErr.message || lastErr) : ''}`);
-  err.status = 400;
-  throw err;
-}
-
-// Diagnostics: basic connectivity and DNS checks to iCredit endpoints
-export async function diagnoseICreditConnectivity(baseUrl) {
-  const candidates = buildICreditCandidates(baseUrl).slice(0, 8);
-  const origins = Array.from(new Set(candidates.map(u => {
-    try { return new URL(u).origin; } catch { return null; }
-  }).filter(Boolean)));
-  // Resolve hostnames
-  let dnsMod = null;
-  try { dnsMod = await import('dns/promises'); } catch {}
-  const dnsResults = [];
-  for (const origin of origins) {
-    try {
-      const host = new URL(origin).hostname;
-      let addrs = [];
-      if (dnsMod?.default?.lookup) {
-        try {
-          const a4 = await dnsMod.default.lookup(host, { all: true, family: 4 }).catch(() => []);
-          const a6 = await dnsMod.default.lookup(host, { all: true, family: 6 }).catch(() => []);
-          addrs = [...a4, ...a6].map(x => x.address);
-        } catch (e) {}
-      }
-      dnsResults.push({ host, addresses: addrs });
-    } catch (e) {
-      dnsResults.push({ host: origin, error: e?.message || String(e) });
-    }
-  }
-
-  // Try a lightweight GET to origin root (connectivity + TLS). 405/404 still indicate connectivity works.
-  const httpResults = [];
-  for (const origin of origins) {
-    try {
-      const r = await fetchWithTimeout(origin + '/', { method: 'GET' }, 7000);
-      httpResults.push({ origin, status: r.status, ok: r.ok, ct: r.headers.get('content-type') || '' });
-    } catch (e) {
-      httpResults.push({ origin, error: (e?.cause?.code ? `${e.cause.code}: ` : '') + (e?.message || String(e)) });
-    }
-  }
-
-  return { baseUrl, candidates, origins, dns: dnsResults, http: httpResults };
-}
-
-// Admin-only quick probe: attempt a minimal JSON and SOAP POST to verify TLS/HTTP reachability to iCredit.
-// Defaults to using an obviously invalid token to avoid creating real sessions. Set useRealToken=true to
-// validate end-to-end with configured token (still uses tiny payload). Returns timing and compact body snippets.
-export async function pingICredit({ useRealToken = false } = {}) {
-  const settings = await loadSettings();
-  const cfg = settings?.payments?.icredit || {};
-  const base = cfg.apiUrl || 'https://icredit.rivhit.co.il/API/PaymentPageRequest.svc/GetUrl';
-  const candidates = buildICreditCandidates(base).slice(0, 4);
-  const transport = (process.env.ICREDIT_TRANSPORT || cfg.transport || 'auto').toLowerCase();
-  const tok = useRealToken && cfg.groupPrivateToken ? cfg.groupPrivateToken : 'x';
-  const jsonBody = { request: { GroupPrivateToken: tok, Items: [], RedirectURL: '' } };
-  const attempts = [];
-  const started = Date.now();
-  const until = (t)=> Math.max(0, t - (Date.now()-started));
-  const budgetMs = Number(process.env.ICREDIT_PING_MAX_MS || 20000);
-  // JSON probe (2 variants max)
-  if (transport !== 'soap') {
-    for (let i=0; i<Math.min(2, candidates.length); i++) {
-      const url = candidates[i];
-      const t0 = Date.now();
+  React.useEffect(() => {
+    (async () => {
       try {
-        const r = await fetchWithTimeout(url, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json; charset=utf-8',
-            'Accept': 'application/json',
-            'X-Requested-With': 'XMLHttpRequest'
-          },
-          body: JSON.stringify(jsonBody)
-        }, Math.max(4000, until(budgetMs)));
-        const text = await r.text();
-        attempts.push({ kind:'json', url, status: r.status, ok: r.ok, ms: Date.now()-t0, ct: r.headers.get('content-type')||'', body: text.slice(0,160).replace(/\s+/g,' ') });
-        if (attempts.length >= 2) break;
-      } catch (e) {
-        const code = e?.code || e?.cause?.code || e?.errno;
-        attempts.push({ kind:'json', url, error: (code? code+': ' : '') + (e?.message||String(e)), ms: Date.now()-t0 });
+        setLoading(true);
+        const data = await getICreditConfig();
+        setCfg(data);
+      } catch (e: any) {
+        toast.error(e?.response?.data?.message || 'Failed to load iCredit settings');
+      } finally {
+        setLoading(false);
       }
-      if (Date.now()-started > budgetMs) break;
-    }
-  }
+    })();
+  }, []);
 
-  // SOAP probe (1 endpoint/action)
-  if (transport !== 'json' && Date.now()-started < budgetMs) {
-    const base1 = base.replace(/\/JSON\//i, '/').replace(/\/GetUrl$/i, '');
-    const svcMatch = base1.match(/^(.*PaymentPageRequest\.svc)(?:\/?|$)/i);
-    const svcRoot = svcMatch ? svcMatch[1] : base1.replace(/\/?$/,'') + '/PaymentPageRequest.svc';
-    const ep = svcRoot;
-    const action = 'GetUrl';
-    const inner = '<request><GroupPrivateToken>'+xmlEscape(tok)+'</GroupPrivateToken></request>';
-    const envelope = buildSoapEnvelope(action, inner, 'https://icredit.rivhit.co.il/API/');
-    const t0 = Date.now();
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
     try {
-      const r = await fetchWithTimeout(ep, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/xml; charset=utf-8', 'Accept': 'text/xml', 'SOAPAction': 'https://icredit.rivhit.co.il/API/PaymentPageRequest/GetUrl' },
-        body: envelope
-      }, Math.max(4000, until(budgetMs)));
-      const text = await r.text();
-      attempts.push({ kind:'soap', url: ep, action: 'PaymentPageRequest/GetUrl', status: r.status, ok: r.ok, ms: Date.now()-t0, body: text.slice(0,200).replace(/\s+/g,' ') });
-    } catch (e) {
-      const code = e?.code || e?.cause?.code || e?.errno;
-      attempts.push({ kind:'soap', url: ep, action: 'PaymentPageRequest/GetUrl', error: (code? code+': ' : '') + (e?.message||String(e)), ms: Date.now()-t0 });
+      await updateICreditConfig(cfg);
+      toast.success('iCredit settings saved');
+      const re = await getICreditConfig();
+      setCfg(re);
+    } catch (e: any) {
+      toast.error(e?.response?.data?.message || 'Failed to save');
+    } finally {
+      setSaving(false);
     }
-  }
-
-  // Include DNS + origin GET check for context
-  const diag = await diagnoseICreditConnectivity(base).catch(()=>null);
-  return {
-    ok: true,
-    settings: {
-      enabled: !!cfg.enabled,
-      apiUrl: base,
-      transport,
-      token: useRealToken && cfg.groupPrivateToken ? 'present' : 'not-used'
-    },
-    attempts,
-    diag
   };
+
+  const handleTest = async () => {
+    setTesting(true);
+    try {
+      const r = await testICreditConfig();
+      if (r.ok) toast.success('iCredit configuration looks valid');
+      else toast.error(r.message || 'Config invalid');
+    } catch (e: any) {
+      toast.error(e?.response?.data?.message || 'Failed to test');
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  return (
+    <div className="bg-white rounded-xl shadow-sm">
+      <form onSubmit={handleSave} className="p-6 space-y-6">
+        <div>
+          <h2 className="text-lg font-semibold text-gray-900">iCredit (Rivhit Payment Page)</h2>
+          <p className="text-sm text-gray-500">Configure hosted payment page integration.</p>
+        </div>
+
+        {loading ? (
+          <div className="text-sm text-gray-500">Loading…</div>
+        ) : (
+          <>
+            <div className="flex items-center justify-between border rounded-lg p-4">
+              <div>
+                <div className="font-medium">Enable iCredit</div>
+                <div className="text-sm text-gray-500">Toggle to offer iCredit payment at checkout.</div>
+              </div>
+              <button type="button" onClick={() => setCfg(p=>({ ...p, enabled: !p.enabled }))} className="text-indigo-600 hover:text-indigo-700">
+                {cfg.enabled ? <ToggleRight className="w-8 h-8" /> : <ToggleLeft className="w-8 h-8" />}
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium mb-1">API URL</label>
+                <input className="w-full border rounded px-3 py-2" value={cfg.apiUrl} onChange={e=> setCfg(p=>({...p, apiUrl: e.target.value}))} />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">Transport</label>
+                <select className="w-full border rounded px-3 py-2" value={cfg.transport || 'auto'} onChange={e=> setCfg(p=>({...p, transport: e.target.value as any}))}>
+                  <option value="auto">Auto (JSON then SOAP)</option>
+                  <option value="json">JSON only</option>
+                  <option value="soap">SOAP only</option>
+                </select>
+                <p className="text-xs text-gray-500 mt-1">If your tenant returns HTML "Request Error" to JSON, choose SOAP only.</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">Group Private Token</label>
+                <div className="relative">
+                  <Shield className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                  <input className="w-full pl-10 pr-3 border rounded px-3 py-2" value={cfg.groupPrivateToken} onChange={e=> setCfg(p=>({...p, groupPrivateToken: e.target.value}))} placeholder={cfg.groupPrivateToken === '***' ? '••••••••' : ''} />
+                </div>
+                <p className="text-xs text-gray-500 mt-1">Leave as *** to keep existing.</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">Redirect URL</label>
+                <input className="w-full border rounded px-3 py-2" value={cfg.redirectURL} onChange={e=> setCfg(p=>({...p, redirectURL: e.target.value}))} placeholder="https://yourdomain.com/payment-success" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">IPN URL</label>
+                <input className="w-full border rounded px-3 py-2" value={cfg.ipnURL} onChange={e=> setCfg(p=>({...p, ipnURL: e.target.value}))} placeholder="https://yourdomain.com/api/payment/ipn" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">Document Language</label>
+                <select className="w-full border rounded px-3 py-2" value={cfg.documentLanguage} onChange={e=> setCfg(p=>({...p, documentLanguage: e.target.value as any}))}>
+                  <option value="he">Hebrew</option>
+                  <option value="en">English</option>
+                  <option value="ar">Arabic</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">Max Payments</label>
+                <input type="number" min={1} className="w-full border rounded px-3 py-2" value={cfg.maxPayments} onChange={e=> setCfg(p=>({...p, maxPayments: Math.max(1, Number(e.target.value)||1)}))} />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">Credit From Payment</label>
+                <input type="number" min={0} className="w-full border rounded px-3 py-2" value={cfg.creditFromPayment} onChange={e=> setCfg(p=>({...p, creditFromPayment: Math.max(0, Number(e.target.value)||0)}))} />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">Default Discount</label>
+                <input type="number" min={0} step="0.01" className="w-full border rounded px-3 py-2" value={cfg.defaultDiscount} onChange={e=> setCfg(p=>({...p, defaultDiscount: Math.max(0, Number(e.target.value)||0)}))} />
+              </div>
+              <label className="flex items-center gap-2">
+                <input type="checkbox" checked={cfg.exemptVAT} onChange={e=> setCfg(p=>({...p, exemptVAT: e.target.checked}))} />
+                <span className="text-sm">Exempt VAT</span>
+              </label>
+              <label className="flex items-center gap-2">
+                <input type="checkbox" checked={cfg.createToken} onChange={e=> setCfg(p=>({...p, createToken: e.target.checked}))} />
+                <span className="text-sm">Create Token</span>
+              </label>
+              <label className="flex items-center gap-2">
+                <input type="checkbox" checked={cfg.hideItemList} onChange={e=> setCfg(p=>({...p, hideItemList: e.target.checked}))} />
+                <span className="text-sm">Hide Item List</span>
+              </label>
+              <div className="md:col-span-2">
+                <label className="block text-sm font-medium mb-1">Email BCC</label>
+                <input className="w-full border rounded px-3 py-2" value={cfg.emailBcc} onChange={e=> setCfg(p=>({...p, emailBcc: e.target.value}))} />
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <button type="submit" disabled={saving} className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-60">
+                <Save className="w-5 h-5" />
+                {saving ? 'Saving…' : 'Save Changes'}
+              </button>
+              <button type="button" onClick={handleTest} disabled={testing} className="inline-flex items-center gap-2 px-4 py-2 border rounded-lg hover:bg-gray-50 disabled:opacity-60">
+                <RefreshCw className="w-5 h-5" />
+                {testing ? 'Testing…' : 'Test Config'}
+              </button>
+          </div>
+          </>
+        )}
+      </form>
+    </div>
+  );
 }
