@@ -100,7 +100,17 @@ function maskToken(s) {
 
 // Generate likely API URL variants for JSON and SOAP
 export function buildICreditCandidates(apiUrl) {
-  const u = String(apiUrl || '').trim().replace(/\s+/g, '');
+  // Normalize common host misconfiguration: icredit.co.il -> icredit.rivhit.co.il
+  let u = String(apiUrl || '').trim();
+  try {
+    const parsed = new URL(u);
+    const host = parsed.hostname.toLowerCase();
+    if (host === 'icredit.co.il' || host === 'www.icredit.co.il') {
+      parsed.hostname = 'icredit.rivhit.co.il';
+      u = parsed.toString();
+    }
+  } catch {}
+  u = u.replace(/\s+/g, '');
   const list = new Set();
   const push = (v) => { if (v) list.add(v.replace(/\s+/g, '')); };
   const FORCE_TEST = String(process.env.ICREDIT_FORCE_TEST || '').trim() === '1';
