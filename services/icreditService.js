@@ -104,6 +104,7 @@ export function buildICreditCandidates(apiUrl) {
   const list = new Set();
   const push = (v) => { if (v) list.add(v.replace(/\s+/g, '')); };
   const FORCE_TEST = String(process.env.ICREDIT_FORCE_TEST || '').trim() === '1';
+  const ALLOW_HOST_FALLBACK = String(process.env.ICREDIT_ALLOW_HOST_FALLBACK || '').trim() === '1';
 
   // Normalize common misconfigurations: missing .svc or wrong path segment
   const addNormalizedVariants = (base) => {
@@ -142,6 +143,9 @@ export function buildICreditCandidates(apiUrl) {
     push(u.replace(/PaymentPageRequest\.svc\/?$/i, 'PaymentPageRequest.svc/JSON/GetUrl'));
   }
   // Alternate host variations that sometimes work
+  // Important: PaymentPageRequest is hosted under icredit.rivhit.co.il. Converting FROM icredit -> online
+  // typically results in 404. We therefore DO NOT push icredit->online variants by default.
+  // However, we still convert FROM online -> icredit, because some users mistakenly configure the online host.
   const toOnline = u.replace('https://icredit.rivhit.co.il/', 'https://online.rivhit.co.il/');
   const toICredit = u.replace('https://online.rivhit.co.il/', 'https://icredit.rivhit.co.il/');
   const toTestFromProd = u.replace('https://icredit.rivhit.co.il/', 'https://testicredit.rivhit.co.il/');
@@ -152,7 +156,9 @@ export function buildICreditCandidates(apiUrl) {
     push(toTestFromProd);
     push(toTestFromOnline);
   }
-  push(toOnline);
+  // Only allow trying icredit->online when explicitly requested via env flag
+  if (ALLOW_HOST_FALLBACK) push(toOnline);
+  // Always normalize online->icredit (common misconfiguration)
   push(toICredit);
   // Only include test host variants when FORCE_TEST is active
 
