@@ -334,6 +334,15 @@ router.post('/icredit/create-session-from-cart', async (req, res) => {
       const bodyIp = validateIPv4(req.body?.clientIp || req.body?.ip || req.body?.ipAddress);
       if (bodyIp) clientIp = bodyIp;
     }
+    // Diagnostic log to help field issues around IP resolution
+    try {
+      console.log('[payments][icredit][create-session-from-cart][ip]', {
+        fromHeaders: getClientIp(req) || null,
+        fromEnv: getFallbackIpFromEnv() || null,
+        fromBody: validateIPv4(req.body?.clientIp || req.body?.ip || req.body?.ipAddress) || null,
+        final: clientIp || null
+      });
+    } catch {}
     const overridesWithIp = clientIp ? { ...overrides, IPAddress: clientIp } : overrides;
     const { url } = await requestICreditPaymentUrl({ order: orderLike, settings, overrides: overridesWithIp });
     return res.json({ ok: true, url, sessionId: String(ps._id) });
@@ -422,5 +431,24 @@ router.post('/icredit/confirm', async (req, res) => {
   } catch (e) {
     try { console.error('[payments][icredit][confirm] error', e?.message || e); } catch {}
     return res.status(400).json({ message: 'confirm_failed', detail: e?.message || String(e) });
+  }
+});
+
+// Admin diagnostics: inspect runtime IP resolution and relevant env flags
+router.get('/icredit/debug-runtime', adminAuth, (req, res) => {
+  try {
+    const fromHeaders = getClientIp(req) || null;
+    const fromEnv = getFallbackIpFromEnv() || null;
+    const fromQuery = validateIPv4(req.query?.ip || req.query?.clientIp || req.query?.ipAddress) || null;
+    const trustProxy = req.app && req.app.get ? req.app.get('trust proxy') : undefined;
+    const env = {
+      ICREDIT_FORCE_TEST: String(process.env.ICREDIT_FORCE_TEST || ''),
+      ICREDIT_TRANSPORT: String(process.env.ICREDIT_TRANSPORT || ''),
+      ICREDIT_FORCE_IPV4: String(process.env.ICREDIT_FORCE_IPV4 || ''),
+      ICREDIT_DEFAULT_IP: fromEnv ? fromEnv : ''
+    };
+    return res.json({ ok: true, trustProxy, ip: { fromHeaders, fromEnv, fromQuery } , env });
+  } catch (e) {
+    return res.status(500).json({ ok: false, message: e?.message || 'debug_failed' });
   }
 });
