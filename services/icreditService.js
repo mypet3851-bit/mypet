@@ -154,11 +154,7 @@ export function buildICreditCandidates(apiUrl) {
   }
   push(toOnline);
   push(toICredit);
-  // Test environment variants (useful during development). If production host is configured, also try the test host.
-  if (!FORCE_TEST) {
-    push(toTestFromProd);
-    push(toTestFromOnline);
-  }
+  // Only include test host variants when FORCE_TEST is active
 
   // Add normalized variants based on current base
   addNormalizedVariants(u);
@@ -263,13 +259,41 @@ export async function loadSettings() {
   return settings;
 }
 
+// Validate that admin configuration contains all critical fields required for iCredit
+export function validateICreditConfig(settings, { requireRedirect = false } = {}) {
+  const issues = [];
+  const cfg = settings?.payments?.icredit || {};
+  if (!cfg.enabled) issues.push('icredit_disabled');
+  if (!cfg.groupPrivateToken || String(cfg.groupPrivateToken).trim().length < 6) issues.push('missing_token');
+  const apiUrl = String(cfg.apiUrl || '').trim();
+  if (!apiUrl) issues.push('missing_api_url');
+  else if (!/PaymentPageRequest\.svc(\/GetUrl)?$/i.test(apiUrl) && !/PaymentPageRequest\/GetUrl$/i.test(apiUrl)) issues.push('invalid_api_url');
+  if (requireRedirect) {
+    const r = String(cfg.redirectURL || '').trim();
+    if (!r) issues.push('missing_redirect_url');
+  }
+  // IPN is optional but recommended; warn only when requireRedirect is true (storefront flow)
+  const ipn = String(cfg.ipnURL || '').trim();
+  if (requireRedirect && !ipn) issues.push('missing_ipn_url');
+  return { ok: issues.length === 0, issues, config: { enabled: !!cfg.enabled, apiUrl, redirectURL: cfg.redirectURL || '', ipnURL: ipn ? 'present' : '' } };
+}
+
 // Attempt to create an iCredit hosted payment session and return the redirect URL.
 // Tries multiple JSON path variants and finally SOAP when JSON endpoints return HTML Request Error.
 export async function requestICreditPaymentUrl({ order, settings, overrides = {} }) {
   const cfg = settings?.payments?.icredit || {};
-  if (!cfg?.enabled) throw new Error('icredit_disabled');
-  if (!cfg?.groupPrivateToken) throw new Error('missing_token');
-  let apiUrl = cfg.apiUrl || 'https://icredit.rivhit.co.il/API/PaymentPageRequest.svc/GetUrl';
+  // Strict configuration validation (require RedirectURL only if not provided via overrides)
+  const needRedirect = !overrides?.RedirectURL;
+  const v = validateICreditConfig(settings, { requireRedirect: needRedirect });
+  if (!v.ok) {
+    const err = new Error('invalid_icredit_configuration: ' + v.issues.join(','));
+    err.status = 400;
+    throw err;
+  }
+  if (!cfg?.enabled) { const e = new Error('icredit_disabled'); e.status = 400; throw e; }
+  if (!cfg?.groupPrivateToken) { const e = new Error('missing_token'); e.status = 400; throw e; }
+  let apiUrl = String(cfg.apiUrl || '').trim();
+  if (!apiUrl) { const e = new Error('missing_api_url'); e.status = 400; throw e; }
   // Optional override to force using the test host regardless of configured URL (handy for staging)
   if (String(process.env.ICREDIT_FORCE_TEST || '').trim() === '1') {
     apiUrl = apiUrl
