@@ -93,9 +93,18 @@ export function buildICreditRequest({ order, settings, overrides = {} }) {
 		Description: coalesce(it.name, it.Description, '')
 	}));
 
-	// Redirects and notifications
-	req.RedirectURL = overrides.RedirectURL || cfg.redirectURL || '';
-	req.IPNURL = overrides.IPNURL || cfg.ipnURL || '';
+		// Redirects and notifications
+		req.RedirectURL = overrides.RedirectURL || cfg.redirectURL || '';
+		// Prefer explicit override or configured IPN URL; fall back to settings.apiBaseUrl if present
+		let ipn = overrides.IPNURL || cfg.ipnURL || '';
+		if (!ipn) {
+			const apiBase = (settings && (settings.apiBaseUrl || settings.apiBaseURL)) || process.env.API_BASE_URL || '';
+			if (apiBase) {
+				const base = String(apiBase).replace(/\/$/, '');
+				ipn = `${base}/api/payments/icredit/ipn`;
+			}
+		}
+		req.IPNURL = ipn;
 
 	// Financials
 	req.ExemptVAT = typeof overrides.ExemptVAT === 'boolean' ? overrides.ExemptVAT : !!cfg.exemptVAT;
