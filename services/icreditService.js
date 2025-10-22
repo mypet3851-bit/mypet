@@ -5,6 +5,8 @@ let __fetch = globalThis.fetch;
 // Optional insecure TLS mode for staging/test hosts that use mismatched/self-signed certs.
 // Enable ONLY for debugging by setting ICREDIT_INSECURE_TLS=1 in env.
 const ICREDIT_INSECURE = String(process.env.ICREDIT_INSECURE_TLS || '').trim() === '1';
+// Some platforms have flaky IPv6 DNS to Rivhit; allow forcing IPv4 sockets
+const ICREDIT_FORCE_IPV4 = String(process.env.ICREDIT_FORCE_IPV4 || '').trim() === '1';
 if (ICREDIT_INSECURE) {
   // As a safety, also disable TLS verification globally for legacy HTTPS stacks used by some libraries.
   // This is process-wide; do not enable in production.
@@ -26,16 +28,20 @@ if (!__fetch) {
 // can show a clear message and allow a quick retry.
 // Reusable insecure agents/dispatchers
 let insecureHttpsAgent = null;
-let insecureUndiciDispatcher = null;
+let undiciDispatcher = null;
 
-async function getInsecureUndiciDispatcher() {
-  if (insecureUndiciDispatcher) return insecureUndiciDispatcher;
+async function getUndiciDispatcher() {
+  if (undiciDispatcher) return undiciDispatcher;
   try {
     const undici = await import('undici');
     const Agent = undici.Agent || undici.default?.Agent;
     if (Agent) {
-      insecureUndiciDispatcher = new Agent({ connect: { rejectUnauthorized: false } });
-      return insecureUndiciDispatcher;
+      // Configure dispatcher per env flags
+      const connect = {};
+      if (ICREDIT_INSECURE) connect.rejectUnauthorized = false;
+      if (ICREDIT_FORCE_IPV4) connect.family = 4;
+      undiciDispatcher = new Agent({ connect });
+      return undiciDispatcher;
     }
   } catch {}
   return null;
@@ -53,13 +59,11 @@ function fetchWithTimeout(url, options = {}, timeoutMs = 20000) {
   const opts = { ...options, signal: controller.signal };
   // If insecure TLS is enabled, attach appropriate agent/dispatcher (both are safe to include; ignored when unsupported)
   if (ICREDIT_INSECURE) {
-    try {
-      opts.agent = ensureInsecureHttpsAgent(); // node-fetch / legacy
-    } catch {}
-    // undici (Node 18+ global fetch) uses dispatcher
-    // Best-effort: this is async to build once; if not ready, request still proceeds due to global env var above
-    getInsecureUndiciDispatcher().then((d) => { if (d) opts.dispatcher = d; }).catch(() => {});
+    try { opts.agent = ensureInsecureHttpsAgent(); } catch {}
   }
+  // undici (Node 18+ global fetch) uses dispatcher; we may set one for IPv4 forcing or insecure TLS
+  // Best-effort: build once; if not ready, request proceeds with defaults
+  getUndiciDispatcher().then((d) => { if (d) opts.dispatcher = d; }).catch(() => {});
   return __fetch(url, opts)
     .finally(() => clearTimeout(id));
 }
@@ -359,6 +363,7 @@ export async function requestICreditPaymentUrl({ order, settings, overrides = {}
         } catch (e) {
           // Normalize abort/timeout errors with context so UI can show an actionable hint
           const code = e?.code || e?.cause?.code || e?.errno;
+          const causeMsg = e?.cause?.message ? `; cause=${String(e.cause.message).split('\n')[0]}` : '';
           const name = e?.name;
           const extra = code ? ` code=${code}` : '';
           if (e && (name === 'AbortError' || /aborted|AbortError/i.test(String(e.message || '')))) {
@@ -366,7 +371,7 @@ export async function requestICreditPaymentUrl({ order, settings, overrides = {}
           } else if (/ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ETIMEDOUT|CERT_|UNABLE_TO_VERIFY/i.test(String(code || ''))) {
             lastErr = new Error(`network_error${extra} at ${url}`);
           } else {
-            lastErr = new Error(`fetch_failed${extra} at ${url}: ${(e?.message || '').split('\n')[0]}`);
+            lastErr = new Error(`fetch_failed${extra} at ${url}: ${(e?.message || '').split('\n')[0]}${causeMsg}`);
           }
           // If we've exhausted our total budget, stop trying
           if (remaining() <= 250) break;
@@ -468,6 +473,7 @@ export async function requestICreditPaymentUrl({ order, settings, overrides = {}
             lastSoapErr = new Error(`SOAP ${r.status} at ${ep} action=${act}: ${snippet}`);
           } catch (e) {
             const code = e?.code || e?.cause?.code || e?.errno;
+            const causeMsg = e?.cause?.message ? `; cause=${String(e.cause.message).split('\n')[0]}` : '';
             const name = e?.name;
             const extra = code ? ` code=${code}` : '';
             if (e && (name === 'AbortError' || /aborted|AbortError/i.test(String(e.message || '')))) {
@@ -475,7 +481,7 @@ export async function requestICreditPaymentUrl({ order, settings, overrides = {}
             } else if (/ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ETIMEDOUT|CERT_|UNABLE_TO_VERIFY/i.test(String(code || ''))) {
               lastSoapErr = new Error(`network_error${extra} at ${ep} action=${act}`);
             } else {
-              lastSoapErr = new Error(`fetch_failed${extra} at ${ep} action=${act}: ${(e?.message || '').split('\n')[0]}`);
+              lastSoapErr = new Error(`fetch_failed${extra} at ${ep} action=${act}: ${(e?.message || '').split('\n')[0]}${causeMsg}`);
             }
           }
         }
