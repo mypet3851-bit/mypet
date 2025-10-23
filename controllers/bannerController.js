@@ -104,7 +104,8 @@ export const getMobileBanners = async (req, res) => {
       title: b.title,
       subtitle: b.subtitle || '',
       cta: b.cta || '',
-      link: b.linkUrl || ''
+      link: b.linkUrl || '',
+      tag: b.tag || ''
     }));
     res.json(data);
   } catch (error) {
@@ -135,7 +136,8 @@ export const getMobileBannersByCategory = async (req, res) => {
       title: b.title,
       subtitle: b.subtitle || '',
       cta: b.cta || '',
-      link: b.linkUrl || ''
+      link: b.linkUrl || '',
+      tag: b.tag || ''
     }));
     res.json(data);
   } catch (error) {
@@ -166,7 +168,8 @@ export const getMobileBannersByTag = async (req, res) => {
       title: b.title,
       subtitle: b.subtitle || '',
       cta: b.cta || '',
-      link: b.linkUrl || ''
+      link: b.linkUrl || '',
+      tag: b.tag || ''
     }));
     res.json(data);
   } catch (error) {
