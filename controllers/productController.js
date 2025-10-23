@@ -51,7 +51,7 @@ async function resolveCategoryAndDescendants(categoryParam) {
 }
 
 async function buildProductQuery(params) {
-  const { search, category, categories, brand, isNew, isFeatured, onSale, includeInactive, colors, sizes, size, color, minPrice, maxPrice, primaryOnly, strictCategory } = params;
+  const { search, category, categories, brand, isNew, isFeatured, onSale, includeInactive, colors, sizes, size, color, minPrice, maxPrice, primaryOnly, strictCategory, tag, tags } = params;
   let query = {};
 
   if (search) {
@@ -111,6 +111,13 @@ async function buildProductQuery(params) {
   const sizeList = [size, ...(sizes ? String(sizes).split(',') : [])]
     .filter(Boolean).map(s => s.trim());
   if (sizeList.length) query['colors.sizes.name'] = { $in: sizeList };
+
+  // Tags filter: ?tag=accessories or ?tags=a,b
+  const tagList = [tag, ...(tags ? String(tags).split(',') : [])]
+    .filter(Boolean)
+    .map((t) => String(t).trim())
+    .filter((t) => !!t);
+  if (tagList.length) query.tags = { $in: tagList };
 
   if (!includeInactive || includeInactive === 'false') query.isActive = { $ne: false };
   if (brand) query.brand = brand;
@@ -527,6 +534,16 @@ export const createProduct = async (req, res) => {
         .filter(Boolean);
     };
 
+    // Normalize tags (allow array or comma-separated string)
+    let tags = [];
+    try {
+      if (Array.isArray(req.body.tags)) {
+        tags = req.body.tags.map((t) => String(t).trim()).filter(Boolean).slice(0, 12);
+      } else if (typeof req.body.tags === 'string') {
+        tags = req.body.tags.split(',').map((t) => t.trim()).filter(Boolean).slice(0, 12);
+      }
+    } catch {}
+
     const baseDoc = {
       name: req.body.name,
       description: req.body.description,
@@ -545,7 +562,8 @@ export const createProduct = async (req, res) => {
       sizeGuide,
       videoUrls,
       order: req.body.isFeatured ? await Product.countDocuments({ isFeatured: true }) : 0,
-      attributes: normalizeAttributes(req.body.attributes)
+      attributes: normalizeAttributes(req.body.attributes),
+      tags
     };
 
     if (!simpleMode) {
@@ -692,7 +710,7 @@ export const syncQuantityFromRivhit = async (req, res) => {
 // Update product
 export const updateProduct = async (req, res) => {
   try {
-  const { sizes, colors: incomingColors, videoUrls: incomingVideoUrls, sizeGuide: incomingSizeGuide, categories: incomingCategories, isActive: incomingIsActive, slug: incomingSlug, metaTitle, metaDescription, metaKeywords, ogTitle, ogDescription, ogImage, brand: incomingBrand, rivhitItemId: incomingRivhitItemId, ...updateData } = req.body;
+  const { sizes, colors: incomingColors, videoUrls: incomingVideoUrls, sizeGuide: incomingSizeGuide, categories: incomingCategories, isActive: incomingIsActive, slug: incomingSlug, metaTitle, metaDescription, metaKeywords, ogTitle, ogDescription, ogImage, brand: incomingBrand, rivhitItemId: incomingRivhitItemId, tags: incomingTags, ...updateData } = req.body;
     // Start with shallow copy of remaining fields
     const updateDataSanitized = { ...updateData };
     // Normalize attributes array if provided
@@ -734,6 +752,16 @@ export const updateProduct = async (req, res) => {
         updateDataSanitized.metaKeywords = metaKeywords.map(k => String(k).trim()).filter(Boolean);
       } else if (typeof metaKeywords === 'string') {
         updateDataSanitized.metaKeywords = metaKeywords.split(',').map(k => k.trim()).filter(Boolean);
+      }
+    }
+    // Normalize tags if provided (array or comma-separated string)
+    if (incomingTags !== undefined) {
+      if (Array.isArray(incomingTags)) {
+        updateDataSanitized.tags = incomingTags.map((t) => String(t).trim()).filter(Boolean).slice(0, 12);
+      } else if (typeof incomingTags === 'string') {
+        updateDataSanitized.tags = incomingTags.split(',').map((t) => t.trim()).filter(Boolean).slice(0, 12);
+      } else if (incomingTags === null) {
+        updateDataSanitized.tags = [];
       }
     }
     if (ogTitle !== undefined) updateDataSanitized.ogTitle = ogTitle;

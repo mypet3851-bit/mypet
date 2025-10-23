@@ -88,10 +88,13 @@ export const getMobileBanners = async (req, res) => {
       ]
     };
     const banners = await Banner.find(q).sort('order').select('-__v');
-    // Map to mobile-friendly payload
+    // Map to mobile-friendly payload (support image or video)
     const data = banners.map(b => ({
       id: b._id,
+      type: b.mediaType === 'video' && b.videoUrl ? 'video' : 'image',
       image: b.imageUrl,
+      video: b.videoUrl || '',
+      poster: b.posterUrl || '',
       title: b.title,
       subtitle: b.subtitle || '',
       cta: b.cta || '',
@@ -119,7 +122,10 @@ export const getMobileBannersByCategory = async (req, res) => {
     const banners = await Banner.find(q).sort('order').select('-__v');
     const data = banners.map(b => ({
       id: b._id,
+      type: b.mediaType === 'video' && b.videoUrl ? 'video' : 'image',
       image: b.imageUrl,
+      video: b.videoUrl || '',
+      poster: b.posterUrl || '',
       title: b.title,
       subtitle: b.subtitle || '',
       cta: b.cta || '',
