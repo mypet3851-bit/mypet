@@ -18,6 +18,24 @@ const bannerSchema = new mongoose.Schema({
     required: [true, 'Image URL is required'],
     trim: true
   },
+  // Optional video support for banners
+  mediaType: {
+    type: String,
+    enum: ['image', 'video'],
+    default: 'image',
+    index: true
+  },
+  videoUrl: {
+    type: String,
+    default: '',
+    trim: true
+  },
+  // Poster image to show before/while loading the video
+  posterUrl: {
+    type: String,
+    default: '',
+    trim: true
+  },
   linkUrl: {
     type: String,
     default: ''

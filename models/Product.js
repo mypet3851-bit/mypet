@@ -164,6 +164,8 @@ const productSchema = new mongoose.Schema({
   ogTitle: { type: String },
   ogDescription: { type: String },
   ogImage: { type: String },
+  // Free-form product tags (e.g., 'accessories', 'new', 'gift')
+  tags: [{ type: String, trim: true }],
   // Version counter for images array (used for client cache busting)
   imagesVersion: {
     type: Number,
