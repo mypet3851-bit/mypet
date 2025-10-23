@@ -10,8 +10,20 @@ import { loadSettings, requestICreditPaymentUrl, buildICreditRequest, buildICred
 const router = express.Router();
 
 // iCredit IPN webhook (public)
+// Optional source IP allowlist: set ICREDIT_IPN_ALLOWED_IPS as comma-separated IPv4 list to enforce
+const __ipnAllowed = parseIpList(process.env.ICREDIT_IPN_ALLOWED_IPS || '');
+const __enforceIpnWhitelist = __ipnAllowed.length > 0;
 router.post('/icredit/ipn', async (req, res) => {
   try {
+    // Basic source IP validation (only if env allowlist provided)
+    try {
+      const srcIp = getClientIp(req) || (req.ip ? String(req.ip) : '') || '';
+      if (__enforceIpnWhitelist && (!srcIp || !__ipnAllowed.includes(srcIp))) {
+        try { console.warn('[payments][icredit][ipn] rejecting by IP allowlist', { srcIp, allowed: __ipnAllowed }); } catch {}
+        return res.status(403).json({ ok: false, message: 'forbidden_ip' });
+      }
+      try { console.log('[payments][icredit][ipn] source', { ip: srcIp, enforced: __enforceIpnWhitelist }); } catch {}
+    } catch {}
     const payload = req.body || {};
     console.log('[payments][icredit][ipn]', JSON.stringify(payload).slice(0, 2000));
     // Optional: try to mark the session approved using Custom1 (we still require /confirm to create order)
@@ -216,6 +228,25 @@ function validateIPv4(val) {
   if (!m) return undefined;
   for (let i = 1; i <= 4; i++) { const n = Number(m[i]); if (!Number.isFinite(n) || n < 0 || n > 255) return undefined; }
   return ip;
+}
+
+// Parse comma-separated IPv4 list from env into sanitized array
+function parseIpList(val) {
+  const list = String(val || '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean)
+    .map(s => {
+      // Normalize IPv4 and drop invalid entries
+      let ip = s.replace(/^\[|\]$/g, '').replace(/:\d+$/, '');
+      if (/^::ffff:/.test(ip)) ip = ip.replace(/^::ffff:/, '');
+      const m = ip.match(/^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$/);
+      if (!m) return '';
+      for (let i = 1; i <= 4; i++) { const n = Number(m[i]); if (!Number.isFinite(n) || n < 0 || n > 255) return ''; }
+      return ip;
+    })
+    .filter(Boolean);
+  return Array.from(new Set(list));
 }
 
 // Create hosted payment session WITHOUT creating an Order upfront
