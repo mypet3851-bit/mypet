@@ -139,6 +139,10 @@ router.post('/icredit/create-session', async (req, res) => {
         const bodyIp = validateIPv4(req.body?.clientIp || req.body?.ip || req.body?.ipAddress);
         if (bodyIp) clientIp = bodyIp;
       }
+      // Hard fallback to a safe IPv4 literal to satisfy gateways that require IPAddress
+      if (!clientIp) {
+        clientIp = '1.1.1.1';
+      }
       const ipOverrides = clientIp ? { ...overrides, IPAddress: clientIp } : (overrides || {});
       const { url } = await requestICreditPaymentUrl({ order, settings, overrides: ipOverrides });
       try { console.log('[payments][icredit][create-session] success url=%s', url); } catch {}
@@ -364,6 +368,10 @@ router.post('/icredit/create-session-from-cart', async (req, res) => {
     if (!clientIp) {
       const bodyIp = validateIPv4(req.body?.clientIp || req.body?.ip || req.body?.ipAddress);
       if (bodyIp) clientIp = bodyIp;
+    }
+    // Hard fallback to a safe IPv4 literal to satisfy gateways that require IPAddress
+    if (!clientIp) {
+      clientIp = '1.1.1.1';
     }
     // Diagnostic log to help field issues around IP resolution
     try {
