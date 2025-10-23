@@ -57,6 +57,13 @@ const bannerSchema = new mongoose.Schema({
     trim: true,
     index: true
   },
+  // Optional: target banners to a specific tag (e.g., 'accessories')
+  tag: {
+    type: String,
+    default: '',
+    trim: true,
+    index: true
+  },
   isActive: {
     type: Boolean,
     default: true
