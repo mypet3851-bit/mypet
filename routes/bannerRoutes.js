@@ -8,7 +8,8 @@ import {
   deleteBanner,
   reorderBanners,
   getMobileBanners,
-  getMobileBannersByCategory
+  getMobileBannersByCategory,
+  getMobileBannersByTag
 } from '../controllers/bannerController.js';
 
 const router = express.Router();
@@ -18,6 +19,7 @@ router.get('/active', getActiveBanners);
 // Mobile optimized payloads (public)
 router.get('/mobile', getMobileBanners);
 router.get('/mobile/by-category/:slug', getMobileBannersByCategory);
+router.get('/mobile/by-tag/:tag', getMobileBannersByTag);
 
 // Admin
 router.get('/', adminAuth, getBanners);

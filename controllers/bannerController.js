@@ -3,11 +3,12 @@ import mongoose from 'mongoose';
 
 export const getBanners = async (req, res) => {
   try {
-    const { platform, categorySlug } = req.query || {};
+    const { platform, categorySlug, tag } = req.query || {};
     const filter = {};
     if (platform === 'mobile') Object.assign(filter, { $or: [{ platform: 'mobile' }, { platform: 'both' }] });
     if (platform === 'web') Object.assign(filter, { $or: [{ platform: 'web' }, { platform: 'both' }] });
     if (categorySlug) Object.assign(filter, { categorySlug });
+    if (tag) Object.assign(filter, { tag });
     const banners = await Banner.find(filter).sort('order').select('-__v');
     res.json(banners);
   } catch (error) {
@@ -18,7 +19,7 @@ export const getBanners = async (req, res) => {
 export const getActiveBanners = async (req, res) => {
   try {
     const now = new Date();
-    const { platform, categorySlug } = req.query || {};
+    const { platform, categorySlug, tag } = req.query || {};
     const platformFilter = platform === 'mobile'
       ? { $or: [{ platform: 'mobile' }, { platform: 'both' }] }
       : platform === 'web'
@@ -28,6 +29,7 @@ export const getActiveBanners = async (req, res) => {
       isActive: true,
       ...platformFilter,
       ...(categorySlug ? { categorySlug } : {}),
+      ...(tag ? { tag } : {}),
       $and: [
         { $or: [{ startDate: null }, { startDate: { $lte: now } }] },
         { $or: [{ endDate: null }, { endDate: { $gte: now } }] }
@@ -42,12 +44,13 @@ export const getActiveBanners = async (req, res) => {
 export const createBanner = async (req, res) => {
   try {
     const order = await Banner.countDocuments();
-    const { platform, categorySlug } = req.body || {};
+    const { platform, categorySlug, tag } = req.body || {};
     // Default platform to 'web' for legacy callers
     const banner = new Banner({
       ...req.body,
       platform: ['web','mobile','both'].includes(platform) ? platform : 'web',
       categorySlug: categorySlug || '',
+      tag: tag || '',
       order
     });
     const saved = await banner.save();
@@ -79,9 +82,11 @@ export const updateBanner = async (req, res) => {
 export const getMobileBanners = async (req, res) => {
   try {
     const now = new Date();
+    const { tag } = req.query || {};
     const q = {
       isActive: true,
       $or: [{ platform: 'mobile' }, { platform: 'both' }],
+      ...(tag ? { tag } : {}),
       $and: [
         { $or: [{ startDate: null }, { startDate: { $lte: now } }] },
         { $or: [{ endDate: null }, { endDate: { $gte: now } }] }
@@ -114,6 +119,37 @@ export const getMobileBannersByCategory = async (req, res) => {
       isActive: true,
       $or: [{ platform: 'mobile' }, { platform: 'both' }],
       categorySlug: slug,
+      $and: [
+        { $or: [{ startDate: null }, { startDate: { $lte: now } }] },
+        { $or: [{ endDate: null }, { endDate: { $gte: now } }] }
+      ]
+    };
+    const banners = await Banner.find(q).sort('order').select('-__v');
+    const data = banners.map(b => ({
+      id: b._id,
+      type: b.mediaType === 'video' && b.videoUrl ? 'video' : 'image',
+      image: b.imageUrl,
+      video: b.videoUrl || '',
+      poster: b.posterUrl || '',
+      title: b.title,
+      subtitle: b.subtitle || '',
+      cta: b.cta || '',
+      link: b.linkUrl || ''
+    }));
+    res.json(data);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const getMobileBannersByTag = async (req, res) => {
+  try {
+    const now = new Date();
+    const { tag } = req.params;
+    const q = {
+      isActive: true,
+      $or: [{ platform: 'mobile' }, { platform: 'both' }],
+      tag,
       $and: [
         { $or: [{ startDate: null }, { startDate: { $lte: now } }] },
         { $or: [{ endDate: null }, { endDate: { $gte: now } }] }
