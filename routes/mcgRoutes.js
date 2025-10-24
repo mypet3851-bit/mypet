@@ -7,6 +7,11 @@ import { getItemsList } from '../services/mcgService.js';
 
 const router = express.Router();
 
+// Public health ping (no auth). Returns a simple OK to verify routing reaches this service.
+router.get('/ping', (req, res) => {
+  res.json({ ok: true, service: 'mcg', timestamp: new Date().toISOString() });
+});
+
 // Proxy to MCG get_items_list with OAuth2
 // POST /api/mcg/items
 router.post('/items', adminAuth, async (req, res) => {
