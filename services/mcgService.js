@@ -13,7 +13,9 @@ async function getConfig() {
   let s = await Settings.findOne();
   if (!s) s = await Settings.create({});
   const db = s.mcg || {};
-  const base = (db.baseUrl || process.env.MCG_BASE_URL || 'https://api.mcgateway.com').trim().replace(/\/$/, '');
+  let base = (db.baseUrl || process.env.MCG_BASE_URL || 'https://api.mcgateway.com').trim();
+  if (base && !/^https?:\/\//i.test(base)) base = 'https://' + base; // ensure protocol
+  base = base.replace(/\/$/, '');
   const clientId = (db.clientId || process.env.MCG_CLIENT_ID || '').trim();
   const clientSecret = (db.clientSecret || process.env.MCG_CLIENT_SECRET || '').trim();
   const scope = (db.scope || process.env.MCG_SCOPE || '').trim();
@@ -107,6 +109,9 @@ export async function getItemsList({ PageNumber, PageSize, Filter } = {}) {
         detail = `: ${String(e.response.data).slice(0,160).replace(/\s+/g,' ').trim()}`;
       }
     } catch {}
+    if (!detail && e && e.message) {
+      detail = `: ${e.message}`;
+    }
     const err = new Error(`MCG get_items_list failed${status ? ` (${status})` : ''}${detail}`);
     err.status = status;
     throw err;

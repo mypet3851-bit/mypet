@@ -50,7 +50,17 @@ router.put('/config', adminAuth, async (req, res) => {
     const inc = req.body || {};
     s.mcg = s.mcg || { enabled: false, baseUrl: 'https://api.mcgateway.com', clientId: '', clientSecret: '', scope: '', apiVersion: 'v2.6' };
     if (typeof inc.enabled !== 'undefined') s.mcg.enabled = !!inc.enabled;
-    if (typeof inc.baseUrl === 'string') s.mcg.baseUrl = inc.baseUrl.trim();
+    if (typeof inc.baseUrl === 'string') {
+      let b = (inc.baseUrl || '').trim();
+      if (b && !/^https?:\/\//i.test(b)) b = 'https://' + b;
+      // Validate URL format and strip any path/query/fragment
+      try {
+        const u = new URL(b);
+        s.mcg.baseUrl = `${u.protocol}//${u.hostname}${u.port ? ':' + u.port : ''}`;
+      } catch {
+        return res.status(400).json({ message: 'Invalid baseUrl. Use full origin like https://api.mcgateway.com' });
+      }
+    }
     if (typeof inc.clientId === 'string') {
       if (inc.clientId !== '***') s.mcg.clientId = inc.clientId.trim();
     }
