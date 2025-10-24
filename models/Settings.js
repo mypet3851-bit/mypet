@@ -366,7 +366,12 @@ settingsSchema.add({
     clientId: { type: String, default: '' },
     clientSecret: { type: String, default: '' }, // write-only; mask in API responses
     scope: { type: String, default: '' },
-    apiVersion: { type: String, default: 'v2.6' }
+    apiVersion: { type: String, default: 'v2.6' },
+    // Optional override for OAuth token endpoint (e.g., Azure AD v2.0 token URL)
+    tokenUrl: { type: String, default: '' },
+    // Optional extra API key header for gateway/APIM (name/value)
+    extraHeaderName: { type: String, default: '' },
+    extraHeaderValue: { type: String, default: '' } // write-only; mask in API responses
   }
 });
 
