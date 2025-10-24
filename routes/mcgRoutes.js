@@ -223,3 +223,49 @@ router.post('/sync-items', adminAuth, async (req, res) => {
     res.status(400).json({ message: e?.message || 'mcg_sync_items_failed' });
   }
 });
+
+// Sync a single existing product from MCG by mcgItemId or mcgBarcode
+router.post('/sync-product/:productId', adminAuth, async (req, res) => {
+  try {
+    const s = await Settings.findOne();
+    if (!s?.mcg?.enabled) return res.status(412).json({ message: 'MCG integration disabled' });
+
+    const { productId } = req.params;
+    const product = await Product.findById(productId);
+    if (!product) return res.status(404).json({ message: 'Product not found' });
+
+    // Determine lookup keys: prefer explicit override, then saved mapping on product
+    let mcgItemId = (req.body?.mcgItemId || product.mcgItemId || '').toString().trim();
+    let mcgBarcode = (req.body?.mcgBarcode || product.mcgBarcode || '').toString().trim();
+    if (!mcgItemId && !mcgBarcode) {
+      return res.status(400).json({ message: 'Provide mcgItemId or mcgBarcode on the product or in request body' });
+    }
+
+    const Filter = mcgItemId ? { ItemID: mcgItemId } : { Barcode: mcgBarcode };
+    const data = await getItemsList({ PageNumber: 1, PageSize: 1, Filter });
+    const items = Array.isArray(data?.Items) ? data.Items : (Array.isArray(data?.items) ? data.items : []);
+    if (!items.length) return res.status(404).json({ message: 'No matching item found in MCG' });
+    const it = items[0] || {};
+
+    // Map fields
+    const nameFromMcg = (it?.Name ?? it?.name ?? '').toString();
+    const descFromMcg = (it?.Description ?? it?.description ?? '').toString();
+    const priceRaw = Number(it?.Price ?? 0);
+    const price = Number.isFinite(priceRaw) && priceRaw >= 0 ? priceRaw : undefined;
+    const barcodeFromMcg = ((it?.Barcode ?? it?.barcode ?? '') + '').trim();
+    const idFromMcg = ((it?.ItemID ?? it?.id ?? it?.itemId ?? '') + '').trim();
+
+    const update = {};
+    // Only overwrite name if empty or placeholder
+    if ((!product.name || product.name === 'MCG Item') && nameFromMcg) update.name = nameFromMcg;
+    if (descFromMcg) update.description = descFromMcg;
+    if (typeof price === 'number') update.price = price;
+    if (idFromMcg) update.mcgItemId = idFromMcg;
+    if (barcodeFromMcg) update.mcgBarcode = barcodeFromMcg;
+
+    const updated = await Product.findByIdAndUpdate(productId, { $set: update }, { new: true });
+    res.json(updated);
+  } catch (e) {
+    res.status(400).json({ message: e?.message || 'mcg_sync_product_failed' });
+  }
+});
