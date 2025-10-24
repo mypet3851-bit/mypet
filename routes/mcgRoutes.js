@@ -41,8 +41,8 @@ router.get('/config', adminAuth, async (req, res) => {
       tokenUrl: m.tokenUrl || '',
       extraHeaderName: m.extraHeaderName || '',
       extraHeaderValue: m.extraHeaderValue ? '***' : '',
-      vendorCode: m.vendorCode || '',
-      retailerKey: m.retailerKey || '',
+  vendorCode: m.vendorCode || '',
+  retailerKey: m.retailerKey ? '***' : '',
       retailerClientId: m.retailerClientId || ''
     });
   } catch (e) {
@@ -101,7 +101,9 @@ router.put('/config', adminAuth, async (req, res) => {
       if (inc.extraHeaderValue !== '***') s.mcg.extraHeaderValue = inc.extraHeaderValue.trim();
     }
     if (typeof inc.vendorCode === 'string') s.mcg.vendorCode = inc.vendorCode.trim();
-    if (typeof inc.retailerKey === 'string') s.mcg.retailerKey = inc.retailerKey.trim();
+    if (typeof inc.retailerKey === 'string') {
+      if (inc.retailerKey !== '***') s.mcg.retailerKey = inc.retailerKey.trim();
+    }
     if (typeof inc.retailerClientId === 'string') s.mcg.retailerClientId = inc.retailerClientId.trim();
     try { s.markModified('mcg'); } catch {}
     await s.save();
@@ -116,8 +118,8 @@ router.put('/config', adminAuth, async (req, res) => {
       tokenUrl: s.mcg.tokenUrl || '',
       extraHeaderName: s.mcg.extraHeaderName || '',
       extraHeaderValue: s.mcg.extraHeaderValue ? '***' : '',
-      vendorCode: s.mcg.vendorCode || '',
-      retailerKey: s.mcg.retailerKey || '',
+  vendorCode: s.mcg.vendorCode || '',
+  retailerKey: s.mcg.retailerKey ? '***' : '',
       retailerClientId: s.mcg.retailerClientId || ''
     });
   } catch (e) {
