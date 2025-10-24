@@ -367,11 +367,17 @@ settingsSchema.add({
     clientSecret: { type: String, default: '' }, // write-only; mask in API responses
     scope: { type: String, default: '' },
     apiVersion: { type: String, default: 'v2.6' },
+    // API flavor: '' (legacy) or 'uplicali' for SuperMCG/MCG_API spec
+    apiFlavor: { type: String, default: '' },
     // Optional override for OAuth token endpoint (e.g., Azure AD v2.0 token URL)
     tokenUrl: { type: String, default: '' },
     // Optional extra API key header for gateway/APIM (name/value)
     extraHeaderName: { type: String, default: '' },
-    extraHeaderValue: { type: String, default: '' } // write-only; mask in API responses
+    extraHeaderValue: { type: String, default: '' }, // write-only; mask in API responses
+    // Uplîcali identifiers used in query string and headers: code/key/client_id
+    vendorCode: { type: String, default: '' },
+    retailerKey: { type: String, default: '' },
+    retailerClientId: { type: String, default: '' }
   }
 });
 
