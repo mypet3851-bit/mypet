@@ -358,6 +358,18 @@ settingsSchema.add({
   }
 });
 
+// MCG Gateway integration configuration (OAuth2 client credentials)
+settingsSchema.add({
+  mcg: {
+    enabled: { type: Boolean, default: false },
+    baseUrl: { type: String, default: 'https://api.mcgateway.com' },
+    clientId: { type: String, default: '' },
+    clientSecret: { type: String, default: '' }, // write-only; mask in API responses
+    scope: { type: String, default: '' },
+    apiVersion: { type: String, default: 'v2.6' }
+  }
+});
+
 // Mobile app bottom tab bar icon configuration (admin configurable)
 // Each tab can have optional active/inactive icon URLs (absolute, /uploads, or data URI)
 // Center button supports a single icon (when set, overrides gradient text)

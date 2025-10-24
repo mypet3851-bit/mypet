@@ -245,6 +245,15 @@ try { productSchema.index({ rivhitItemId: 1 }, { unique: true, sparse: true }); 
 productSchema.add({ rivhitItemCode: { type: String, trim: true } });
 try { productSchema.index({ rivhitItemCode: 1 }, { unique: true, sparse: true }); } catch {}
 
+// MCG Gateway mapping (optional dedupe/traceability)
+productSchema.add({
+  mcgItemId: { type: String, trim: true },
+  mcgBarcode: { type: String, trim: true }
+});
+// Indexes for faster lookups (not unique to avoid migration issues in existing data)
+try { productSchema.index({ mcgItemId: 1 }, { sparse: true }); } catch {}
+try { productSchema.index({ mcgBarcode: 1 }, { sparse: true }); } catch {}
+
 // Virtual for average rating
 productSchema.virtual('averageRating').get(function() {
   if (!this.reviews || this.reviews.length === 0) return 0;
