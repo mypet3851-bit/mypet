@@ -36,7 +36,10 @@ router.get('/config', adminAuth, async (req, res) => {
       clientId: m.clientId ? '***' : '',
       clientSecret: m.clientSecret ? '***' : '',
       scope: m.scope || '',
-      apiVersion: m.apiVersion || 'v2.6'
+      apiVersion: m.apiVersion || 'v2.6',
+      tokenUrl: m.tokenUrl || '',
+      extraHeaderName: m.extraHeaderName || '',
+      extraHeaderValue: m.extraHeaderValue ? '***' : ''
     });
   } catch (e) {
     res.status(500).json({ message: e?.message || 'mcg_config_read_failed' });
@@ -69,6 +72,25 @@ router.put('/config', adminAuth, async (req, res) => {
     }
     if (typeof inc.scope === 'string') s.mcg.scope = inc.scope.trim();
     if (typeof inc.apiVersion === 'string') s.mcg.apiVersion = inc.apiVersion.trim();
+    if (typeof inc.tokenUrl === 'string') {
+      let t = (inc.tokenUrl || '').trim();
+      if (t) {
+        if (!/^https?:\/\//i.test(t)) t = 'https://' + t;
+        try {
+          const u = new URL(t);
+          // Keep full path for token URL since Azure AD includes a path
+          s.mcg.tokenUrl = `${u.protocol}//${u.hostname}${u.port ? ':' + u.port : ''}${u.pathname}`;
+        } catch {
+          return res.status(400).json({ message: 'Invalid tokenUrl. Example: https://login.microsoftonline.com/<tenant-id>/oauth2/v2.0/token' });
+        }
+      } else {
+        s.mcg.tokenUrl = '';
+      }
+    }
+    if (typeof inc.extraHeaderName === 'string') s.mcg.extraHeaderName = inc.extraHeaderName.trim();
+    if (typeof inc.extraHeaderValue === 'string') {
+      if (inc.extraHeaderValue !== '***') s.mcg.extraHeaderValue = inc.extraHeaderValue.trim();
+    }
     try { s.markModified('mcg'); } catch {}
     await s.save();
     res.json({
@@ -77,7 +99,10 @@ router.put('/config', adminAuth, async (req, res) => {
       clientId: s.mcg.clientId ? '***' : '',
       clientSecret: s.mcg.clientSecret ? '***' : '',
       scope: s.mcg.scope || '',
-      apiVersion: s.mcg.apiVersion || 'v2.6'
+      apiVersion: s.mcg.apiVersion || 'v2.6',
+      tokenUrl: s.mcg.tokenUrl || '',
+      extraHeaderName: s.mcg.extraHeaderName || '',
+      extraHeaderValue: s.mcg.extraHeaderValue ? '***' : ''
     });
   } catch (e) {
     res.status(500).json({ message: e?.message || 'mcg_config_update_failed' });

@@ -20,16 +20,19 @@ async function getConfig() {
   const clientSecret = (db.clientSecret || process.env.MCG_CLIENT_SECRET || '').trim();
   const scope = (db.scope || process.env.MCG_SCOPE || '').trim();
   const version = (db.apiVersion || process.env.MCG_API_VERSION || 'v2.6').trim();
+  const tokenUrl = (db.tokenUrl || process.env.MCG_TOKEN_URL || '').trim();
+  const extraHeaderName = (db.extraHeaderName || process.env.MCG_EXTRA_HEADER_NAME || '').trim();
+  const extraHeaderValue = (db.extraHeaderValue || process.env.MCG_EXTRA_HEADER_VALUE || '').trim();
   const enabled = typeof db.enabled === 'boolean' ? !!db.enabled : !!(clientId && clientSecret);
   if (!clientId || !clientSecret) {
     throw new Error('MCG client credentials are not configured (Settings.mcg or env)');
   }
-  return { base, clientId, clientSecret, scope, version, enabled };
+  return { base, clientId, clientSecret, scope, version, enabled, tokenUrl, extraHeaderName, extraHeaderValue };
 }
 
 async function fetchAccessToken() {
-  const { base, clientId, clientSecret, scope } = getConfig();
-  const url = `${base}/oauth2/access_token`;
+  const { base, clientId, clientSecret, scope, tokenUrl } = await getConfig();
+  const url = tokenUrl || `${base}/oauth2/access_token`;
   const params = new URLSearchParams();
   params.set('grant_type', 'client_credentials');
   params.set('client_id', clientId);
@@ -77,13 +80,13 @@ function buildItemsListBody({ PageNumber, PageSize, Filter }) {
 }
 
 export async function getItemsList({ PageNumber, PageSize, Filter } = {}) {
-  const { base, version } = await getConfig();
+  const { base, version, extraHeaderName, extraHeaderValue } = await getConfig();
   const url = `${base}/api/${version}/get_items_list`;
   let token = await getAccessToken();
   const body = buildItemsListBody({ PageNumber, PageSize, Filter });
   try {
     const resp = await axios.post(url, body, {
-      headers: { 'Content-Type': 'application/json', ...buildAuthHeader(token) },
+      headers: { 'Content-Type': 'application/json', ...buildAuthHeader(token), ...(extraHeaderName && extraHeaderValue ? { [extraHeaderName]: extraHeaderValue } : {}) },
       timeout: 25000
     });
     return resp?.data || {};
@@ -93,7 +96,7 @@ export async function getItemsList({ PageNumber, PageSize, Filter } = {}) {
     if (status === 401) {
       token = await fetchAccessToken();
       const resp2 = await axios.post(url, body, {
-        headers: { 'Content-Type': 'application/json', ...buildAuthHeader(token) },
+        headers: { 'Content-Type': 'application/json', ...buildAuthHeader(token), ...(extraHeaderName && extraHeaderValue ? { [extraHeaderName]: extraHeaderValue } : {}) },
         timeout: 25000
       });
       return resp2?.data || {};
