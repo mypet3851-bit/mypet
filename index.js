@@ -71,6 +71,7 @@ import bundleOfferRoutes from './routes/bundleOfferRoutes.js';
 import attributeRoutes from './routes/attributeRoutes.js';
 import posRoutes from './routes/posRoutes.js';
 import rivhitRoutes from './routes/rivhitRoutes.js';
+import mcgRoutes from './routes/mcgRoutes.js';
 // Lazy import function to warm DeepSeek config from DB
 import { loadDeepseekConfigFromDb } from './services/translate/deepseek.js';
 
@@ -254,6 +255,7 @@ app.use('/api/attributes', attributeRoutes);
 // POS System Routes (admin-protected)
 app.use('/api/pos', posRoutes);
 app.use('/api/rivhit', rivhitRoutes);
+app.use('/api/mcg', mcgRoutes);
 
 // Health Check Route
 app.get('/health', (req, res) => {
