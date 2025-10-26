@@ -302,6 +302,12 @@ router.post('/sync-items', adminAuth, async (req, res) => {
             user: req.user?._id
           }));
           try { if (historyDocs.length) await InventoryHistory.insertMany(historyDocs, { ordered: false }); } catch {}
+          // Recompute product stocks to reflect inserted inventory
+          try {
+            for (const p of created) {
+              try { await inventoryService.recomputeProductStock(p._id); } catch {}
+            }
+          } catch {}
         }
       } catch (invSetupErr) {
         try { console.warn('[mcg][sync-items] warehouse/inventory setup skipped:', invSetupErr?.message || invSetupErr); } catch {}
@@ -398,9 +404,43 @@ router.post('/sync-product/:productId', adminAuth, async (req, res) => {
       }
       if (warehouses && warehouses.length) {
         const mainWh = warehouses.find(w => String(w?.name || '').toLowerCase() === 'main warehouse') || warehouses[0];
-        const filter = { product: productId, size: 'Default', color: 'Default', warehouse: mainWh._id };
-        const updateInv = { $set: { quantity }, $setOnInsert: { product: productId, size: 'Default', color: 'Default', warehouse: mainWh._id } };
-        await Inventory.findOneAndUpdate(filter, updateInv, { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true });
+        // If product has variants, try smart mapping:
+        // 1) If a variant barcode matches MCG barcode -> update that variant row
+        // 2) Else if exactly one variant exists -> update that variant row
+        // 3) Else fallback to Default/Default non-variant row
+        let didVariant = false;
+        try {
+          const prod = await Product.findById(productId).select('variants').lean();
+          const variants = Array.isArray(prod?.variants) ? prod.variants : [];
+          let targetVariantId = null;
+          if (variants.length > 0) {
+            // Try barcode match first
+            if (barcodeFromMcg) {
+              const match = variants.find(v => String(v?.barcode || '').trim() === barcodeFromMcg);
+              if (match && match._id) targetVariantId = String(match._id);
+            }
+            // If none matched and there is exactly one variant, use it
+            if (!targetVariantId && variants.length === 1 && variants[0]?._id) {
+              targetVariantId = String(variants[0]._id);
+            }
+          }
+          if (targetVariantId) {
+            const filterVar = { product: productId, variantId: targetVariantId, warehouse: mainWh._id };
+            const setOnInsert = { product: productId, variantId: targetVariantId, warehouse: mainWh._id };
+            await Inventory.findOneAndUpdate(
+              filterVar,
+              { $set: { quantity }, $setOnInsert: setOnInsert },
+              { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true }
+            );
+            didVariant = true;
+          }
+        } catch {}
+
+        if (!didVariant) {
+          const filter = { product: productId, size: 'Default', color: 'Default', warehouse: mainWh._id };
+          const updateInv = { $set: { quantity }, $setOnInsert: { product: productId, size: 'Default', color: 'Default', warehouse: mainWh._id } };
+          await Inventory.findOneAndUpdate(filter, updateInv, { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true });
+        }
         try { await inventoryService.recomputeProductStock(productId); } catch {}
       }
     } catch (invErr) {

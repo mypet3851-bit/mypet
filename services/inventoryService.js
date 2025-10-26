@@ -28,9 +28,11 @@ class InventoryService {
         throw new ApiError(StatusCodes.BAD_REQUEST, 'Invalid reservation item');
       }
       const usingVariant = !!it.variantId;
-      const baseFilter = usingVariant
+      // Normalize non-variant size/color to 'Default' when not provided to match default inventory rows
+      const normalized = usingVariant
         ? { product, variantId: it.variantId }
-        : { product, size: it.size, color: it.color };
+        : { product, size: (it.size && String(it.size).trim()) ? it.size : 'Default', color: (it.color && String(it.color).trim()) ? it.color : 'Default' };
+      const baseFilter = normalized;
 
       // Load inventories sorted by quantity desc
       const invQuery = Inventory.find({ ...baseFilter }).sort({ quantity: -1 });
@@ -66,9 +68,39 @@ class InventoryService {
           inv.quantity -= remain; // go negative
           if (session) await inv.save({ session }); else await inv.save();
         } else {
-          // No inventory rows exist yet; create a placeholder row with negative quantity (requires a warehouse).
-          // Choose any warehouse is not possible without context; instead, throw a targeted error suggesting to create a row.
-          throw new ApiError(StatusCodes.BAD_REQUEST, 'No inventory rows found to record negative stock. Create at least one inventory entry for this item to allow negative stock.');
+          // No inventory rows yet: create a default row in Main Warehouse and record negative stock
+          try {
+            let warehouses = await Warehouse.find({});
+            if (!warehouses || warehouses.length === 0) {
+              const main = await Warehouse.findOneAndUpdate(
+                { name: 'Main Warehouse' },
+                { $setOnInsert: { name: 'Main Warehouse' } },
+                { new: true, upsert: true }
+              );
+              warehouses = main ? [main] : [];
+            }
+            if (warehouses && warehouses.length) {
+              const mainWh = warehouses.find(w => String(w?.name || '').toLowerCase() === 'main warehouse') || warehouses[0];
+              const inv = new Inventory({
+                product,
+                variantId: usingVariant ? it.variantId : undefined,
+                size: usingVariant ? undefined : baseFilter.size,
+                color: usingVariant ? undefined : baseFilter.color,
+                quantity: 0,
+                warehouse: mainWh._id,
+                location: mainWh.name,
+                lowStockThreshold: 5
+              });
+              if (session) await inv.save({ session }); else await inv.save();
+              inv.quantity -= remain;
+              if (session) await inv.save({ session }); else await inv.save();
+            } else {
+              throw new Error('No warehouses available');
+            }
+          } catch (fallbackErr) {
+            // If we cannot create a row, preserve the targeted message for the admin UI
+            throw new ApiError(StatusCodes.BAD_REQUEST, 'No inventory rows found to record negative stock. Create at least one inventory entry for this item to allow negative stock.');
+          }
         }
         remain = 0;
       }
@@ -102,7 +134,7 @@ class InventoryService {
       const usingVariant = !!it.variantId;
       const baseFilter = usingVariant
         ? { product, variantId: it.variantId }
-        : { product, size: it.size, color: it.color };
+        : { product, size: (it.size && String(it.size).trim()) ? it.size : 'Default', color: (it.color && String(it.color).trim()) ? it.color : 'Default' };
       const invQuery = Inventory.find({ ...baseFilter }).sort({ quantity: 1 }); // smallest first
       const invs = session ? await invQuery.session(session) : await invQuery;
       let remain = quantity;
