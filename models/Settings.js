@@ -379,7 +379,9 @@ settingsSchema.add({
     retailerKey: { type: String, default: '' },
     retailerClientId: { type: String, default: '' },
     // Price tax multiplier to apply for MCG-imported prices when item_final_price is not provided
-    taxMultiplier: { type: Number, default: 1.18, min: 1 }
+    taxMultiplier: { type: Number, default: 1.18, min: 1 },
+    // When true, push stock decrements back to MCG as delta updates
+    pushStockBackEnabled: { type: Boolean, default: false }
   }
 });
 
