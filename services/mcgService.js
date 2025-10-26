@@ -217,4 +217,119 @@ export async function getItemsList(params = {}) {
   }
 }
 
-export default { getItemsList, getVersion };
+// Push stock deltas back to MCG
+export async function updateItemsQuantities(items = []) {
+  if (!Array.isArray(items) || !items.length) return { ok: false, reason: 'no_items' };
+  // Basic validation and normalization
+  const payload = [];
+  for (const it of items) {
+    if (!it) continue;
+    const ItemCode = (it.ItemCode ?? it.itemCode ?? it.barcode ?? '').toString().trim();
+    const q = Number(it.Quantity ?? it.quantity);
+    if (!ItemCode || !Number.isFinite(q) || !q) continue;
+    payload.push({ ItemCode, Quantity: q });
+  }
+  if (!payload.length) return { ok: false, reason: 'no_valid_items' };
+
+  const cfg = await getConfig();
+  if (isUpliFlavor(cfg)) {
+    // For Uplîcali, the documented way to update items is via req: 'set_items_list'.
+    // We only have deltas here, but some retailers accept a delta body. Prefer spec-compliant call when absolute items provided elsewhere.
+    // Keep backward compatibility by attempting the simple { Items } delta if caller insists on deltas.
+    const res = await mcgRequestUpli({ Items: payload });
+    return res || { ok: true };
+  }
+  // Legacy: attempt a conventional endpoint name; include extra header if configured
+  const { base, version, extraHeaderName, extraHeaderValue } = cfg;
+  const url = `${base}/api/${version}/update_items_quantities`;
+  let token = await getAccessToken();
+  try {
+    const resp = await axios.post(url, { Items: payload }, {
+      headers: { 'Content-Type': 'application/json', ...buildAuthHeader(token), ...(extraHeaderName && extraHeaderValue ? { [extraHeaderName]: extraHeaderValue } : {}) },
+      timeout: 20000
+    });
+    return resp?.data || { ok: true };
+  } catch (e) {
+    const status = e?.response?.status;
+    if (status === 401) {
+      token = await fetchAccessToken();
+      const resp2 = await axios.post(url, { Items: payload }, {
+        headers: { 'Content-Type': 'application/json', ...buildAuthHeader(token), ...(extraHeaderName && extraHeaderValue ? { [extraHeaderName]: extraHeaderValue } : {}) },
+        timeout: 20000
+      });
+      return resp2?.data || { ok: true };
+    }
+    let detail = '';
+    try {
+      const d = e?.response?.data; if (d && typeof d === 'object') detail = d.message || d.error || '';
+    } catch {}
+    const err = new Error(`MCG update quantities failed${status ? ` (${status})` : ''}${detail ? `: ${detail}` : ''}`);
+    err.status = status;
+    throw err;
+  }
+}
+
+// Set or update items (absolute values) per Uplîcali spec using set_items_list
+// items: array of objects supporting keys like { item_id, item_code, item_name?, item_price?, item_department?, item_image?, item_inventory?, item_weight?, item_ads?, item_attribute? }
+export async function setItemsList(items = [], group) {
+  if (!Array.isArray(items) || !items.length) return { ok: false, reason: 'no_items' };
+  const cfg = await getConfig();
+  const cleanItems = [];
+  for (const it of items) {
+    if (!it) continue;
+    // Normalize primary identifiers and inventory
+    const item_id = (it.item_id ?? it.ItemID ?? it.itemId ?? it.ItemCode ?? it.item_code ?? '').toString().trim();
+    const item_code = (it.item_code ?? it.ItemCode ?? '').toString().trim();
+    const invRaw = it.item_inventory ?? it.inventory ?? it.quantity ?? it.Quantity;
+    const item_inventory = Number.isFinite(Number(invRaw)) ? Number(invRaw) : undefined;
+    if (!item_id && !item_code) continue;
+    const payload = { };
+    if (item_id) payload.item_id = item_id;
+    if (!item_id && item_code) payload.item_code = item_code;
+    if (item_inventory !== undefined) payload.item_inventory = item_inventory;
+    // pass-through optional known fields if provided
+    for (const k of ['item_name','item_price','item_department','item_image','item_weight','item_ads','item_attribute']) {
+      if (it[k] !== undefined) payload[k] = it[k];
+    }
+    cleanItems.push(payload);
+  }
+  if (!cleanItems.length) return { ok: false, reason: 'no_valid_items' };
+
+  if (isUpliFlavor(cfg)) {
+    const body = { req: 'set_items_list', items: cleanItems };
+    if (group !== undefined && group !== null && !Number.isNaN(Number(group))) body.group = Number(group);
+    const res = await mcgRequestUpli(body);
+    return res || { ok: true };
+  }
+
+  // Legacy flavor: try a conventional REST path
+  const { base, version, extraHeaderName, extraHeaderValue } = cfg;
+  const url = `${base}/api/${version}/set_items_list`;
+  let token = await getAccessToken();
+  try {
+    const resp = await axios.post(url, { items: cleanItems, ...(group !== undefined ? { group } : {}) }, {
+      headers: { 'Content-Type': 'application/json', ...buildAuthHeader(token), ...(extraHeaderName && extraHeaderValue ? { [extraHeaderName]: extraHeaderValue } : {}) },
+      timeout: 25000
+    });
+    return resp?.data || { ok: true };
+  } catch (e) {
+    const status = e?.response?.status;
+    if (status === 401) {
+      token = await fetchAccessToken();
+      const resp2 = await axios.post(url, { items: cleanItems, ...(group !== undefined ? { group } : {}) }, {
+        headers: { 'Content-Type': 'application/json', ...buildAuthHeader(token), ...(extraHeaderName && extraHeaderValue ? { [extraHeaderName]: extraHeaderValue } : {}) },
+        timeout: 25000
+      });
+      return resp2?.data || { ok: true };
+    }
+    let detail = '';
+    try {
+      const d = e?.response?.data; if (d && typeof d === 'object') detail = d.message || d.error || '';
+    } catch {}
+    const err = new Error(`MCG set_items_list failed${status ? ` (${status})` : ''}${detail ? `: ${detail}` : ''}`);
+    err.status = status;
+    throw err;
+  }
+}
+
+export default { getItemsList, getVersion, updateItemsQuantities, setItemsList };

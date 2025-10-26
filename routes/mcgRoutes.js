@@ -53,7 +53,8 @@ router.get('/config', adminAuth, async (req, res) => {
   vendorCode: m.vendorCode || '',
   retailerKey: m.retailerKey ? '***' : '',
       retailerClientId: m.retailerClientId || '',
-      taxMultiplier: typeof m.taxMultiplier === 'number' ? m.taxMultiplier : 1.18
+      taxMultiplier: typeof m.taxMultiplier === 'number' ? m.taxMultiplier : 1.18,
+      pushStockBackEnabled: !!m.pushStockBackEnabled
     });
   } catch (e) {
     res.status(500).json({ message: e?.message || 'mcg_config_read_failed' });
@@ -119,6 +120,7 @@ router.put('/config', adminAuth, async (req, res) => {
       const t = Number(inc.taxMultiplier);
       if (Number.isFinite(t) && t >= 1) s.mcg.taxMultiplier = t;
     }
+    if (typeof inc.pushStockBackEnabled !== 'undefined') s.mcg.pushStockBackEnabled = !!inc.pushStockBackEnabled;
     try { s.markModified('mcg'); } catch {}
     await s.save();
     res.json({
@@ -135,7 +137,8 @@ router.put('/config', adminAuth, async (req, res) => {
   vendorCode: s.mcg.vendorCode || '',
   retailerKey: s.mcg.retailerKey ? '***' : '',
       retailerClientId: s.mcg.retailerClientId || '',
-      taxMultiplier: typeof s.mcg.taxMultiplier === 'number' ? s.mcg.taxMultiplier : 1.18
+      taxMultiplier: typeof s.mcg.taxMultiplier === 'number' ? s.mcg.taxMultiplier : 1.18,
+      pushStockBackEnabled: !!s.mcg.pushStockBackEnabled
     });
   } catch (e) {
     res.status(500).json({ message: e?.message || 'mcg_config_update_failed' });

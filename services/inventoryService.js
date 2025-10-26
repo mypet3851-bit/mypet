@@ -7,6 +7,7 @@ import { StatusCodes } from 'http-status-codes';
 import { ApiError } from '../utils/ApiError.js';
 import { realTimeEventService } from './realTimeEventService.js';
 import Settings from '../models/Settings.js';
+import { updateItemsQuantities, setItemsList } from './mcgService.js';
 
 class InventoryService {
   // Public: force recomputation of product and per-variant stock totals
@@ -21,6 +22,10 @@ class InventoryService {
     const settings = await Settings.findOne().lean();
     const invCfg = settings?.inventory || {};
     const allowNegative = !!invCfg.allowNegativeStock;
+    const mcgCfg = settings?.mcg || {};
+    const pushToMcg = !!mcgCfg.pushStockBackEnabled;
+  const mcgBatch = [];
+  const mcgAbsMap = new Map(); // ItemCode -> absolute qty (for Uplîcali set_items_list)
     const affectedProducts = new Set();
     for (const it of items) {
       const { product, quantity } = it;
@@ -114,11 +119,57 @@ class InventoryService {
         user: userId
       });
       affectedProducts.add(String(product));
+
+      // Prepare MCG stock update when enabled
+      if (pushToMcg) {
+        try {
+          // Fetch mapping to MCG ItemCode (prefer variant barcode, else product mcgBarcode)
+          const prodDoc = await Product.findById(product).select('mcgBarcode variants').lean();
+          let itemCode = '';
+          if (it.variantId && Array.isArray(prodDoc?.variants)) {
+            const vv = prodDoc.variants.find(v => String(v?._id) === String(it.variantId));
+            if (vv && vv.barcode) itemCode = String(vv.barcode).trim();
+          }
+          if (!itemCode) itemCode = String(prodDoc?.mcgBarcode || '').trim();
+          if (itemCode) {
+            const settingsNow = settings; // already loaded above
+            const flavor = String(settingsNow?.mcg?.apiFlavor || '').toLowerCase();
+            if (flavor === 'uplicali') {
+              // Compute absolute final quantity for this SKU across inventories after the decrement
+              const filter = it.variantId
+                ? { product, variantId: it.variantId }
+                : { product, size: (it.size && String(it.size).trim()) ? it.size : 'Default', color: (it.color && String(it.color).trim()) ? it.color : 'Default' };
+              const finalRows = await Inventory.find(filter).select('quantity').lean();
+              const totalQty = finalRows.reduce((s,x)=> s + (Number(x.quantity)||0), 0);
+              // Many external systems expect non-negative inventory; clamp at 0 to be safe
+              mcgAbsMap.set(itemCode, Math.max(0, totalQty));
+            } else {
+              // Legacy flavors: send deltas
+              mcgBatch.push({ ItemCode: itemCode, Quantity: -Math.abs(Number(quantity) || 0) });
+            }
+          }
+        } catch {}
+      }
     }
 
     // Recompute product and variant stocks
     for (const pid of affectedProducts) {
       await this.#updateProductStock(pid);
+    }
+
+    // Fire-and-forget push to MCG if enabled and we have updates
+    if (pushToMcg) {
+      const flavor = String(settings?.mcg?.apiFlavor || '').toLowerCase();
+      try {
+        if (flavor === 'uplicali' && mcgAbsMap.size) {
+          const itemsForSet = Array.from(mcgAbsMap.entries()).map(([code, qty]) => ({ item_id: code, item_inventory: qty }));
+          await setItemsList(itemsForSet);
+        } else if (mcgBatch.length) {
+          await updateItemsQuantities(mcgBatch);
+        }
+      } catch (e) {
+        try { console.warn('[mcg][push-back] failed:', e?.message || e); } catch {}
+      }
     }
   }
 
