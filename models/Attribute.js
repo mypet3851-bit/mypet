@@ -2,6 +2,8 @@ import mongoose from 'mongoose';
 
 const attributeSchema = new mongoose.Schema({
   name: { type: String, required: true, trim: true, unique: true },
+  // Optional localized display names per language code, e.g., { ar: '...' , he: '...' }
+  name_i18n: { type: Map, of: String, default: undefined },
   slug: { type: String, index: true, unique: true, sparse: true },
   type: { 
     type: String, 
@@ -9,6 +11,8 @@ const attributeSchema = new mongoose.Schema({
     default: 'select' 
   },
   description: { type: String },
+  // Optional localized description
+  description_i18n: { type: Map, of: String, default: undefined },
   allowMultiple: { type: Boolean, default: true },
   required: { type: Boolean, default: false },
   order: { type: Number, default: 0 }

@@ -3,6 +3,8 @@ import mongoose from 'mongoose';
 const attributeValueSchema = new mongoose.Schema({
   attribute: { type: mongoose.Schema.Types.ObjectId, ref: 'Attribute', required: true, index: true },
   value: { type: String, required: true, trim: true },
+  // Optional localized display values
+  value_i18n: { type: Map, of: String, default: undefined },
   slug: { type: String, index: true },
   // Optional metadata for values (e.g., color hex, numeric unit)
   meta: {
