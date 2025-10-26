@@ -243,7 +243,8 @@ router.post('/sync-items', adminAuth, async (req, res) => {
       sampleNew: toInsert.slice(0, 3).map(x => ({ name: x.name, mcgItemId: x.mcgItemId, mcgBarcode: x.mcgBarcode }))
     });
   } catch (e) {
-    res.status(400).json({ message: e?.message || 'mcg_sync_items_failed' });
+    const status = e?.status || e?.response?.status || 400;
+    res.status(status).json({ message: e?.message || 'mcg_sync_items_failed' });
   }
 });
 
@@ -289,6 +290,7 @@ router.post('/sync-product/:productId', adminAuth, async (req, res) => {
     const updated = await Product.findByIdAndUpdate(productId, { $set: update }, { new: true });
     res.json(updated);
   } catch (e) {
-    res.status(400).json({ message: e?.message || 'mcg_sync_product_failed' });
+    const status = e?.status || e?.response?.status || 400;
+    res.status(status).json({ message: e?.message || 'mcg_sync_product_failed' });
   }
 });
