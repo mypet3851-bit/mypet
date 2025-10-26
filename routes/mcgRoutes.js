@@ -166,8 +166,11 @@ router.post('/sync-items', adminAuth, async (req, res) => {
       uniqueIds.length ? { mcgItemId: { $in: uniqueIds } } : null,
       uniqueBarcodes.length ? { mcgBarcode: { $in: uniqueBarcodes } } : null
     ].filter(Boolean) }).select('mcgItemId mcgBarcode');
-    const existId = new Set(existing.map(p => (p.mcgItemId || '').toString()));
-    const existBarcode = new Set(existing.map(p => (p.mcgBarcode || '').toString()));
+  const existId = new Set(existing.map(p => (p.mcgItemId || '').toString()));
+  const existBarcode = new Set(existing.map(p => (p.mcgBarcode || '').toString()));
+  // Track seen keys within this sync to avoid duplicates inside the same payload/page
+  const seenIds = new Set(Array.from(existId));
+  const seenBarcodes = new Set(Array.from(existBarcode));
 
     // Determine category
     let categoryId = null;
@@ -190,7 +193,11 @@ router.post('/sync-items', adminAuth, async (req, res) => {
       const mcgId = ((it?.ItemID ?? it?.id ?? it?.itemId ?? it?.item_id ?? '') + '').trim();
       const barcode = ((it?.Barcode ?? it?.barcode ?? it?.item_code ?? '') + '').trim();
       if (!mcgId && !barcode) { skippedByMissingKey++; continue; }
-      if ((mcgId && existId.has(mcgId)) || (barcode && existBarcode.has(barcode))) { skippedAsDuplicate++; continue; }
+      // Skip if duplicates exist either in DB (exist*) or earlier in this batch (seen*)
+      if ((mcgId && (existId.has(mcgId) || seenIds.has(mcgId))) || (barcode && (existBarcode.has(barcode) || seenBarcodes.has(barcode)))) {
+        skippedAsDuplicate++;
+        continue;
+      }
   const name = (it?.Name ?? it?.name ?? it?.item_name ?? (barcode || mcgId || 'MCG Item')) + '';
       const desc = (it?.Description ?? it?.description ?? (it?.item_department ? `Department: ${it.item_department}` : 'Imported from MCG')) + '';
       // Prefer provider's final (VAT-inclusive) price when available; otherwise apply configured tax multiplier
@@ -220,7 +227,10 @@ router.post('/sync-items', adminAuth, async (req, res) => {
         mcgItemId: mcgId || undefined,
         mcgBarcode: barcode || undefined
       };
-      toInsert.push(doc);
+  toInsert.push(doc);
+  // Mark keys as seen to prevent duplicates within the same batch
+  if (mcgId) seenIds.add(mcgId);
+  if (barcode) seenBarcodes.add(barcode);
     }
 
     if (dry) {
