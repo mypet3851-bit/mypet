@@ -2,7 +2,10 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import User from '../models/User.js';
-import { saveRefreshToken, consumeRefreshToken, revokeUserTokens } from '../utils/refreshTokenStore.js';
+// Note: legacy in-memory refreshTokenStore is not suitable for production (restarts/scale);
+// we now issue signed JWT refresh tokens stored in HttpOnly cookies.
+// revokeUserTokens kept for compatibility when ROTATE_ON_REFRESH is used elsewhere.
+import { revokeUserTokens, consumeRefreshToken } from '../utils/refreshTokenStore.js';
 import { signUserJwt } from '../utils/jwt.js';
 import { normalizePhoneE164ish } from '../utils/phone.js';
 
@@ -10,11 +13,14 @@ function issueTokens(res, userId) {
   const accessToken = signUserJwt(userId, { expiresIn: process.env.ACCESS_TOKEN_TTL || '1h' });
   const refreshTtlDays = parseInt(process.env.REFRESH_TOKEN_DAYS || '30', 10);
   const refreshTtlMs = refreshTtlDays * 24 * 60 * 60 * 1000;
-  const refreshToken = crypto.randomBytes(48).toString('hex');
-  saveRefreshToken(refreshToken, userId.toString(), refreshTtlMs);
 
-  // Allow overriding cookie SameSite via env. For cross-site (Netlify -> Render) we need SameSite=None; Secure.
-  // Default: production => none (cross-site), development => lax for convenience.
+  // Stateless refresh token as JWT
+  const refreshSecret = process.env.REFRESH_JWT_SECRET || process.env.JWT_SECRET;
+  const refreshToken = jwt.sign({ sub: userId.toString(), type: 'refresh' }, refreshSecret, {
+    expiresIn: `${refreshTtlDays}d`
+  });
+
+  // Allow overriding cookie SameSite via env. For cross-site (Netlify/other -> Render) use SameSite=None; Secure.
   const allowCrossSite = ['1','true','yes','on'].includes(String(process.env.ALLOW_CROSS_SITE_COOKIES || '').toLowerCase());
   let cookieSameSite = (process.env.COOKIE_SAMESITE || (process.env.NODE_ENV === 'production' ? 'none' : 'lax')).toLowerCase();
   if (allowCrossSite) cookieSameSite = 'none';
@@ -216,19 +222,30 @@ export const refresh = async (req, res) => {
       console.warn('[auth][refresh] 401 missing_cookie origin=', req.headers.origin);
       return res.status(401).json({ message: 'Missing refresh token' });
     }
-    const data = consumeRefreshToken(rt); // we keep multi-use for lifetime; if one-time desired, then delete here.
-    if (!data) {
-      console.warn('[auth][refresh] 401 store_miss_or_expired origin=', req.headers.origin);
-      return res.status(401).json({ message: 'Invalid or expired refresh token' });
+    // Verify stateless refresh JWT
+    let userId;
+    try {
+      const refreshSecret = process.env.REFRESH_JWT_SECRET || process.env.JWT_SECRET;
+      const payload = jwt.verify(rt, refreshSecret);
+      if (payload?.type !== 'refresh') throw new Error('invalid_type');
+      userId = payload.sub || payload.userId || payload.id;
+    } catch (e) {
+      // Backward-compat: accept legacy random tokens from in-memory store (until they naturally expire)
+      const legacy = consumeRefreshToken(rt);
+      if (!legacy) {
+        console.warn('[auth][refresh] 401 jwt_invalid_or_expired origin=', req.headers.origin, ' err=', e?.message || e);
+        return res.status(401).json({ message: 'Invalid or expired refresh token' });
+      }
+      userId = legacy.userId;
     }
-    const user = await User.findById(data.userId);
+    const user = await User.findById(userId);
     if (!user) {
-      console.warn('[auth][refresh] 401 user_not_found userId=', data.userId);
+      console.warn('[auth][refresh] 401 user_not_found userId=', userId);
       return res.status(401).json({ message: 'User no longer exists' });
     }
     // rotate: revoke user's old tokens if ROTATE_ON_REFRESH=1
     if (process.env.ROTATE_ON_REFRESH === '1') {
-      revokeUserTokens(user._id.toString());
+      try { revokeUserTokens(user._id.toString()); } catch {}
     }
     const { accessToken } = issueTokens(res, user._id);
     return res.json({ token: accessToken, user: { id: user._id, name: user.name, email: user.email, role: user.role, image: user.image || null } });

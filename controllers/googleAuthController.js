@@ -1,8 +1,7 @@
 import { OAuth2Client } from 'google-auth-library';
 import User from '../models/User.js';
 import { signUserJwt } from '../utils/jwt.js';
-import crypto from 'crypto';
-import { saveRefreshToken } from '../utils/refreshTokenStore.js';
+import jwt from 'jsonwebtoken';
 
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
@@ -61,18 +60,24 @@ export const googleAuth = async (req, res) => {
     }
 
     // Access token (short-lived) and refresh token (longer-lived) for persistence
-    const accessTtl = 60 * 60; // 1h seconds (jwt lib uses human string but we'll sign with default 7d earlier; we override)
+    const accessTtl = 60 * 60; // 1h seconds
     const accessToken = signUserJwt(user._id, { expiresIn: '1h' });
     const refreshTtlDays = parseInt(process.env.REFRESH_TOKEN_DAYS || '30', 10);
     const refreshTtlMs = refreshTtlDays * 24 * 60 * 60 * 1000;
-    const refreshToken = crypto.randomBytes(48).toString('hex');
-    saveRefreshToken(refreshToken, user._id.toString(), refreshTtlMs);
+    const refreshSecret = process.env.REFRESH_JWT_SECRET || process.env.JWT_SECRET;
+    const refreshToken = jwt.sign({ sub: user._id.toString(), type: 'refresh' }, refreshSecret, { expiresIn: `${refreshTtlDays}d` });
+
+    // Cookie options aligned with authController.issueTokens (cross-site friendly when enabled)
+    const allowCrossSite = ['1','true','yes','on'].includes(String(process.env.ALLOW_CROSS_SITE_COOKIES || '').toLowerCase());
+    let cookieSameSite = (process.env.COOKIE_SAMESITE || (process.env.NODE_ENV === 'production' ? 'none' : 'lax')).toLowerCase();
+    if (allowCrossSite) cookieSameSite = 'none';
+    const sameSiteValue = ['lax','strict','none'].includes(cookieSameSite) ? cookieSameSite : 'lax';
 
     // Send refresh token as HttpOnly cookie
     res.cookie('rt', refreshToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
+      sameSite: sameSiteValue,
       maxAge: refreshTtlMs,
       path: '/api/auth'
     });
