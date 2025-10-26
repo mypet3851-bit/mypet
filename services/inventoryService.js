@@ -258,11 +258,12 @@ class InventoryService {
   async getAllInventory() {
     try {
       const inventory = await Inventory.find()
-        .populate('product', 'name images')
+        .populate('product', 'name images isActive')
         .populate({ path: 'attributesSnapshot.attribute', select: 'name' })
         .populate({ path: 'attributesSnapshot.value', select: 'value' })
         .sort({ 'product.name': 1, size: 1, color: 1 });
-      return inventory;
+      // Hide rows for products that are soft-deactivated
+      return inventory.filter(row => row?.product && row.product.isActive !== false);
     } catch (error) {
       throw new ApiError(StatusCodes.INTERNAL_SERVER_ERROR, 'Error fetching inventory');
     }

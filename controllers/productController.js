@@ -1022,6 +1022,10 @@ export const deleteProduct = async (req, res) => {
       { new: true }
     );
     if (!product) return res.status(404).json({ message: 'Product not found' });
+    // Remove inventory rows so the product disappears from Inventory page
+    try { await Inventory.deleteMany({ product: product._id }); } catch (e) { try { console.warn('[products][delete] inventory cleanup failed', e?.message || e); } catch {} }
+    // Recompute stock to reflect deletion (will become 0 with no rows)
+    try { await inventoryService.recomputeProductStock(product._id); } catch {}
     await new InventoryHistory({
       product: product._id,
       type: 'decrease',
