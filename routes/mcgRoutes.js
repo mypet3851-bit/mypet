@@ -4,12 +4,34 @@ import Settings from '../models/Settings.js';
 import Product from '../models/Product.js';
 import Category from '../models/Category.js';
 import { getItemsList } from '../services/mcgService.js';
+import cloudinary from '../services/cloudinaryClient.js';
+import { ensureCloudinaryConfig, hasCloudinaryCredentials } from '../services/cloudinaryConfigService.js';
 import Inventory from '../models/Inventory.js';
 import InventoryHistory from '../models/InventoryHistory.js';
 import Warehouse from '../models/Warehouse.js';
 import { inventoryService } from '../services/inventoryService.js';
 
 const router = express.Router();
+
+// Helper: upload a remote image URL to Cloudinary when credentials are configured
+async function uploadRemoteImageToCloudinary(url, folder = 'products/mcg') {
+  try {
+    if (!url || !/^(https?:\/\/)/i.test(String(url))) return null;
+    const ok = await hasCloudinaryCredentials().catch(() => false);
+    if (!ok) return null;
+    await ensureCloudinaryConfig();
+    const res = await cloudinary.uploader.upload(url, {
+      folder,
+      resource_type: 'image',
+      unique_filename: true,
+      overwrite: false
+    });
+    return res?.secure_url || res?.url || null;
+  } catch (e) {
+    try { console.warn('[mcg][cloudinary][upload][skip]', e?.message || e); } catch {}
+    return null;
+  }
+}
 
 // Public health ping (no auth). Returns a simple OK to verify routing reaches this service.
 router.get('/ping', (req, res) => {
@@ -224,7 +246,12 @@ router.post('/sync-items', adminAuth, async (req, res) => {
       const stock = Number.isFinite(stockRaw) ? Math.max(0, stockRaw) : 0;
       const img = (it?.ImageURL ?? it?.imageUrl ?? (it?.item_image || '')) + '';
       const imgOk = /^(https?:\/\/|\/)/i.test(img) ? img : '';
-      const images = imgOk ? [imgOk] : ['/placeholder-image.svg'];
+      let images = ['/placeholder-image.svg'];
+      if (imgOk) {
+        // Try Cloudinary upload; fallback to direct URL
+        const cdn = await uploadRemoteImageToCloudinary(imgOk).catch(() => null);
+        images = [cdn || imgOk];
+      }
       const doc = {
         name,
         description: desc,
@@ -448,15 +475,32 @@ router.post('/sync-product/:productId', adminAuth, async (req, res) => {
   const barcodeFromMcg = ((it?.Barcode ?? it?.barcode ?? it?.item_code ?? '') + '').trim();
   const idFromMcg = ((it?.ItemID ?? it?.id ?? it?.itemId ?? it?.item_id ?? '') + '').trim();
 
-    const update = {};
+  const update = {};
     // Only overwrite name if empty or placeholder
     if ((!product.name || product.name === 'MCG Item') && nameFromMcg) update.name = nameFromMcg;
     if (descFromMcg) update.description = descFromMcg;
     if (typeof price === 'number') update.price = price;
     if (idFromMcg) update.mcgItemId = idFromMcg;
     if (barcodeFromMcg) update.mcgBarcode = barcodeFromMcg;
+    // Image sync: if MCG provides an image and product lacks a real image (or only has placeholder), update/merge
+    try {
+      const rawImg = ((it?.ImageURL ?? it?.imageUrl ?? it?.item_image ?? '') + '').trim();
+      const imgOk = /^(https?:\/\/|\/)/i.test(rawImg) ? rawImg : '';
+      if (imgOk) {
+        const current = Array.isArray(product?.images) ? product.images.filter(Boolean) : [];
+        const hasOnlyPlaceholder = !current.length || current.every(u => /placeholder-image\.svg$/i.test(String(u)));
+        // Try Cloudinary upload first
+        const cdn = await uploadRemoteImageToCloudinary(imgOk).catch(() => null);
+        const finalUrl = cdn || imgOk;
+        if (hasOnlyPlaceholder) {
+          update.images = [finalUrl];
+        } else if (!current.includes(finalUrl)) {
+          update.images = [...current, finalUrl].slice(0, 10);
+        }
+      }
+    } catch {}
 
-    const updated = await Product.findByIdAndUpdate(productId, { $set: update }, { new: true });
+  const updated = await Product.findByIdAndUpdate(productId, { $set: update }, { new: true });
 
     // Also upsert inventory using item inventory from MCG (if available)
     try {
