@@ -14,6 +14,7 @@ async function getConfig() {
   if (!s) s = await Settings.create({});
   const db = s.mcg || {};
   const apiFlavor = (db.apiFlavor || process.env.MCG_API_FLAVOR || '').trim().toLowerCase();
+  const envFixedBearer = (process.env.MCG_FIXED_BEARER || '').trim();
 
   // Base URL defaults differ by flavor
   let base = (db.baseUrl || process.env.MCG_BASE_URL || '').trim();
@@ -35,15 +36,21 @@ async function getConfig() {
   const vendorCode = (db.vendorCode || process.env.MCG_VENDOR_CODE || '').trim();
   const retailerKey = (db.retailerKey || process.env.MCG_RETAILER_KEY || '').trim();
   const retailerClientId = (db.retailerClientId || process.env.MCG_RETAILER_CLIENT_ID || '').trim();
-  const enabled = typeof db.enabled === 'boolean' ? !!db.enabled : !!(clientId && clientSecret);
-  if (!clientId || !clientSecret) {
+  const enabled = typeof db.enabled === 'boolean' ? !!db.enabled : !!(clientId && clientSecret) || !!envFixedBearer;
+  // Allow operation when a fixed bearer token is supplied via environment, even if client credentials are missing
+  if (!envFixedBearer && (!clientId || !clientSecret)) {
     throw new Error('MCG client credentials are not configured (Settings.mcg or env)');
   }
-  return { base, clientId, clientSecret, scope, version, enabled, tokenUrl, extraHeaderName, extraHeaderValue, apiFlavor, vendorCode, retailerKey, retailerClientId };
+  return { base, clientId, clientSecret, scope, version, enabled, tokenUrl, extraHeaderName, extraHeaderValue, apiFlavor, vendorCode, retailerKey, retailerClientId, envFixedBearer };
 }
 
 async function fetchAccessToken() {
-  const { clientId, clientSecret, scope, tokenUrl, base, apiFlavor } = await getConfig();
+  const { clientId, clientSecret, scope, tokenUrl, base, apiFlavor, envFixedBearer } = await getConfig();
+  if (envFixedBearer) {
+    // Use provided fixed bearer token (for diagnostics/temporary wiring)
+    tokenCache = { accessToken: envFixedBearer, expiresAt: now() + 5 * 60 * 1000 };
+    return envFixedBearer;
+  }
   const url = tokenUrl || (apiFlavor === 'uplicali' ? 'https://login.uplicali.com/mcg' : `${base}/oauth2/access_token`);
   const params = new URLSearchParams();
   params.set('grant_type', 'client_credentials');

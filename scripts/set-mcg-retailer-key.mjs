@@ -2,11 +2,7 @@
 import dbManager from '../services/dbManager.js';
 import Settings from '../models/Settings.js';
 
-const RAW = '305603169';
-
-function normalize(s) {
-  return String(s || '').trim();
-}
+const NEW_KEY = '5e91e088-8685-40c3-a095-49961947934e';
 
 (async () => {
   try {
@@ -14,13 +10,13 @@ function normalize(s) {
     let s = await Settings.findOne();
     if (!s) s = new Settings();
     s.mcg = s.mcg || {};
-    s.mcg.retailerClientId = normalize(RAW);
+    s.mcg.retailerKey = NEW_KEY.trim();
     try { s.markModified('mcg'); } catch {}
     await s.save();
-    console.log('[mcg][retailerClientId] set to', s.mcg.retailerClientId);
+    console.log('[mcg][retailerKey] set to', s.mcg.retailerKey);
     process.exit(0);
   } catch (e) {
-    console.error('Failed to set retailerClientId:', e?.message || e);
+    console.error('Failed to set retailerKey:', e?.message || e);
     process.exit(1);
   }
 })();
