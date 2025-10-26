@@ -161,13 +161,12 @@ router.post('/sync-items', adminAuth, async (req, res) => {
     let totalCount = 0;
 
     // Accumulators across pages
-    const createdAll = [];
-    let skippedByMissingKey = 0;
-    let skippedAsDuplicate = 0;
-    let incomingTotal = 0;
-    // Maintain seen sets across the whole run to avoid duplicates across pages
-    const seenIds = new Set();
-    const seenBarcodes = new Set();
+  const createdAll = [];
+  let skippedByMissingKey = 0;
+  let skippedAsDuplicate = 0;
+  let incomingTotal = 0;
+  // Maintain seen set across the whole run to avoid duplicates across pages (by mcgItemId only)
+  const seenIds = new Set();
 
     // Determine category
     let categoryId = null;
@@ -187,26 +186,21 @@ router.post('/sync-items', adminAuth, async (req, res) => {
     const processPage = async (items) => {
       // Build per-page dedupe sets and fetch existing once per page
       const ids = items.map(it => (it?.ItemID ?? it?.id ?? it?.itemId ?? it?.item_id ?? '') + '').map(v => v.trim()).filter(Boolean);
-      const barcodes = items.map(it => (it?.Barcode ?? it?.barcode ?? it?.item_code ?? '') + '').map(v => v.trim()).filter(Boolean);
       const uniqueIds = Array.from(new Set(ids));
-      const uniqueBarcodes = Array.from(new Set(barcodes));
 
       const existing = await Product.find({ $or: [
-        uniqueIds.length ? { mcgItemId: { $in: uniqueIds } } : null,
-        uniqueBarcodes.length ? { mcgBarcode: { $in: uniqueBarcodes } } : null
-      ].filter(Boolean) }).select('mcgItemId mcgBarcode');
+        uniqueIds.length ? { mcgItemId: { $in: uniqueIds } } : null
+      ].filter(Boolean) }).select('mcgItemId');
       const existId = new Set(existing.map(p => (p.mcgItemId || '').toString()));
-      const existBarcode = new Set(existing.map(p => (p.mcgBarcode || '').toString()));
 
       const toInsert = [];
       for (const it of items) {
       const mcgId = ((it?.ItemID ?? it?.id ?? it?.itemId ?? it?.item_id ?? '') + '').trim();
       const barcode = ((it?.Barcode ?? it?.barcode ?? it?.item_code ?? '') + '').trim();
         if (!mcgId && !barcode) { skippedByMissingKey++; continue; }
-        // Duplicate rule: prefer unique by mcgId; fallback to barcode when mcgId is missing. Never dedupe by name.
-        const isDupById = mcgId && (existId.has(mcgId) || seenIds.has(mcgId));
-        const isDupByBarcode = !mcgId && barcode && (existBarcode.has(barcode) || seenBarcodes.has(barcode));
-        if (isDupById || isDupByBarcode) { skippedAsDuplicate++; continue; }
+  // Duplicate rule (updated): dedupe ONLY by mcgItemId. Barcode duplicates are allowed by request.
+  const isDupById = mcgId && (existId.has(mcgId) || seenIds.has(mcgId));
+  if (isDupById) { skippedAsDuplicate++; continue; }
   const name = (it?.Name ?? it?.name ?? it?.item_name ?? (barcode || mcgId || 'MCG Item')) + '';
       const desc = (it?.Description ?? it?.description ?? (it?.item_department ? `Department: ${it.item_department}` : 'Imported from MCG')) + '';
       // Prefer provider's final (VAT-inclusive) price when available; otherwise apply configured tax multiplier
@@ -238,8 +232,7 @@ router.post('/sync-items', adminAuth, async (req, res) => {
       };
         toInsert.push(doc);
         // Mark keys as seen to prevent duplicates within the same run
-        if (mcgId) seenIds.add(mcgId);
-        if (!mcgId && barcode) seenBarcodes.add(barcode);
+  if (mcgId) seenIds.add(mcgId);
       }
 
       incomingTotal += items.length;
