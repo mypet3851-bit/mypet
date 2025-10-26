@@ -1114,7 +1114,8 @@ export const getProductLite = async (req, res) => {
       try {
         const nm = (prod?.name_i18n && (typeof (prod.name_i18n).get === 'function' ? (prod.name_i18n).get(reqLang) : (prod.name_i18n)[reqLang])) || '';
         if (nm) prod.name = nm;
-        if (prod.name_i18n) delete (prod as any).name_i18n;
+        // Strip i18n map from the lite response; avoid TS-style assertions in JS runtime
+        if (prod.name_i18n) delete prod.name_i18n;
       } catch {}
     }
     res.json(prod);
