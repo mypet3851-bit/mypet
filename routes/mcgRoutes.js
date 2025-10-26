@@ -48,7 +48,8 @@ router.get('/config', adminAuth, async (req, res) => {
       extraHeaderValue: m.extraHeaderValue ? '***' : '',
   vendorCode: m.vendorCode || '',
   retailerKey: m.retailerKey ? '***' : '',
-      retailerClientId: m.retailerClientId || ''
+      retailerClientId: m.retailerClientId || '',
+      taxMultiplier: typeof m.taxMultiplier === 'number' ? m.taxMultiplier : 1.18
     });
   } catch (e) {
     res.status(500).json({ message: e?.message || 'mcg_config_read_failed' });
@@ -110,6 +111,10 @@ router.put('/config', adminAuth, async (req, res) => {
       if (inc.retailerKey !== '***') s.mcg.retailerKey = inc.retailerKey.trim();
     }
     if (typeof inc.retailerClientId === 'string') s.mcg.retailerClientId = inc.retailerClientId.trim();
+    if (typeof inc.taxMultiplier !== 'undefined') {
+      const t = Number(inc.taxMultiplier);
+      if (Number.isFinite(t) && t >= 1) s.mcg.taxMultiplier = t;
+    }
     try { s.markModified('mcg'); } catch {}
     await s.save();
     res.json({
@@ -125,7 +130,8 @@ router.put('/config', adminAuth, async (req, res) => {
       extraHeaderValue: s.mcg.extraHeaderValue ? '***' : '',
   vendorCode: s.mcg.vendorCode || '',
   retailerKey: s.mcg.retailerKey ? '***' : '',
-      retailerClientId: s.mcg.retailerClientId || ''
+      retailerClientId: s.mcg.retailerClientId || '',
+      taxMultiplier: typeof s.mcg.taxMultiplier === 'number' ? s.mcg.taxMultiplier : 1.18
     });
   } catch (e) {
     res.status(500).json({ message: e?.message || 'mcg_config_update_failed' });
@@ -138,7 +144,7 @@ router.post('/sync-items', adminAuth, async (req, res) => {
     const s = await Settings.findOne();
     if (!s?.mcg?.enabled) return res.status(412).json({ message: 'MCG integration disabled' });
 
-    const { defaultCategoryId, page, pageSize, dryRun } = req.body || {};
+  const { defaultCategoryId, page, pageSize, dryRun } = req.body || {};
     const dry = !!dryRun || String(req.query?.dryRun || '').toLowerCase() === 'true';
 
     // Fetch one page for now; pagination loop can be added later
@@ -175,15 +181,24 @@ router.post('/sync-items', adminAuth, async (req, res) => {
     const toInsert = [];
     let skippedByMissingKey = 0;
     let skippedAsDuplicate = 0;
-    for (const it of items) {
+  const taxMultiplier = Number(s?.mcg?.taxMultiplier || 1.18);
+  for (const it of items) {
       const mcgId = ((it?.ItemID ?? it?.id ?? it?.itemId ?? it?.item_id ?? '') + '').trim();
       const barcode = ((it?.Barcode ?? it?.barcode ?? it?.item_code ?? '') + '').trim();
       if (!mcgId && !barcode) { skippedByMissingKey++; continue; }
       if ((mcgId && existId.has(mcgId)) || (barcode && existBarcode.has(barcode))) { skippedAsDuplicate++; continue; }
   const name = (it?.Name ?? it?.name ?? it?.item_name ?? (barcode || mcgId || 'MCG Item')) + '';
       const desc = (it?.Description ?? it?.description ?? (it?.item_department ? `Department: ${it.item_department}` : 'Imported from MCG')) + '';
-      const priceRaw = Number(it?.Price ?? it?.price ?? it?.item_price ?? 0);
-      const price = Number.isFinite(priceRaw) && priceRaw >= 0 ? priceRaw : 0;
+      // Prefer provider's final (VAT-inclusive) price when available; otherwise apply configured tax multiplier
+      let price = 0;
+      if (it && (it.item_final_price !== undefined && it.item_final_price !== null)) {
+        const pf = Number(it.item_final_price);
+        price = Number.isFinite(pf) && pf >= 0 ? pf : 0;
+      } else {
+        const priceRaw = Number(it?.Price ?? it?.price ?? it?.item_price ?? 0);
+        const base = Number.isFinite(priceRaw) && priceRaw >= 0 ? priceRaw : 0;
+        price = Math.round(base * taxMultiplier * 100) / 100;
+      }
       const stockRaw = Number(it?.StockQuantity ?? it?.stock ?? it?.item_inventory ?? 0);
       const stock = Number.isFinite(stockRaw) ? Math.max(0, stockRaw) : 0;
       const img = (it?.ImageURL ?? it?.imageUrl ?? (it?.item_image || '')) + '';
@@ -269,13 +284,21 @@ router.post('/sync-product/:productId', adminAuth, async (req, res) => {
     const data = await getItemsList({ PageNumber: 1, PageSize: 1, Filter });
     const items = Array.isArray(data?.Items) ? data.Items : (Array.isArray(data?.items) ? data.items : []);
     if (!items.length) return res.status(404).json({ message: 'No matching item found in MCG' });
-    const it = items[0] || {};
+  const it = items[0] || {};
 
     // Map fields
   const nameFromMcg = (it?.Name ?? it?.name ?? it?.item_name ?? '').toString();
   const descFromMcg = (it?.Description ?? it?.description ?? (it?.item_department ? `Department: ${it.item_department}` : '')).toString();
-  const priceRaw = Number(it?.Price ?? it?.price ?? it?.item_price ?? 0);
-    const price = Number.isFinite(priceRaw) && priceRaw >= 0 ? priceRaw : undefined;
+    const taxMultiplier = Number(s?.mcg?.taxMultiplier || 1.18);
+    let price;
+    if (it && (it.item_final_price !== undefined && it.item_final_price !== null)) {
+      const pf = Number(it.item_final_price);
+      price = Number.isFinite(pf) && pf >= 0 ? Math.round(pf * 100) / 100 : undefined;
+    } else {
+      const priceRaw = Number(it?.Price ?? it?.price ?? it?.item_price ?? 0);
+      const base = Number.isFinite(priceRaw) && priceRaw >= 0 ? priceRaw : undefined;
+      price = typeof base === 'number' ? Math.round(base * taxMultiplier * 100) / 100 : undefined;
+    }
   const barcodeFromMcg = ((it?.Barcode ?? it?.barcode ?? it?.item_code ?? '') + '').trim();
   const idFromMcg = ((it?.ItemID ?? it?.id ?? it?.itemId ?? it?.item_id ?? '') + '').trim();
 

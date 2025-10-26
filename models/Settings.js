@@ -377,7 +377,9 @@ settingsSchema.add({
     // Uplîcali identifiers used in query string and headers: code/key/client_id
     vendorCode: { type: String, default: '' },
     retailerKey: { type: String, default: '' },
-    retailerClientId: { type: String, default: '' }
+    retailerClientId: { type: String, default: '' },
+    // Price tax multiplier to apply for MCG-imported prices when item_final_price is not provided
+    taxMultiplier: { type: Number, default: 1.18, min: 1 }
   }
 });
 
