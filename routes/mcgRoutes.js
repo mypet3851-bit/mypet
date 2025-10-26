@@ -280,11 +280,21 @@ router.post('/sync-product/:productId', adminAuth, async (req, res) => {
       return res.status(400).json({ message: 'Provide mcgItemId or mcgBarcode on the product or in request body' });
     }
 
+    // Fetch items. For Uplîcali flavor the service ignores Filter and returns the whole list,
+    // so we must match client-side by id/barcode.
     const Filter = mcgItemId ? { ItemID: mcgItemId } : { Barcode: mcgBarcode };
     const data = await getItemsList({ PageNumber: 1, PageSize: 1, Filter });
     const items = Array.isArray(data?.Items) ? data.Items : (Array.isArray(data?.items) ? data.items : []);
-    if (!items.length) return res.status(404).json({ message: 'No matching item found in MCG' });
-  const it = items[0] || {};
+    // Try to match exact item by various possible field names
+    const norm = (v) => (v === undefined || v === null) ? '' : String(v).trim();
+    const wantedId = norm(mcgItemId);
+    const wantedBarcode = norm(mcgBarcode);
+    const it = items.find(raw => {
+      const id = norm(raw?.ItemID ?? raw?.id ?? raw?.itemId ?? raw?.item_id);
+      const bc = norm(raw?.Barcode ?? raw?.barcode ?? raw?.item_code);
+      return (wantedId && id && id === wantedId) || (wantedBarcode && bc && bc === wantedBarcode);
+    }) || {};
+    if (!Object.keys(it).length) return res.status(404).json({ message: 'No matching item found in MCG' });
 
     // Map fields
   const nameFromMcg = (it?.Name ?? it?.name ?? it?.item_name ?? '').toString();
