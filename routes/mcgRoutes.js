@@ -154,8 +154,13 @@ router.post('/sync-items', adminAuth, async (req, res) => {
   const { defaultCategoryId, page, pageSize, dryRun, syncAll } = req.body || {};
     const dry = !!dryRun || String(req.query?.dryRun || '').toLowerCase() === 'true';
 
-    // Pagination loop: when syncAll=true or page/pageSize not provided, iterate through all pages
-    const doLoop = !!syncAll || !Number.isFinite(Number(page)) || !Number.isFinite(Number(pageSize));
+    // Detect Uplîcali flavor which ignores pagination and returns the full list
+    const apiFlavor = String(s?.mcg?.apiFlavor || '').trim().toLowerCase();
+    const baseUrl = String(s?.mcg?.baseUrl || '').trim();
+    const isUpli = apiFlavor === 'uplicali' || /apis\.uplicali\.com/i.test(baseUrl) || /SuperMCG\/MCG_API/i.test(baseUrl);
+
+    // Pagination loop: disabled for Uplîcali since their API returns all items regardless of page params
+    const doLoop = !isUpli && ( !!syncAll || !Number.isFinite(Number(page)) || !Number.isFinite(Number(pageSize)) );
     const effPageSize = Number.isFinite(Number(pageSize)) && Number(pageSize) > 0 ? Number(pageSize) : 200;
     let pageNum = Number.isFinite(Number(page)) && Number(page) > 0 ? Number(page) : 1;
     let totalCount = 0;
@@ -256,12 +261,13 @@ router.post('/sync-items', adminAuth, async (req, res) => {
     // Loop pages
     let iterations = 0;
     while (true) {
-      const data = await getItemsList({ PageNumber: pageNum, PageSize: effPageSize, Filter: req.body?.Filter });
+      // For Uplîcali flavor, the service ignores PageNumber/PageSize – call once and break
+      const data = await getItemsList({ PageNumber: isUpli ? undefined : pageNum, PageSize: isUpli ? undefined : effPageSize, Filter: req.body?.Filter });
       const items = Array.isArray(data?.Items) ? data.Items : (Array.isArray(data?.items) ? data.items : []);
       if (!totalCount) totalCount = Number(data?.TotalCount || 0) || 0;
       if (!items || items.length === 0) break;
       await processPage(items);
-      if (!doLoop) break; // single page mode
+      if (!doLoop || isUpli) break; // single page mode for explicit request or Uplîcali flavor
       // stop if this was the last page
       if (items.length < effPageSize) break;
       pageNum += 1;
