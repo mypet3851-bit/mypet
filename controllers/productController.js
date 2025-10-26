@@ -180,7 +180,8 @@ export const getProducts = async (req, res) => {
       const ql = Number(req.query.limit);
       const qp = Number(req.query.page);
       if (Number.isFinite(ql) && ql > 0) {
-        limit = Math.min(Math.floor(ql), 60);
+        // Increase maximum page size for admin listing to 300 (was 60)
+        limit = Math.min(Math.floor(ql), 300);
         if (Number.isFinite(qp) && qp > 1) {
           skip = (qp - 1) * limit;
         }

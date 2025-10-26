@@ -151,29 +151,23 @@ router.post('/sync-items', adminAuth, async (req, res) => {
     const s = await Settings.findOne();
     if (!s?.mcg?.enabled) return res.status(412).json({ message: 'MCG integration disabled' });
 
-  const { defaultCategoryId, page, pageSize, dryRun } = req.body || {};
+  const { defaultCategoryId, page, pageSize, dryRun, syncAll } = req.body || {};
     const dry = !!dryRun || String(req.query?.dryRun || '').toLowerCase() === 'true';
 
-    // Fetch one page for now; pagination loop can be added later
-    const data = await getItemsList({ PageNumber: page, PageSize: pageSize, Filter: req.body?.Filter });
-    const items = Array.isArray(data?.Items) ? data.Items : (Array.isArray(data?.items) ? data.items : []);
-    const totalCount = Number(data?.TotalCount || items.length || 0);
+    // Pagination loop: when syncAll=true or page/pageSize not provided, iterate through all pages
+    const doLoop = !!syncAll || !Number.isFinite(Number(page)) || !Number.isFinite(Number(pageSize));
+    const effPageSize = Number.isFinite(Number(pageSize)) && Number(pageSize) > 0 ? Number(pageSize) : 200;
+    let pageNum = Number.isFinite(Number(page)) && Number(page) > 0 ? Number(page) : 1;
+    let totalCount = 0;
 
-    // Build dedupe sets from incoming data
-    const ids = items.map(it => (it?.ItemID ?? it?.id ?? it?.itemId ?? '') + '').map(v => v.trim()).filter(Boolean);
-    const barcodes = items.map(it => (it?.Barcode ?? it?.barcode ?? '') + '').map(v => v.trim()).filter(Boolean);
-    const uniqueIds = Array.from(new Set(ids));
-    const uniqueBarcodes = Array.from(new Set(barcodes));
-
-    const existing = await Product.find({ $or: [
-      uniqueIds.length ? { mcgItemId: { $in: uniqueIds } } : null,
-      uniqueBarcodes.length ? { mcgBarcode: { $in: uniqueBarcodes } } : null
-    ].filter(Boolean) }).select('mcgItemId mcgBarcode');
-  const existId = new Set(existing.map(p => (p.mcgItemId || '').toString()));
-  const existBarcode = new Set(existing.map(p => (p.mcgBarcode || '').toString()));
-  // Track seen keys within this sync to avoid duplicates inside the same payload/page
-  const seenIds = new Set(Array.from(existId));
-  const seenBarcodes = new Set(Array.from(existBarcode));
+    // Accumulators across pages
+    const createdAll = [];
+    let skippedByMissingKey = 0;
+    let skippedAsDuplicate = 0;
+    let incomingTotal = 0;
+    // Maintain seen sets across the whole run to avoid duplicates across pages
+    const seenIds = new Set();
+    const seenBarcodes = new Set();
 
     // Determine category
     let categoryId = null;
@@ -187,20 +181,32 @@ router.post('/sync-items', adminAuth, async (req, res) => {
     }
     if (!categoryId) return res.status(400).json({ message: 'No category available; create a category first or pass defaultCategoryId' });
 
-    // Map
-    const toInsert = [];
-    let skippedByMissingKey = 0;
-    let skippedAsDuplicate = 0;
-  const taxMultiplier = Number(s?.mcg?.taxMultiplier || 1.18);
-  for (const it of items) {
+    const taxMultiplier = Number(s?.mcg?.taxMultiplier || 1.18);
+
+    // Helper to process a single page of results
+    const processPage = async (items) => {
+      // Build per-page dedupe sets and fetch existing once per page
+      const ids = items.map(it => (it?.ItemID ?? it?.id ?? it?.itemId ?? it?.item_id ?? '') + '').map(v => v.trim()).filter(Boolean);
+      const barcodes = items.map(it => (it?.Barcode ?? it?.barcode ?? it?.item_code ?? '') + '').map(v => v.trim()).filter(Boolean);
+      const uniqueIds = Array.from(new Set(ids));
+      const uniqueBarcodes = Array.from(new Set(barcodes));
+
+      const existing = await Product.find({ $or: [
+        uniqueIds.length ? { mcgItemId: { $in: uniqueIds } } : null,
+        uniqueBarcodes.length ? { mcgBarcode: { $in: uniqueBarcodes } } : null
+      ].filter(Boolean) }).select('mcgItemId mcgBarcode');
+      const existId = new Set(existing.map(p => (p.mcgItemId || '').toString()));
+      const existBarcode = new Set(existing.map(p => (p.mcgBarcode || '').toString()));
+
+      const toInsert = [];
+      for (const it of items) {
       const mcgId = ((it?.ItemID ?? it?.id ?? it?.itemId ?? it?.item_id ?? '') + '').trim();
       const barcode = ((it?.Barcode ?? it?.barcode ?? it?.item_code ?? '') + '').trim();
-      if (!mcgId && !barcode) { skippedByMissingKey++; continue; }
-      // Skip if duplicates exist either in DB (exist*) or earlier in this batch (seen*)
-      if ((mcgId && (existId.has(mcgId) || seenIds.has(mcgId))) || (barcode && (existBarcode.has(barcode) || seenBarcodes.has(barcode)))) {
-        skippedAsDuplicate++;
-        continue;
-      }
+        if (!mcgId && !barcode) { skippedByMissingKey++; continue; }
+        // Duplicate rule: prefer unique by mcgId; fallback to barcode when mcgId is missing. Never dedupe by name.
+        const isDupById = mcgId && (existId.has(mcgId) || seenIds.has(mcgId));
+        const isDupByBarcode = !mcgId && barcode && (existBarcode.has(barcode) || seenBarcodes.has(barcode));
+        if (isDupById || isDupByBarcode) { skippedAsDuplicate++; continue; }
   const name = (it?.Name ?? it?.name ?? it?.item_name ?? (barcode || mcgId || 'MCG Item')) + '';
       const desc = (it?.Description ?? it?.description ?? (it?.item_department ? `Department: ${it.item_department}` : 'Imported from MCG')) + '';
       // Prefer provider's final (VAT-inclusive) price when available; otherwise apply configured tax multiplier
@@ -230,40 +236,66 @@ router.post('/sync-items', adminAuth, async (req, res) => {
         mcgItemId: mcgId || undefined,
         mcgBarcode: barcode || undefined
       };
-  toInsert.push(doc);
-  // Mark keys as seen to prevent duplicates within the same batch
-  if (mcgId) seenIds.add(mcgId);
-  if (barcode) seenBarcodes.add(barcode);
+        toInsert.push(doc);
+        // Mark keys as seen to prevent duplicates within the same run
+        if (mcgId) seenIds.add(mcgId);
+        if (!mcgId && barcode) seenBarcodes.add(barcode);
+      }
+
+      incomingTotal += items.length;
+      if (dry) {
+        return { toInsert, created: [], insertedCount: 0 };
+      }
+      let created = [];
+      if (toInsert.length) {
+        created = await Product.insertMany(toInsert, { ordered: false }).catch((e) => {
+          if (e?.writeErrors) {
+            const inserted = e.result?.nInserted || 0;
+            return toInsert.slice(0, inserted);
+          }
+          throw e;
+        });
+      }
+      createdAll.push(...created);
+      return { toInsert, created, insertedCount: created.length };
+    };
+
+    // Loop pages
+    let iterations = 0;
+    while (true) {
+      const data = await getItemsList({ PageNumber: pageNum, PageSize: effPageSize, Filter: req.body?.Filter });
+      const items = Array.isArray(data?.Items) ? data.Items : (Array.isArray(data?.items) ? data.items : []);
+      if (!totalCount) totalCount = Number(data?.TotalCount || 0) || 0;
+      if (!items || items.length === 0) break;
+      await processPage(items);
+      if (!doLoop) break; // single page mode
+      // stop if this was the last page
+      if (items.length < effPageSize) break;
+      pageNum += 1;
+      iterations += 1;
+      if (iterations > 10000) break; // absolute safety
     }
 
     if (dry) {
       return res.json({
         dryRun: true,
         page: Number(page)||1,
-        pageSize: Number(pageSize)||items.length,
+        pageSize: Number(pageSize)||effPageSize,
         totalCount,
-        incoming: items.length,
-        uniqueIds: uniqueIds.length,
-        uniqueBarcodes: uniqueBarcodes.length,
-        existingById: existId.size,
-        existingByBarcode: existBarcode.size,
-        toInsert: toInsert.length,
+        incoming: incomingTotal,
+        uniqueIds: undefined,
+        uniqueBarcodes: undefined,
+        existingById: undefined,
+        existingByBarcode: undefined,
+        toInsert: createdAll.length,
         skippedByMissingKey,
         skippedAsDuplicate,
-        sampleNew: toInsert.slice(0, 3).map(x => ({ name: x.name, mcgItemId: x.mcgItemId, mcgBarcode: x.mcgBarcode }))
+        sampleNew: createdAll.slice(0, 3).map(x => ({ name: x.name, mcgItemId: x.mcgItemId, mcgBarcode: x.mcgBarcode }))
       });
     }
 
-    let created = [];
-    if (toInsert.length) {
-      created = await Product.insertMany(toInsert, { ordered: false }).catch((e) => {
-        if (e?.writeErrors) {
-          const inserted = e.result?.nInserted || 0;
-          return toInsert.slice(0, inserted);
-        }
-        throw e;
-      });
-      // After creating products, create initial inventory rows per product in Main Warehouse
+    // After creating products, create initial inventory rows per product in Main Warehouse
+    if (createdAll.length) {
       try {
         // Ensure at least one warehouse exists
         let warehouses = await Warehouse.find({});
@@ -276,9 +308,9 @@ router.post('/sync-items', adminAuth, async (req, res) => {
           warehouses = main ? [main] : [];
         }
         const mainWh = warehouses.find(w => String(w?.name || '').toLowerCase() === 'main warehouse') || warehouses[0];
-        if (mainWh && created.length) {
+        if (mainWh && createdAll.length) {
           // Build inventory docs for created products
-          const invDocs = created.map(p => new Inventory({
+          const invDocs = createdAll.map(p => new Inventory({
             product: p._id,
             size: 'Default',
             color: 'Default',
@@ -297,7 +329,7 @@ router.post('/sync-items', adminAuth, async (req, res) => {
             }
           }
           // Create history entries
-          const historyDocs = created.map(p => new InventoryHistory({
+          const historyDocs = createdAll.map(p => new InventoryHistory({
             product: p._id,
             type: 'increase',
             quantity: Math.max(0, Number(p?.stock) || 0),
@@ -307,7 +339,7 @@ router.post('/sync-items', adminAuth, async (req, res) => {
           try { if (historyDocs.length) await InventoryHistory.insertMany(historyDocs, { ordered: false }); } catch {}
           // Recompute product stocks to reflect inserted inventory
           try {
-            for (const p of created) {
+            for (const p of createdAll) {
               try { await inventoryService.recomputeProductStock(p._id); } catch {}
             }
           } catch {}
@@ -318,13 +350,13 @@ router.post('/sync-items', adminAuth, async (req, res) => {
     }
     res.json({
       page: Number(page)||1,
-      pageSize: Number(pageSize)||items.length,
+      pageSize: Number(pageSize)||effPageSize,
       totalCount,
-      created: created.length,
-      skipped: items.length - created.length,
+      created: createdAll.length,
+      skipped: Math.max(0, incomingTotal - createdAll.length),
       skippedByMissingKey,
       skippedAsDuplicate,
-      sampleNew: toInsert.slice(0, 3).map(x => ({ name: x.name, mcgItemId: x.mcgItemId, mcgBarcode: x.mcgBarcode }))
+      sampleNew: createdAll.slice(0, 3).map(x => ({ name: x.name, mcgItemId: x.mcgItemId, mcgBarcode: x.mcgBarcode }))
     });
   } catch (e) {
     const status = e?.status || e?.response?.status || 400;
