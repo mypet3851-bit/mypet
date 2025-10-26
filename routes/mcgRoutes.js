@@ -4,6 +4,10 @@ import Settings from '../models/Settings.js';
 import Product from '../models/Product.js';
 import Category from '../models/Category.js';
 import { getItemsList } from '../services/mcgService.js';
+import Inventory from '../models/Inventory.js';
+import InventoryHistory from '../models/InventoryHistory.js';
+import Warehouse from '../models/Warehouse.js';
+import { inventoryService } from '../services/inventoryService.js';
 
 const router = express.Router();
 
@@ -246,6 +250,52 @@ router.post('/sync-items', adminAuth, async (req, res) => {
         }
         throw e;
       });
+      // After creating products, create initial inventory rows per product in Main Warehouse
+      try {
+        // Ensure at least one warehouse exists
+        let warehouses = await Warehouse.find({});
+        if (!warehouses || warehouses.length === 0) {
+          const main = await Warehouse.findOneAndUpdate(
+            { name: 'Main Warehouse' },
+            { $setOnInsert: { name: 'Main Warehouse' } },
+            { new: true, upsert: true }
+          );
+          warehouses = main ? [main] : [];
+        }
+        const mainWh = warehouses.find(w => String(w?.name || '').toLowerCase() === 'main warehouse') || warehouses[0];
+        if (mainWh && created.length) {
+          // Build inventory docs for created products
+          const invDocs = created.map(p => new Inventory({
+            product: p._id,
+            size: 'Default',
+            color: 'Default',
+            quantity: Math.max(0, Number(p?.stock) || 0),
+            warehouse: mainWh._id,
+            location: mainWh.name,
+            lowStockThreshold: 5
+          }));
+          // Insert inventory rows (ignore duplicates if any)
+          if (invDocs.length) {
+            try {
+              await Inventory.insertMany(invDocs, { ordered: false });
+            } catch (invErr) {
+              // tolerate partial insertion errors
+              try { console.warn('[mcg][sync-items] inventory insert partial', invErr?.message || invErr); } catch {}
+            }
+          }
+          // Create history entries
+          const historyDocs = created.map(p => new InventoryHistory({
+            product: p._id,
+            type: 'increase',
+            quantity: Math.max(0, Number(p?.stock) || 0),
+            reason: 'Initial stock (MCG import)',
+            user: req.user?._id
+          }));
+          try { if (historyDocs.length) await InventoryHistory.insertMany(historyDocs, { ordered: false }); } catch {}
+        }
+      } catch (invSetupErr) {
+        try { console.warn('[mcg][sync-items] warehouse/inventory setup skipped:', invSetupErr?.message || invSetupErr); } catch {}
+      }
     }
     res.json({
       page: Number(page)||1,
@@ -321,6 +371,32 @@ router.post('/sync-product/:productId', adminAuth, async (req, res) => {
     if (barcodeFromMcg) update.mcgBarcode = barcodeFromMcg;
 
     const updated = await Product.findByIdAndUpdate(productId, { $set: update }, { new: true });
+
+    // Also upsert inventory using item inventory from MCG (if available)
+    try {
+      const qtyRaw = Number(it?.StockQuantity ?? it?.stock ?? it?.item_inventory ?? it?.qty ?? 0);
+      const quantity = Number.isFinite(qtyRaw) ? Math.max(0, qtyRaw) : 0;
+      // Resolve warehouse (create Main Warehouse if needed)
+      let warehouses = await Warehouse.find({});
+      if (!warehouses || warehouses.length === 0) {
+        const main = await Warehouse.findOneAndUpdate(
+          { name: 'Main Warehouse' },
+          { $setOnInsert: { name: 'Main Warehouse' } },
+          { new: true, upsert: true }
+        );
+        warehouses = main ? [main] : [];
+      }
+      if (warehouses && warehouses.length) {
+        const mainWh = warehouses.find(w => String(w?.name || '').toLowerCase() === 'main warehouse') || warehouses[0];
+        const filter = { product: productId, size: 'Default', color: 'Default', warehouse: mainWh._id };
+        const updateInv = { $set: { quantity }, $setOnInsert: { product: productId, size: 'Default', color: 'Default', warehouse: mainWh._id } };
+        await Inventory.findOneAndUpdate(filter, updateInv, { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true });
+        try { await inventoryService.recomputeProductStock(productId); } catch {}
+      }
+    } catch (invErr) {
+      try { console.warn('[mcg][sync-product] inventory upsert skipped:', invErr?.message || invErr); } catch {}
+    }
+
     res.json(updated);
   } catch (e) {
     const status = e?.status || e?.response?.status || 400;
