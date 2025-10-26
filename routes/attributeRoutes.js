@@ -9,7 +9,11 @@ import {
   listValues,
   createValue,
   updateValue,
-  deleteValue
+  deleteValue,
+  getAttributeI18n,
+  setAttributeI18n,
+  getAttributeValueI18n,
+  setAttributeValueI18n
 } from '../controllers/attributeController.js';
 
 const router = express.Router();
@@ -30,5 +34,11 @@ router.post('/:attributeId/values', adminAuth, createValue);
 // Manage individual value by id
 router.put('/values/:id', adminAuth, updateValue);
 router.delete('/values/:id', adminAuth, deleteValue);
+
+// i18n admin
+router.get('/:id/i18n', adminAuth, getAttributeI18n);
+router.put('/:id/i18n', adminAuth, setAttributeI18n);
+router.get('/:attributeId/values/:valueId/i18n', adminAuth, getAttributeValueI18n);
+router.put('/:attributeId/values/:valueId/i18n', adminAuth, setAttributeValueI18n);
 
 export default router;
