@@ -1039,6 +1039,7 @@ export const deleteProduct = async (req, res) => {
 export const searchProducts = async (req, res) => {
   try {
     let { query } = req.query;
+    const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
 
     // Basic sanitization
     if (typeof query !== 'string') query = '';
@@ -1075,11 +1076,24 @@ export const searchProducts = async (req, res) => {
     }
 
     const products = await Product.find({ $or: orConditions, isActive: { $ne: false } })
-      .select('name price images category colors')
+      // Include i18n maps so we can localize name in results when lang is provided
+      .select('name name_i18n price images category colors')
       .limit(12)
-      .sort('-createdAt');
+      .sort('-createdAt')
+      .lean();
     if (process.env.NODE_ENV !== 'production') {
       console.log(`searchProducts query="${query}" matches=${products.length} categoriesMatched=${categoryIds.length}`);
+    }
+    // Localize name if requested and available (do NOT auto-translate here to keep search fast)
+    if (reqLang) {
+      try {
+        for (const p of products) {
+          const nm = (p?.name_i18n && (typeof p.name_i18n.get === 'function' ? p.name_i18n.get(reqLang) : p.name_i18n[reqLang])) || '';
+          if (nm) p.name = nm;
+          // strip i18n maps from response to keep payload minimal
+          if (p.name_i18n) delete p.name_i18n;
+        }
+      } catch {}
     }
     res.json(products);
   } catch (error) {
@@ -1093,8 +1107,16 @@ export const getProductLite = async (req, res) => {
   try {
     const id = req.params.id;
     if (!id) return res.status(400).json({ message: 'Missing id' });
-    const prod = await Product.findById(id).select('name price images');
+    const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
+    const prod = await Product.findById(id).select('name name_i18n price images').lean();
     if (!prod) return res.status(404).json({ message: 'Product not found' });
+    if (reqLang) {
+      try {
+        const nm = (prod?.name_i18n && (typeof (prod.name_i18n).get === 'function' ? (prod.name_i18n).get(reqLang) : (prod.name_i18n)[reqLang])) || '';
+        if (nm) prod.name = nm;
+        if (prod.name_i18n) delete (prod as any).name_i18n;
+      } catch {}
+    }
     res.json(prod);
   } catch (error) {
     res.status(500).json({ message: 'Failed to load product' });
@@ -1839,5 +1861,69 @@ export const batchTranslateProducts = async (req, res) => {
   } catch (e) {
     console.error('batchTranslateProducts error', e);
     res.status(500).json({ message: 'Failed to batch translate products' });
+  }
+};
+
+// Admin: Get i18n maps (name/description) for a product
+export const getProductI18n = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const doc = await Product.findById(id).select('name_i18n description_i18n').lean();
+    if (!doc) return res.status(404).json({ message: 'Product not found' });
+    const toObj = (m) => {
+      if (!m) return {};
+      if (typeof m.get === 'function') {
+        const out = {}; for (const [k, v] of m.entries()) out[k] = v; return out;
+      }
+      return m; // already a plain object after .lean()
+    };
+    return res.json({ name: toObj(doc.name_i18n), description: toObj(doc.description_i18n) });
+  } catch (e) {
+    console.error('getProductI18n error', e);
+    res.status(500).json({ message: 'Failed to load i18n maps' });
+  }
+};
+
+// Admin: Set i18n maps (merge) for a product
+// body: { name?: { [lang]: string }, description?: { [lang]: string } }
+export const setProductI18n = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, description } = req.body || {};
+    const product = await Product.findById(id);
+    if (!product) return res.status(404).json({ message: 'Product not found' });
+    let changed = false;
+    if (name && typeof name === 'object') {
+      const map = new Map(product.name_i18n || []);
+      for (const [lang, val] of Object.entries(name)) {
+        const v = (typeof val === 'string') ? val.trim() : '';
+        if (!v) {
+          // remove key to fallback to default
+          if (map.has(lang)) { map.delete(lang); changed = true; }
+        } else {
+          const prev = map.get(lang);
+          if (prev !== v) { map.set(lang, v); changed = true; }
+        }
+      }
+      product.name_i18n = map;
+    }
+    if (description && typeof description === 'object') {
+      const map = new Map(product.description_i18n || []);
+      for (const [lang, val] of Object.entries(description)) {
+        const v = (typeof val === 'string') ? val.trim() : '';
+        if (!v) {
+          if (map.has(lang)) { map.delete(lang); changed = true; }
+        } else {
+          const prev = map.get(lang);
+          if (prev !== v) { map.set(lang, v); changed = true; }
+        }
+      }
+      product.description_i18n = map;
+    }
+    if (changed) await product.save();
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('setProductI18n error', e);
+    res.status(500).json({ message: 'Failed to save i18n maps' });
   }
 };
