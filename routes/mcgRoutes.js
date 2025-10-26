@@ -195,10 +195,12 @@ router.post('/sync-items', adminAuth, async (req, res) => {
 
       const existing = await Product.find({ $or: [
         uniqueIds.length ? { mcgItemId: { $in: uniqueIds } } : null
-      ].filter(Boolean) }).select('mcgItemId');
-      const existId = new Set(existing.map(p => (p.mcgItemId || '').toString()));
+      ].filter(Boolean) }).select('mcgItemId isActive _id');
+      const existId = new Set(existing.filter(p => p.isActive !== false).map(p => (p.mcgItemId || '').toString()));
+      const existById = new Map(existing.map(p => [ (p.mcgItemId || '').toString(), p ]));
 
       const toInsert = [];
+      const reactivated = [];
       for (const it of items) {
       const mcgId = ((it?.ItemID ?? it?.id ?? it?.itemId ?? it?.item_id ?? '') + '').trim();
       const barcode = ((it?.Barcode ?? it?.barcode ?? it?.item_code ?? '') + '').trim();
@@ -235,6 +237,20 @@ router.post('/sync-items', adminAuth, async (req, res) => {
         mcgItemId: mcgId || undefined,
         mcgBarcode: barcode || undefined
       };
+      // If an inactive product exists with same mcgItemId, reactivate and update instead of inserting new
+      if (mcgId && existById.has(mcgId) && existById.get(mcgId)?.isActive === false) {
+        if (!dry) {
+          const updated = await Product.findOneAndUpdate(
+            { _id: existById.get(mcgId)._id },
+            { $set: doc },
+            { new: true }
+          );
+          if (updated) reactivated.push(updated);
+        }
+        // Mark as seen to avoid re-processing same id in this run
+        if (mcgId) seenIds.add(mcgId);
+        continue;
+      }
         toInsert.push(doc);
         // Mark keys as seen to prevent duplicates within the same run
   if (mcgId) seenIds.add(mcgId);
@@ -242,7 +258,7 @@ router.post('/sync-items', adminAuth, async (req, res) => {
 
       incomingTotal += items.length;
       if (dry) {
-        return { toInsert, created: [], insertedCount: 0 };
+        return { toInsert, created: [], insertedCount: 0, reactivated: [], reactivatedCount: 0 };
       }
       let created = [];
       if (toInsert.length) {
@@ -255,18 +271,20 @@ router.post('/sync-items', adminAuth, async (req, res) => {
         });
       }
       createdAll.push(...created);
-      return { toInsert, created, insertedCount: created.length };
+      return { toInsert, created, insertedCount: created.length, reactivated, reactivatedCount: reactivated.length };
     };
 
     // Loop pages
-    let iterations = 0;
+  let iterations = 0;
+  const reactivatedAll = [];
     while (true) {
       // For Uplîcali flavor, the service ignores PageNumber/PageSize – call once and break
       const data = await getItemsList({ PageNumber: isUpli ? undefined : pageNum, PageSize: isUpli ? undefined : effPageSize, Filter: req.body?.Filter });
       const items = Array.isArray(data?.Items) ? data.Items : (Array.isArray(data?.items) ? data.items : []);
       if (!totalCount) totalCount = Number(data?.TotalCount || 0) || 0;
       if (!items || items.length === 0) break;
-      await processPage(items);
+      const { reactivated, reactivatedCount } = await processPage(items);
+      if (reactivatedCount) reactivatedAll.push(...reactivated);
       if (!doLoop || isUpli) break; // single page mode for explicit request or Uplîcali flavor
       // stop if this was the last page
       if (items.length < effPageSize) break;
@@ -294,7 +312,7 @@ router.post('/sync-items', adminAuth, async (req, res) => {
     }
 
     // After creating products, create initial inventory rows per product in Main Warehouse
-    if (createdAll.length) {
+    if (createdAll.length || reactivatedAll.length) {
       try {
         // Ensure at least one warehouse exists
         let warehouses = await Warehouse.find({});
@@ -307,7 +325,7 @@ router.post('/sync-items', adminAuth, async (req, res) => {
           warehouses = main ? [main] : [];
         }
         const mainWh = warehouses.find(w => String(w?.name || '').toLowerCase() === 'main warehouse') || warehouses[0];
-        if (mainWh && createdAll.length) {
+        if (mainWh && (createdAll.length || reactivatedAll.length)) {
           // Build inventory docs for created products
           const invDocs = createdAll.map(p => new Inventory({
             product: p._id,
@@ -318,6 +336,14 @@ router.post('/sync-items', adminAuth, async (req, res) => {
             location: mainWh.name,
             lowStockThreshold: 5
           }));
+          // Upsert inventory for reactivated products
+          for (const p of reactivatedAll) {
+            try {
+              const filter = { product: p._id, size: 'Default', color: 'Default', warehouse: mainWh._id };
+              const updateInv = { $set: { quantity: Math.max(0, Number(p?.stock) || 0) }, $setOnInsert: { product: p._id, size: 'Default', color: 'Default', warehouse: mainWh._id } };
+              await Inventory.findOneAndUpdate(filter, updateInv, { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true });
+            } catch {}
+          }
           // Insert inventory rows (ignore duplicates if any)
           if (invDocs.length) {
             try {
@@ -328,17 +354,26 @@ router.post('/sync-items', adminAuth, async (req, res) => {
             }
           }
           // Create history entries
-          const historyDocs = createdAll.map(p => new InventoryHistory({
+          const historyDocs = [
+            ...createdAll.map(p => new InventoryHistory({
             product: p._id,
             type: 'increase',
             quantity: Math.max(0, Number(p?.stock) || 0),
             reason: 'Initial stock (MCG import)',
             user: req.user?._id
-          }));
+            })),
+            ...reactivatedAll.map(p => new InventoryHistory({
+              product: p._id,
+              type: 'increase',
+              quantity: Math.max(0, Number(p?.stock) || 0),
+              reason: 'Reactivated from MCG sync',
+              user: req.user?._id
+            }))
+          ];
           try { if (historyDocs.length) await InventoryHistory.insertMany(historyDocs, { ordered: false }); } catch {}
           // Recompute product stocks to reflect inserted inventory
           try {
-            for (const p of createdAll) {
+            for (const p of [...createdAll, ...reactivatedAll]) {
               try { await inventoryService.recomputeProductStock(p._id); } catch {}
             }
           } catch {}
@@ -352,7 +387,8 @@ router.post('/sync-items', adminAuth, async (req, res) => {
       pageSize: Number(pageSize)||effPageSize,
       totalCount,
       created: createdAll.length,
-      skipped: Math.max(0, incomingTotal - createdAll.length),
+      reactivated: reactivatedAll.length,
+      skipped: Math.max(0, incomingTotal - createdAll.length - reactivatedAll.length),
       skippedByMissingKey,
       skippedAsDuplicate,
       sampleNew: createdAll.slice(0, 3).map(x => ({ name: x.name, mcgItemId: x.mcgItemId, mcgBarcode: x.mcgBarcode }))
