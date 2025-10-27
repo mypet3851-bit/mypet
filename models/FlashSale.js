@@ -13,6 +13,10 @@ const flashSaleSchema = new mongoose.Schema({
   endDate: { type: Date, required: true },
   items: [flashSaleItemSchema],
   active: { type: Boolean, default: true },
+  // Scope of the sale: apply to explicit products list (default) or dynamically-selected categories
+  targetType: { type: String, enum: ['products', 'categories'], default: 'products' },
+  // When targetType === 'categories', the selected categories that define the product set
+  categoryIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Category' }],
   // Pricing mode persistence: 'fixed' (per-item price) or 'percent' (global discount)
   pricingMode: { type: String, enum: ['fixed', 'percent'], default: 'fixed' },
   // When pricingMode === 'percent', apply this percentage across items (UI convenience; items.flashPrice remains the source of truth for checkout)

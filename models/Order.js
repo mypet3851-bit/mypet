@@ -259,6 +259,9 @@ orderSchema.index({ user: 1 });
 // Add compound index for status and createdAt for filtered queries
 orderSchema.index({ status: 1, createdAt: -1 });
 
+// Optimize date-range analytics queries regardless of status
+orderSchema.index({ createdAt: -1 });
+
 // Add delivery-related indexes
 orderSchema.index({ deliveryCompany: 1 });
 orderSchema.index({ deliveryStatus: 1 });

@@ -3,6 +3,36 @@ import Product from '../models/Product.js';
 import { getStoreCurrency } from '../services/storeCurrencyService.js';
 import { deepseekTranslate, isDeepseekConfigured } from '../services/translate/deepseek.js';
 
+// Helper: compute flash price from percent with basic guards
+function computePercentPrice(base, pct) {
+  if (typeof base !== 'number' || !isFinite(base) || base <= 0) return 0;
+  if (typeof pct !== 'number' || !isFinite(pct) || pct <= 0 || pct >= 100) return 0;
+  const v = base * (1 - pct / 100);
+  const r = Math.round(v * 100) / 100;
+  if (r <= 0) return 0;
+  if (r >= base) return Math.max(0, Math.round((base - 0.01) * 100) / 100);
+  return r;
+}
+
+// Expand selected categories to concrete flash sale items using percentage pricing
+async function expandCategoriesToItems(categoryIds = [], discountPercent) {
+  if (!Array.isArray(categoryIds) || categoryIds.length === 0) return [];
+  // Fetch minimal fields
+  const products = await Product.find({
+    $or: [
+      { category: { $in: categoryIds } },
+      { categories: { $in: categoryIds } }
+    ]
+  }).select('_id price').lean();
+  const items = products.map((p, idx) => ({
+    product: p._id,
+    flashPrice: computePercentPrice(p.price || 0, discountPercent),
+    quantityLimit: 0,
+    order: idx
+  })).filter(it => it.flashPrice > 0);
+  return items;
+}
+
 export const listAdmin = async (req, res) => {
   try {
     const sales = await FlashSale.find()
@@ -23,7 +53,20 @@ export const listAdmin = async (req, res) => {
 export const create = async (req, res) => {
   try {
     const body = req.body || {};
-    const sale = await FlashSale.create(body);
+    let payload = { ...body };
+    // When targeting categories, materialize items at creation time (percent mode only)
+    if (payload.targetType === 'categories') {
+      if (payload.pricingMode !== 'percent') {
+        return res.status(400).json({ message: 'Category-based flash sale requires percentage pricing mode' });
+      }
+      const pct = Number(payload.discountPercent);
+      if (!(pct > 0 && pct < 100)) {
+        return res.status(400).json({ message: 'Provide a valid discountPercent (0-100) for category-based flash sale' });
+      }
+      const items = await expandCategoriesToItems(payload.categoryIds || [], pct);
+      payload.items = items;
+    }
+    const sale = await FlashSale.create(payload);
     res.status(201).json(sale);
   } catch (e) {
     res.status(400).json({ message: e.message || 'Failed to create' });
@@ -32,7 +75,20 @@ export const create = async (req, res) => {
 
 export const update = async (req, res) => {
   try {
-    const updated = await FlashSale.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
+    const body = req.body || {};
+    let payload = { ...body };
+    if (payload.targetType === 'categories') {
+      if (payload.pricingMode !== 'percent') {
+        return res.status(400).json({ message: 'Category-based flash sale requires percentage pricing mode' });
+      }
+      const pct = Number(payload.discountPercent);
+      if (!(pct > 0 && pct < 100)) {
+        return res.status(400).json({ message: 'Provide a valid discountPercent (0-100) for category-based flash sale' });
+      }
+      const items = await expandCategoriesToItems(payload.categoryIds || [], pct);
+      payload.items = items;
+    }
+    const updated = await FlashSale.findByIdAndUpdate(req.params.id, payload, { new: true, runValidators: true });
     if (!updated) return res.status(404).json({ message: 'Not found' });
     res.json(updated);
   } catch (e) {

@@ -7,10 +7,36 @@ const announcementSchema = new mongoose.Schema({
     trim: true,
     maxLength: [100, 'Announcement text cannot exceed 100 characters']
   },
+  // Optional localized announcement texts
+  textAr: {
+    type: String,
+    trim: true,
+    maxLength: [100, 'Announcement text (Arabic) cannot exceed 100 characters'],
+    default: ''
+  },
+  textHe: {
+    type: String,
+    trim: true,
+    maxLength: [100, 'Announcement text (Hebrew) cannot exceed 100 characters'],
+    default: ''
+  },
   description: {
     type: String,
     trim: true,
     maxLength: [150, 'Description cannot exceed 150 characters'],
+    default: ''
+  },
+  // Optional localized descriptions
+  descriptionAr: {
+    type: String,
+    trim: true,
+    maxLength: [150, 'Description (Arabic) cannot exceed 150 characters'],
+    default: ''
+  },
+  descriptionHe: {
+    type: String,
+    trim: true,
+    maxLength: [150, 'Description (Hebrew) cannot exceed 150 characters'],
     default: ''
   },
   url: {

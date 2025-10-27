@@ -34,4 +34,9 @@ const inventoryHistorySchema = new mongoose.Schema({
   timestamps: true
 });
 
+// Performance indexes for analytics queries filtered/sorted by time and product
+try { inventoryHistorySchema.index({ timestamp: -1 }); } catch {}
+try { inventoryHistorySchema.index({ product: 1, timestamp: -1 }); } catch {}
+try { inventoryHistorySchema.index({ user: 1, timestamp: -1 }); } catch {}
+
 export default mongoose.model('InventoryHistory', inventoryHistorySchema);
