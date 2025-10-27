@@ -4,89 +4,12 @@ import Settings from '../models/Settings.js';
 import Product from '../models/Product.js';
 import Category from '../models/Category.js';
 import { getItemsList } from '../services/mcgService.js';
-import cloudinary from '../services/cloudinaryClient.js';
-import { ensureCloudinaryConfig, hasCloudinaryCredentials } from '../services/cloudinaryConfigService.js';
 import Inventory from '../models/Inventory.js';
 import InventoryHistory from '../models/InventoryHistory.js';
 import Warehouse from '../models/Warehouse.js';
 import { inventoryService } from '../services/inventoryService.js';
 
 const router = express.Router();
-
-// Helper: upload a remote image URL to Cloudinary when credentials are configured
-async function uploadRemoteImageToCloudinary(url, folder = 'products/mcg') {
-  try {
-    if (!url || !/^(https?:\/\/)/i.test(String(url))) return null;
-    const ok = await hasCloudinaryCredentials().catch(() => false);
-    if (!ok) return null;
-    await ensureCloudinaryConfig();
-    const res = await cloudinary.uploader.upload(url, {
-      folder,
-      resource_type: 'image',
-      unique_filename: true,
-      overwrite: false
-    });
-    return res?.secure_url || res?.url || null;
-  } catch (e) {
-    try { console.warn('[mcg][cloudinary][upload][skip]', e?.message || e); } catch {}
-    return null;
-  }
-}
-
-// Helper: extract and normalize an image URL from an MCG item; try to build absolute URL when relative
-function pickRawMcgImage(item) {
-  const cands = [
-    item?.ImageURL,
-    item?.imageURL,
-    item?.ImageUrl,
-    item?.imageUrl,
-    item?.Image,
-    item?.image,
-    item?.ImgUrl,
-    item?.imgUrl,
-    item?.item_image,
-    item?.itemImage,
-    item?.item_image_url,
-    item?.ItemImageURL,
-    item?.ItemImageUrl,
-    item?.itemImageUrl,
-    item?.imageurl,
-    item?.image_url,
-    item?.image_path,
-    item?.ImagePath,
-    item?.ImageURL1,
-    item?.image1,
-    item?.image_1,
-    item?.image_link,
-    item?.primaryImage,
-    item?.PrimaryImage,
-    item?.Photo,
-    item?.Picture,
-    item?.picture,
-    item?.photo,
-    item?.imageSrc,
-    item?.image_src,
-    item?.img,
-    item?.IMG,
-    item?.Imageurl
-  ];
-  for (const v of cands) {
-    if (v !== undefined && v !== null) return String(v).trim();
-  }
-  return '';
-}
-
-function toAbsoluteUrlMaybe(urlLike, baseUrl) {
-  const s = String(urlLike || '').trim();
-  if (!s) return '';
-  if (/^https?:\/\//i.test(s)) return s;
-  if (/^\/\//.test(s)) return 'https:' + s; // scheme-relative
-  if (s.startsWith('/')) {
-    try { const u = new URL(baseUrl || ''); return `${u.protocol}//${u.hostname}${u.port ? ':' + u.port : ''}${s}`; } catch { return s; }
-  }
-  // plain relative path like images/x.jpg -> resolve against base
-  try { return new URL(s, baseUrl || '').toString(); } catch { return s; }
-}
 
 // Public health ping (no auth). Returns a simple OK to verify routing reaches this service.
 router.get('/ping', (req, res) => {
@@ -272,7 +195,7 @@ router.post('/sync-items', adminAuth, async (req, res) => {
 
       const existing = await Product.find({ $or: [
         uniqueIds.length ? { mcgItemId: { $in: uniqueIds } } : null
-      ].filter(Boolean) }).select('mcgItemId isActive _id images imagesVersion');
+      ].filter(Boolean) }).select('mcgItemId isActive _id');
       const existId = new Set(existing.filter(p => p.isActive !== false).map(p => (p.mcgItemId || '').toString()));
       const existById = new Map(existing.map(p => [ (p.mcgItemId || '').toString(), p ]));
 
@@ -284,35 +207,7 @@ router.post('/sync-items', adminAuth, async (req, res) => {
         if (!mcgId && !barcode) { skippedByMissingKey++; continue; }
   // Duplicate rule (updated): dedupe ONLY by mcgItemId. Barcode duplicates are allowed by request.
   const isDupById = mcgId && (existId.has(mcgId) || seenIds.has(mcgId));
-  if (isDupById) {
-        // If product already exists and only has placeholder images, try to patch its images
-        try {
-          const existingDoc = existById.get(mcgId);
-          if (existingDoc) {
-            const rawImgDup = pickRawMcgImage(it);
-            const absDup = toAbsoluteUrlMaybe(rawImgDup, baseUrl);
-            const imgOkDup = (/^https?:\/\//i.test(absDup) || String(absDup).startsWith('/')) ? absDup : '';
-            if (imgOkDup) {
-              const curr = Array.isArray(existingDoc.images) ? existingDoc.images.filter(Boolean) : [];
-              const onlyPlaceholder = !curr.length || curr.every(u => /placeholder-image\.svg$/i.test(String(u)));
-              const cdn = await uploadRemoteImageToCloudinary(imgOkDup).catch(() => null);
-              const finalUrl = cdn || imgOkDup;
-              if (!dry) {
-                if (onlyPlaceholder) {
-                  await Product.findByIdAndUpdate(existingDoc._id, { $set: { images: [finalUrl], imagesVersion: (Number(existingDoc.imagesVersion) || 0) + 1 } });
-                } else if (!curr.includes(finalUrl)) {
-                  const next = [...curr, finalUrl].slice(0, 10);
-                  await Product.findByIdAndUpdate(existingDoc._id, { $set: { images: next, imagesVersion: (Number(existingDoc.imagesVersion) || 0) + 1 } });
-                }
-              }
-            }
-          }
-        } catch {}
-        skippedAsDuplicate++; 
-        // Mark as seen to avoid re-processing same id in this run
-        if (mcgId) seenIds.add(mcgId);
-        continue; 
-      }
+  if (isDupById) { skippedAsDuplicate++; continue; }
   const name = (it?.Name ?? it?.name ?? it?.item_name ?? (barcode || mcgId || 'MCG Item')) + '';
       const desc = (it?.Description ?? it?.description ?? (it?.item_department ? `Department: ${it.item_department}` : 'Imported from MCG')) + '';
       // Prefer provider's final (VAT-inclusive) price when available; otherwise apply configured tax multiplier
@@ -327,15 +222,9 @@ router.post('/sync-items', adminAuth, async (req, res) => {
       }
       const stockRaw = Number(it?.StockQuantity ?? it?.stock ?? it?.item_inventory ?? 0);
       const stock = Number.isFinite(stockRaw) ? Math.max(0, stockRaw) : 0;
-      const raw = pickRawMcgImage(it);
-      const abs = toAbsoluteUrlMaybe(raw, baseUrl);
-      const imgOk = /^(https?:\/\/|\/)/i.test(abs) ? abs : '';
-      let images = ['/placeholder-image.svg'];
-      if (imgOk) {
-        // Try Cloudinary upload; fallback to direct URL
-        const cdn = await uploadRemoteImageToCloudinary(imgOk).catch(() => null);
-        images = [cdn || imgOk];
-      }
+      const img = (it?.ImageURL ?? it?.imageUrl ?? (it?.item_image || '')) + '';
+      const imgOk = /^(https?:\/\/|\/)/i.test(img) ? img : '';
+      const images = imgOk ? [imgOk] : ['/placeholder-image.svg'];
       const doc = {
         name,
         description: desc,
@@ -559,38 +448,15 @@ router.post('/sync-product/:productId', adminAuth, async (req, res) => {
   const barcodeFromMcg = ((it?.Barcode ?? it?.barcode ?? it?.item_code ?? '') + '').trim();
   const idFromMcg = ((it?.ItemID ?? it?.id ?? it?.itemId ?? it?.item_id ?? '') + '').trim();
 
-  const update = {};
+    const update = {};
     // Only overwrite name if empty or placeholder
     if ((!product.name || product.name === 'MCG Item') && nameFromMcg) update.name = nameFromMcg;
     if (descFromMcg) update.description = descFromMcg;
     if (typeof price === 'number') update.price = price;
     if (idFromMcg) update.mcgItemId = idFromMcg;
     if (barcodeFromMcg) update.mcgBarcode = barcodeFromMcg;
-    // Image sync: if MCG provides an image and product lacks a real image (or only has placeholder), update/merge
-    try {
-      const rawImg0 = pickRawMcgImage(it);
-      const rawImg = toAbsoluteUrlMaybe(rawImg0, s?.mcg?.baseUrl || '');
-      const imgOk = /^(https?:\/\/|\/)/i.test(rawImg) ? rawImg : '';
-      if (imgOk) {
-        const current = Array.isArray(product?.images) ? product.images.filter(Boolean) : [];
-        const hasOnlyPlaceholder = !current.length || current.every(u => /placeholder-image\.svg$/i.test(String(u)));
-        // Try Cloudinary upload first
-        const cdn = await uploadRemoteImageToCloudinary(imgOk).catch(() => null);
-        const finalUrl = cdn || imgOk;
-        if (hasOnlyPlaceholder) {
-          update.images = [finalUrl];
-        } else if (!current.includes(finalUrl)) {
-          update.images = [...current, finalUrl].slice(0, 10);
-        }
-      }
-    } catch {}
 
-    // Bump imagesVersion if images changed to bust client caches
-    const setDoc = { ...update };
-    if (update.images) {
-      try { setDoc.imagesVersion = (Number(product?.imagesVersion) || 0) + 1; } catch {}
-    }
-    const updated = await Product.findByIdAndUpdate(productId, { $set: setDoc }, { new: true });
+    const updated = await Product.findByIdAndUpdate(productId, { $set: update }, { new: true });
 
     // Also upsert inventory using item inventory from MCG (if available)
     try {
