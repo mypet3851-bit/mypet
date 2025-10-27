@@ -250,8 +250,8 @@ productSchema.add({
   mcgItemId: { type: String, trim: true },
   mcgBarcode: { type: String, trim: true }
 });
-// Enforce uniqueness on mcgItemId to prevent duplicate imports across runs (allow sparse for products without mapping)
-try { productSchema.index({ mcgItemId: 1 }, { unique: true, sparse: true }); } catch {}
+// Indexes for faster lookups (not unique to avoid migration issues in existing data)
+try { productSchema.index({ mcgItemId: 1 }, { sparse: true }); } catch {}
 try { productSchema.index({ mcgBarcode: 1 }, { sparse: true }); } catch {}
 
 // Virtual for average rating
