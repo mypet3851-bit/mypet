@@ -12,8 +12,10 @@ class InventoryAnalyticsService {
     try {
       const { start, end } = dateRange;
 
-      // Get current inventory data
-      const inventory = await Inventory.find().populate('product', 'name price category');
+      // Get current inventory data (lean for speed, minimal fields)
+      const inventory = await Inventory.find()
+        .populate('product', 'name price category')
+        .lean();
   const totalValue = inventory.reduce((sum, item) => {
         const price = item.product?.price || 0;
         return sum + (item.quantity * price);
@@ -46,7 +48,7 @@ class InventoryAnalyticsService {
       // Estimate reserved units from open orders (pending -> shipped)
       const openOrders = await Order.find({
         status: { $in: ['pending', 'processing', 'shipped'] }
-      }).select('items');
+      }).select('items').lean();
       const reservedUnits = openOrders.reduce((sum, o) => sum + (o.items?.reduce((s, it) => s + (Number(it.quantity) || 0), 0) || 0), 0);
       const availableUnits = Math.max(0, totalItems - reservedUnits);
 
@@ -144,13 +146,14 @@ class InventoryAnalyticsService {
       
       // Get inventory items with product details
       const inventory = await Inventory.find()
-        .populate('product', 'name category price');
+        .populate('product', 'name category price')
+        .lean();
 
       // Get order data for turnover calculation
       const orders = await Order.find({
         createdAt: { $gte: new Date(startMs), $lte: new Date(endMs) },
         status: { $in: ['delivered', 'completed'] }
-      });
+      }).select('items totalAmount createdAt status').lean();
 
       const turnoverData = [];
 
@@ -204,12 +207,13 @@ class InventoryAnalyticsService {
   async getCategoryBreakdown(dateRange) {
     try {
       // Get all categories
-      const categories = await Category.find();
+  const categories = await Category.find().lean();
       const categoryMap = new Map(categories.map(cat => [cat._id.toString(), cat.name]));
 
       // Get inventory grouped by category
       const inventory = await Inventory.find()
-        .populate('product', 'name category price');
+        .populate('product', 'name category price')
+        .lean();
 
       const categoryData = new Map();
 
@@ -253,7 +257,8 @@ class InventoryAnalyticsService {
   async getLocationAnalysis(dateRange) {
     try {
       const inventory = await Inventory.find()
-        .populate('product', 'name price');
+        .populate('product', 'name price')
+        .lean();
 
       const locationData = new Map();
 
@@ -300,7 +305,8 @@ class InventoryAnalyticsService {
   async getAlerts() {
     try {
       const inventory = await Inventory.find()
-        .populate('product', 'name');
+        .populate('product', 'name')
+        .lean();
 
       const alerts = {
         lowStock: [],
@@ -491,9 +497,9 @@ class InventoryAnalyticsService {
       const orders = await Order.find({
         createdAt: { $gte: new Date(startMs - daysDiff * DAY_MS), $lte: new Date(endMs) },
         status: { $in: ['delivered', 'completed'] }
-      });
+      }).select('items totalAmount createdAt status').lean();
 
-  const inventory = await Inventory.find().populate('product', 'name price category');
+  const inventory = await Inventory.find().populate('product', 'name price category').lean();
       
       const predictions = [];
 
@@ -569,7 +575,7 @@ class InventoryAnalyticsService {
       const orders = await Order.find({
         createdAt: { $gte: yearStart, $lte: end },
         status: { $in: ['delivered', 'completed'] }
-      });
+      }).select('items totalAmount createdAt status').lean();
 
       const monthlyData = {};
       
@@ -636,7 +642,7 @@ class InventoryAnalyticsService {
 
   async getCostAnalysis(dateRange) {
     try {
-      const inventory = await Inventory.find().populate('product', 'name price category costPrice');
+  const inventory = await Inventory.find().populate('product', 'name price category costPrice').lean();
       
       let totalInventoryValue = 0;
       let totalCostValue = 0;
@@ -712,7 +718,7 @@ class InventoryAnalyticsService {
   async getSupplierPerformance(dateRange) {
     try {
       // This would integrate with supplier data - for now using mock data
-      const inventory = await Inventory.find().populate('product', 'name category supplier');
+  const inventory = await Inventory.find().populate('product', 'name category supplier').lean();
       
       const supplierData = new Map();
       
@@ -772,11 +778,11 @@ class InventoryAnalyticsService {
     try {
       const { start, end } = dateRange;
       
-      const inventory = await Inventory.find().populate('product', 'name price category');
+      const inventory = await Inventory.find().populate('product', 'name price category').lean();
       const orders = await Order.find({
         createdAt: { $gte: start, $lte: end },
         status: { $in: ['delivered', 'completed'] }
-      });
+      }).select('items totalAmount createdAt status').lean();
 
       // Calculate ABC Analysis (80/20 rule)
       const productValues = inventory.map(item => ({
