@@ -291,7 +291,7 @@ router.post('/sync-items', adminAuth, async (req, res) => {
           if (existingDoc) {
             const rawImgDup = pickRawMcgImage(it);
             const absDup = toAbsoluteUrlMaybe(rawImgDup, baseUrl);
-            const imgOkDup = /^(https?:\/\/|\//)/i.test(absDup) ? absDup : '';
+            const imgOkDup = (/^https?:\/\//i.test(absDup) || String(absDup).startsWith('/')) ? absDup : '';
             if (imgOkDup) {
               const curr = Array.isArray(existingDoc.images) ? existingDoc.images.filter(Boolean) : [];
               const onlyPlaceholder = !curr.length || curr.every(u => /placeholder-image\.svg$/i.test(String(u)));
