@@ -46,7 +46,29 @@ function pickRawMcgImage(item) {
     item?.imgUrl,
     item?.item_image,
     item?.itemImage,
-    item?.item_image_url
+    item?.item_image_url,
+    item?.ItemImageURL,
+    item?.ItemImageUrl,
+    item?.itemImageUrl,
+    item?.imageurl,
+    item?.image_url,
+    item?.image_path,
+    item?.ImagePath,
+    item?.ImageURL1,
+    item?.image1,
+    item?.image_1,
+    item?.image_link,
+    item?.primaryImage,
+    item?.PrimaryImage,
+    item?.Photo,
+    item?.Picture,
+    item?.picture,
+    item?.photo,
+    item?.imageSrc,
+    item?.image_src,
+    item?.img,
+    item?.IMG,
+    item?.Imageurl
   ];
   for (const v of cands) {
     if (v !== undefined && v !== null) return String(v).trim();
@@ -250,7 +272,7 @@ router.post('/sync-items', adminAuth, async (req, res) => {
 
       const existing = await Product.find({ $or: [
         uniqueIds.length ? { mcgItemId: { $in: uniqueIds } } : null
-      ].filter(Boolean) }).select('mcgItemId isActive _id');
+      ].filter(Boolean) }).select('mcgItemId isActive _id images imagesVersion');
       const existId = new Set(existing.filter(p => p.isActive !== false).map(p => (p.mcgItemId || '').toString()));
       const existById = new Map(existing.map(p => [ (p.mcgItemId || '').toString(), p ]));
 
@@ -262,7 +284,35 @@ router.post('/sync-items', adminAuth, async (req, res) => {
         if (!mcgId && !barcode) { skippedByMissingKey++; continue; }
   // Duplicate rule (updated): dedupe ONLY by mcgItemId. Barcode duplicates are allowed by request.
   const isDupById = mcgId && (existId.has(mcgId) || seenIds.has(mcgId));
-  if (isDupById) { skippedAsDuplicate++; continue; }
+  if (isDupById) {
+        // If product already exists and only has placeholder images, try to patch its images
+        try {
+          const existingDoc = existById.get(mcgId);
+          if (existingDoc) {
+            const rawImgDup = pickRawMcgImage(it);
+            const absDup = toAbsoluteUrlMaybe(rawImgDup, baseUrl);
+            const imgOkDup = /^(https?:\/\/|\//)/i.test(absDup) ? absDup : '';
+            if (imgOkDup) {
+              const curr = Array.isArray(existingDoc.images) ? existingDoc.images.filter(Boolean) : [];
+              const onlyPlaceholder = !curr.length || curr.every(u => /placeholder-image\.svg$/i.test(String(u)));
+              const cdn = await uploadRemoteImageToCloudinary(imgOkDup).catch(() => null);
+              const finalUrl = cdn || imgOkDup;
+              if (!dry) {
+                if (onlyPlaceholder) {
+                  await Product.findByIdAndUpdate(existingDoc._id, { $set: { images: [finalUrl], imagesVersion: (Number(existingDoc.imagesVersion) || 0) + 1 } });
+                } else if (!curr.includes(finalUrl)) {
+                  const next = [...curr, finalUrl].slice(0, 10);
+                  await Product.findByIdAndUpdate(existingDoc._id, { $set: { images: next, imagesVersion: (Number(existingDoc.imagesVersion) || 0) + 1 } });
+                }
+              }
+            }
+          }
+        } catch {}
+        skippedAsDuplicate++; 
+        // Mark as seen to avoid re-processing same id in this run
+        if (mcgId) seenIds.add(mcgId);
+        continue; 
+      }
   const name = (it?.Name ?? it?.name ?? it?.item_name ?? (barcode || mcgId || 'MCG Item')) + '';
       const desc = (it?.Description ?? it?.description ?? (it?.item_department ? `Department: ${it.item_department}` : 'Imported from MCG')) + '';
       // Prefer provider's final (VAT-inclusive) price when available; otherwise apply configured tax multiplier
