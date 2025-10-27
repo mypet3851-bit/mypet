@@ -33,6 +33,39 @@ async function uploadRemoteImageToCloudinary(url, folder = 'products/mcg') {
   }
 }
 
+// Helper: extract and normalize an image URL from an MCG item; try to build absolute URL when relative
+function pickRawMcgImage(item) {
+  const cands = [
+    item?.ImageURL,
+    item?.imageURL,
+    item?.ImageUrl,
+    item?.imageUrl,
+    item?.Image,
+    item?.image,
+    item?.ImgUrl,
+    item?.imgUrl,
+    item?.item_image,
+    item?.itemImage,
+    item?.item_image_url
+  ];
+  for (const v of cands) {
+    if (v !== undefined && v !== null) return String(v).trim();
+  }
+  return '';
+}
+
+function toAbsoluteUrlMaybe(urlLike, baseUrl) {
+  const s = String(urlLike || '').trim();
+  if (!s) return '';
+  if (/^https?:\/\//i.test(s)) return s;
+  if (/^\/\//.test(s)) return 'https:' + s; // scheme-relative
+  if (s.startsWith('/')) {
+    try { const u = new URL(baseUrl || ''); return `${u.protocol}//${u.hostname}${u.port ? ':' + u.port : ''}${s}`; } catch { return s; }
+  }
+  // plain relative path like images/x.jpg -> resolve against base
+  try { return new URL(s, baseUrl || '').toString(); } catch { return s; }
+}
+
 // Public health ping (no auth). Returns a simple OK to verify routing reaches this service.
 router.get('/ping', (req, res) => {
   res.json({ ok: true, service: 'mcg', timestamp: new Date().toISOString() });
@@ -244,8 +277,9 @@ router.post('/sync-items', adminAuth, async (req, res) => {
       }
       const stockRaw = Number(it?.StockQuantity ?? it?.stock ?? it?.item_inventory ?? 0);
       const stock = Number.isFinite(stockRaw) ? Math.max(0, stockRaw) : 0;
-      const img = (it?.ImageURL ?? it?.imageUrl ?? (it?.item_image || '')) + '';
-      const imgOk = /^(https?:\/\/|\/)/i.test(img) ? img : '';
+      const raw = pickRawMcgImage(it);
+      const abs = toAbsoluteUrlMaybe(raw, baseUrl);
+      const imgOk = /^(https?:\/\/|\/)/i.test(abs) ? abs : '';
       let images = ['/placeholder-image.svg'];
       if (imgOk) {
         // Try Cloudinary upload; fallback to direct URL
@@ -484,7 +518,8 @@ router.post('/sync-product/:productId', adminAuth, async (req, res) => {
     if (barcodeFromMcg) update.mcgBarcode = barcodeFromMcg;
     // Image sync: if MCG provides an image and product lacks a real image (or only has placeholder), update/merge
     try {
-      const rawImg = ((it?.ImageURL ?? it?.imageUrl ?? it?.item_image ?? '') + '').trim();
+      const rawImg0 = pickRawMcgImage(it);
+      const rawImg = toAbsoluteUrlMaybe(rawImg0, s?.mcg?.baseUrl || '');
       const imgOk = /^(https?:\/\/|\/)/i.test(rawImg) ? rawImg : '';
       if (imgOk) {
         const current = Array.isArray(product?.images) ? product.images.filter(Boolean) : [];
@@ -500,7 +535,12 @@ router.post('/sync-product/:productId', adminAuth, async (req, res) => {
       }
     } catch {}
 
-  const updated = await Product.findByIdAndUpdate(productId, { $set: update }, { new: true });
+    // Bump imagesVersion if images changed to bust client caches
+    const setDoc = { ...update };
+    if (update.images) {
+      try { setDoc.imagesVersion = (Number(product?.imagesVersion) || 0) + 1; } catch {}
+    }
+    const updated = await Product.findByIdAndUpdate(productId, { $set: setDoc }, { new: true });
 
     // Also upsert inventory using item inventory from MCG (if available)
     try {
