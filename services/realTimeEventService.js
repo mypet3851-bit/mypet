@@ -85,6 +85,24 @@ class RealTimeEventService {
     console.log(`Broadcasted system notification: ${notification.message}`);
   }
 
+  // Emit inventory changed event (e.g., product deleted, deactivated, stock reset)
+  // Payload example: { productId: string, action: 'deleted' | 'hard_deleted' | 'deactivated' | 'updated' }
+  emitInventoryChanged(change) {
+    try {
+      const payload = {
+        type: 'inventory_changed',
+        data: {
+          productId: change?.productId,
+          action: change?.action || 'updated'
+        }
+      };
+      broadcastToClients(payload);
+      console.log('[realtime] Broadcasted inventory_changed:', payload.data);
+    } catch (e) {
+      try { console.warn('emitInventoryChanged failed:', e?.message || e); } catch {}
+    }
+  }
+
   // Real-time sales updates based on actual database data
   async startPeriodicUpdates() {
     // Cache the last sales data to avoid unnecessary broadcasts

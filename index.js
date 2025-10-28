@@ -72,8 +72,10 @@ import attributeRoutes from './routes/attributeRoutes.js';
 import posRoutes from './routes/posRoutes.js';
 import rivhitRoutes from './routes/rivhitRoutes.js';
 import mcgRoutes from './routes/mcgRoutes.js';
+import mobilePushRoutes from './routes/mobilePushRoutes.js';
 // Lazy import function to warm DeepSeek config from DB
 import { loadDeepseekConfigFromDb } from './services/translate/deepseek.js';
+import { startPushScheduler } from './services/pushScheduler.js';
 
 // Path Setup
 const __filename = fileURLToPath(import.meta.url);
@@ -235,6 +237,7 @@ app.use('/api/warehouses', warehouseRoutes);
 app.use('/api/shipping', shippingRoutes); // Added Shipping Routes
 app.use('/api/revenue', revenueRoutes); // Added Revenue Routes
 app.use('/api/push', pushRoutes);
+app.use('/api/mobile-push', mobilePushRoutes);
 app.use('/api/whatsapp', whatsappRoutes);
 app.use('/api/layout', layoutRoutes);
 app.use('/api/brands', brandRoutes);
@@ -535,6 +538,7 @@ const startServer = async () => {
     console.log(`Server running on port ${PORT}`);
     console.log(`WebSocket server running on ws://localhost:${PORT}/ws`);
   });
+  try { startPushScheduler(app); console.log('[startup] Push scheduler started'); } catch {}
 };
 
 // Start server
