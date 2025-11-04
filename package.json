@@ -7,8 +7,11 @@
     "node": "20.x"
   },
   "scripts": {
+    "predev": "node scripts/sync-web-locales-from-shared.mjs",
     "dev": "concurrently \"vite\" \"nodemon --quiet --watch server --ext js,mjs,cjs,json server/index.js\"",
-    "build": "tsc && vite build",
+    "prebuild": "node scripts/sync-web-locales-from-shared.mjs",
+  "build": "tsc && vite build",
+  "build:dist": "node scripts/build-dist.mjs",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview",
     "server": "node index.js",
@@ -17,10 +20,13 @@
     "gen:vapid": "node server/scripts/genVapid.js",
     "migrate:brands:dry": "node server/scripts/migrateBrandImagesToCloudinary.js",
     "migrate:brands:apply": "node server/scripts/migrateBrandImagesToCloudinary.js --apply",
-    "deploy:netlify": "netlify deploy --build --prod",
+  "deploy:netlify": "netlify deploy --build --prod",
+  "deploy:netlify:dist": "netlify deploy --prod --dir=dist",
     "deploy:netlify:draft": "netlify deploy --build",
     "deploy:netlify:ps": "powershell -ExecutionPolicy Bypass -File ./scripts/deploy-netlify.ps1",
-    "deploy:netlify:ps:draft": "powershell -ExecutionPolicy Bypass -File ./scripts/deploy-netlify.ps1 -Draft"
+    "deploy:netlify:ps:draft": "powershell -ExecutionPolicy Bypass -File ./scripts/deploy-netlify.ps1 -Draft",
+    "locales:bootstrap-shared": "node scripts/bootstrap-shared-locales.mjs",
+    "locales:sync-web": "node scripts/sync-web-locales-from-shared.mjs"
   },
   "dependencies": {
     "@hello-pangea/dnd": "^16.5.0",
