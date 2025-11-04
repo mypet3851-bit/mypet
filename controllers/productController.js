@@ -1910,38 +1910,41 @@ export const setProductI18n = async (req, res) => {
   try {
     const { id } = req.params;
     const { name, description } = req.body || {};
-    const product = await Product.findById(id);
-    if (!product) return res.status(404).json({ message: 'Product not found' });
-    let changed = false;
+    // First ensure document exists (return 404 instead of silent upsert)
+    const exists = await Product.exists({ _id: id });
+    if (!exists) return res.status(404).json({ message: 'Product not found' });
+
+    // Build atomic $set / $unset operations using dot-paths to avoid
+    // Mongoose Map quirks across versions (iterability, change tracking).
+    const $set = {};
+    const $unset = {};
+
     if (name && typeof name === 'object') {
-      const map = new Map(product.name_i18n || []);
-      for (const [lang, val] of Object.entries(name)) {
-        const v = (typeof val === 'string') ? val.trim() : '';
-        if (!v) {
-          // remove key to fallback to default
-          if (map.has(lang)) { map.delete(lang); changed = true; }
-        } else {
-          const prev = map.get(lang);
-          if (prev !== v) { map.set(lang, v); changed = true; }
-        }
+      for (const [lang, raw] of Object.entries(name)) {
+        const v = typeof raw === 'string' ? raw.trim() : '';
+        const path = `name_i18n.${lang}`;
+        if (v) ($set as any)[path] = v; else ($unset as any)[path] = '';
       }
-      product.name_i18n = map;
     }
     if (description && typeof description === 'object') {
-      const map = new Map(product.description_i18n || []);
-      for (const [lang, val] of Object.entries(description)) {
-        const v = (typeof val === 'string') ? val.trim() : '';
-        if (!v) {
-          if (map.has(lang)) { map.delete(lang); changed = true; }
-        } else {
-          const prev = map.get(lang);
-          if (prev !== v) { map.set(lang, v); changed = true; }
-        }
+      for (const [lang, raw] of Object.entries(description)) {
+        const v = typeof raw === 'string' ? raw.trim() : '';
+        const path = `description_i18n.${lang}`;
+        if (v) ($set as any)[path] = v; else ($unset as any)[path] = '';
       }
-      product.description_i18n = map;
     }
-    if (changed) await product.save();
-    res.json({ ok: true });
+
+    // No-op guard
+    if (!Object.keys($set).length && !Object.keys($unset).length) {
+      return res.json({ ok: true, changed: false });
+    }
+
+    const update: any = {};
+    if (Object.keys($set).length) update.$set = $set;
+    if (Object.keys($unset).length) update.$unset = $unset;
+
+    await Product.updateOne({ _id: id }, update, { runValidators: false }).exec();
+    return res.json({ ok: true, changed: true });
   } catch (e) {
     console.error('setProductI18n error', e);
     res.status(500).json({ message: 'Failed to save i18n maps' });

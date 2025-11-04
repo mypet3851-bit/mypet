@@ -11,6 +11,20 @@ import { inventoryService } from '../services/inventoryService.js';
 
 const router = express.Router();
 
+// Heuristic language detector for incoming MCG text
+function detectLangFromText(text) {
+  try {
+    const s = (text || '') + '';
+    const ar = (s.match(/[\u0600-\u06FF]/g) || []).length; // Arabic block
+    const he = (s.match(/[\u0590-\u05FF]/g) || []).length; // Hebrew block
+    if (ar > he && ar > 0) return 'ar';
+    if (he > ar && he > 0) return 'he';
+    return 'en';
+  } catch {
+    return 'en';
+  }
+}
+
 // Public health ping (no auth). Returns a simple OK to verify routing reaches this service.
 router.get('/ping', (req, res) => {
   res.json({ ok: true, service: 'mcg', timestamp: new Date().toISOString() });
@@ -225,6 +239,10 @@ router.post('/sync-items', adminAuth, async (req, res) => {
       const img = (it?.ImageURL ?? it?.imageUrl ?? (it?.item_image || '')) + '';
       const imgOk = /^(https?:\/\/|\/)/i.test(img) ? img : '';
       const images = imgOk ? [imgOk] : ['/placeholder-image.svg'];
+      // Detect language and seed i18n maps so Quick Translate tabs show the right values
+      const detectedLang = detectLangFromText(`${name} ${desc}`);
+      const name_i18n = (detectedLang === 'en') ? undefined : new Map([[detectedLang, name]]);
+      const description_i18n = (detectedLang === 'en') ? undefined : new Map([[detectedLang, desc]]);
       const doc = {
         name,
         description: desc,
@@ -235,7 +253,9 @@ router.post('/sync-items', adminAuth, async (req, res) => {
         relatedProducts: [],
         isActive: true,
         mcgItemId: mcgId || undefined,
-        mcgBarcode: barcode || undefined
+        mcgBarcode: barcode || undefined,
+        ...(name_i18n ? { name_i18n } : {}),
+        ...(description_i18n ? { description_i18n } : {})
       };
       // If an inactive product exists with same mcgItemId, reactivate and update instead of inserting new
       if (mcgId && existById.has(mcgId) && existById.get(mcgId)?.isActive === false) {
@@ -448,15 +468,33 @@ router.post('/sync-product/:productId', adminAuth, async (req, res) => {
   const barcodeFromMcg = ((it?.Barcode ?? it?.barcode ?? it?.item_code ?? '') + '').trim();
   const idFromMcg = ((it?.ItemID ?? it?.id ?? it?.itemId ?? it?.item_id ?? '') + '').trim();
 
-    const update = {};
-    // Only overwrite name if empty or placeholder
-    if ((!product.name || product.name === 'MCG Item') && nameFromMcg) update.name = nameFromMcg;
-    if (descFromMcg) update.description = descFromMcg;
-    if (typeof price === 'number') update.price = price;
-    if (idFromMcg) update.mcgItemId = idFromMcg;
-    if (barcodeFromMcg) update.mcgBarcode = barcodeFromMcg;
+    // Decide target language
+    const reqLangRaw = (req.query?.lang || req.body?.lang || '').toString().toLowerCase();
+    const detected = detectLangFromText(`${nameFromMcg} ${descFromMcg}`);
+    const targetLang = ['ar','he','en'].includes(reqLangRaw) ? reqLangRaw : detected;
 
-    const updated = await Product.findByIdAndUpdate(productId, { $set: update }, { new: true });
+    // Build atomic update combining base fields and i18n maps
+    const $set = {};
+    const $unset = {};
+    // Default fields: set only when English or when empty/placeholder to avoid overwriting non-English defaults
+    if (targetLang === 'en') {
+      if (nameFromMcg) ($set).name = nameFromMcg;
+      if (descFromMcg) ($set).description = descFromMcg;
+    } else {
+      if ((!product.name || product.name === 'MCG Item') && nameFromMcg) ($set).name = nameFromMcg;
+      // Only set default description if it's empty; otherwise keep existing language-neutral value
+      if ((!product.description || !product.description.trim()) && descFromMcg) ($set).description = descFromMcg;
+      if (nameFromMcg) ($set)[`name_i18n.${targetLang}`] = nameFromMcg;
+      if (descFromMcg) ($set)[`description_i18n.${targetLang}`] = descFromMcg;
+    }
+    if (typeof price === 'number') ($set).price = price;
+    if (idFromMcg) ($set).mcgItemId = idFromMcg;
+    if (barcodeFromMcg) ($set).mcgBarcode = barcodeFromMcg;
+
+    const ops = { };
+    if (Object.keys($set).length) ops.$set = $set;
+    if (Object.keys($unset).length) ops.$unset = $unset;
+    const updated = await Product.findByIdAndUpdate(productId, ops, { new: true });
 
     // Also upsert inventory using item inventory from MCG (if available)
     try {
