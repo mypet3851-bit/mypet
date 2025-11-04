@@ -31,6 +31,7 @@ import { handleProductImages } from '../utils/imageHandler.js';
 import cloudinary from '../services/cloudinaryClient.js';
 import { cacheGet, cacheSet } from '../utils/cache/simpleCache.js';
 import { inventoryService } from '../services/inventoryService.js';
+import { realTimeEventService } from '../services/realTimeEventService.js';
 import { deepseekTranslate, deepseekTranslateBatch, isDeepseekConfigured } from '../services/translate/deepseek.js';
 import { getItemQuantity as rivhitGetQty, testConnectivity as rivhitTest } from '../services/rivhitService.js';
 // Currency conversion disabled for product storage/display; prices are stored and served as-is in store currency
@@ -1014,6 +1015,8 @@ export const deleteProduct = async (req, res) => {
         reason: 'Product hard deleted',
         user: req.user._id
       }).save();
+      // Notify clients to refresh inventory views/caches
+      try { realTimeEventService.emitInventoryChanged({ productId: String(product._id), action: 'hard_deleted' }); } catch {}
       return res.json({ message: 'Product hard deleted' });
     }
     const product = await Product.findByIdAndUpdate(
@@ -1033,6 +1036,8 @@ export const deleteProduct = async (req, res) => {
       reason: 'Product soft deactivated',
       user: req.user._id
     }).save();
+    // Notify clients to refresh inventory views/caches
+    try { realTimeEventService.emitInventoryChanged({ productId: String(product._id), action: 'deactivated' }); } catch {}
     res.json({ message: 'Product deactivated (soft delete)', product });
   } catch (error) {
     console.error('Error deleting product:', error);
