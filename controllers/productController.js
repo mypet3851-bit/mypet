@@ -1923,14 +1923,14 @@ export const setProductI18n = async (req, res) => {
       for (const [lang, raw] of Object.entries(name)) {
         const v = typeof raw === 'string' ? raw.trim() : '';
         const path = `name_i18n.${lang}`;
-        if (v) ($set as any)[path] = v; else ($unset as any)[path] = '';
+        if (v) { $set[path] = v; } else { $unset[path] = ''; }
       }
     }
     if (description && typeof description === 'object') {
       for (const [lang, raw] of Object.entries(description)) {
         const v = typeof raw === 'string' ? raw.trim() : '';
         const path = `description_i18n.${lang}`;
-        if (v) ($set as any)[path] = v; else ($unset as any)[path] = '';
+        if (v) { $set[path] = v; } else { $unset[path] = ''; }
       }
     }
 
@@ -1939,7 +1939,7 @@ export const setProductI18n = async (req, res) => {
       return res.json({ ok: true, changed: false });
     }
 
-    const update: any = {};
+  const update = {};
     if (Object.keys($set).length) update.$set = $set;
     if (Object.keys($unset).length) update.$unset = $unset;
 
