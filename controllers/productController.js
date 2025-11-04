@@ -418,6 +418,15 @@ export const getProduct = async (req, res) => {
       return res.status(404).json({ message: 'Product not found' });
     }
 
+    // Hide inactive products from the public store by default.
+    // Admin panels can opt-in to read inactive by passing ?includeInactive=true
+    try {
+      const includeInactive = String(req.query.includeInactive || 'false').toLowerCase() === 'true';
+      if (product.isActive === false && !includeInactive) {
+        return res.status(404).json({ message: 'Product not found' });
+      }
+    } catch {}
+
     // Get inventory data
     const inventory = await Inventory.find({ product: product._id });
     const productObj = product.toObject();
