@@ -135,6 +135,11 @@ router.put('/config', adminAuth, async (req, res) => {
       if (Number.isFinite(t) && t >= 1) s.mcg.taxMultiplier = t;
     }
     if (typeof inc.pushStockBackEnabled !== 'undefined') s.mcg.pushStockBackEnabled = !!inc.pushStockBackEnabled;
+    if (typeof inc.autoPullEnabled !== 'undefined') s.mcg.autoPullEnabled = !!inc.autoPullEnabled;
+    if (typeof inc.pullEveryMinutes !== 'undefined') {
+      const m = Number(inc.pullEveryMinutes);
+      if (Number.isFinite(m) && m >= 1 && m <= 720) s.mcg.pullEveryMinutes = Math.floor(m);
+    }
     try { s.markModified('mcg'); } catch {}
     await s.save();
     res.json({
@@ -152,7 +157,9 @@ router.put('/config', adminAuth, async (req, res) => {
   retailerKey: s.mcg.retailerKey ? '***' : '',
       retailerClientId: s.mcg.retailerClientId || '',
       taxMultiplier: typeof s.mcg.taxMultiplier === 'number' ? s.mcg.taxMultiplier : 1.18,
-      pushStockBackEnabled: !!s.mcg.pushStockBackEnabled
+      pushStockBackEnabled: !!s.mcg.pushStockBackEnabled,
+      autoPullEnabled: !!s.mcg.autoPullEnabled,
+      pullEveryMinutes: typeof s.mcg.pullEveryMinutes === 'number' ? s.mcg.pullEveryMinutes : 15
     });
   } catch (e) {
     res.status(500).json({ message: e?.message || 'mcg_config_update_failed' });
