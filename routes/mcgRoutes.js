@@ -159,6 +159,138 @@ router.put('/config', adminAuth, async (req, res) => {
   }
 });
 
+// Sync inventory quantities from MCG into local Inventory
+// POST /api/mcg/sync-inventory
+// Body: { dryRun?: boolean, page?: number, pageSize?: number, syncAll?: boolean }
+router.post('/sync-inventory', adminAuth, async (req, res) => {
+  try {
+    const s = await Settings.findOne();
+    if (!s?.mcg?.enabled) return res.status(412).json({ message: 'MCG integration disabled' });
+
+    const { page, pageSize, dryRun, syncAll } = req.body || {};
+    const isDry = !!dryRun || String(req.query?.dryRun || '').toLowerCase() === 'true';
+
+    // Detect Uplîcali flavor which ignores pagination and returns the full list
+    const apiFlavor = String(s?.mcg?.apiFlavor || '').trim().toLowerCase();
+    const baseUrl = String(s?.mcg?.baseUrl || '').trim();
+    const isUpli = apiFlavor === 'uplicali' || /apis\.uplicali\.com/i.test(baseUrl) || /SuperMCG\/MCG_API/i.test(baseUrl);
+
+    // For legacy, if syncAll requested or page/pageSize missing, loop pages until empty
+    const doLoop = !isUpli && ( !!syncAll || !Number.isFinite(Number(page)) || !Number.isFinite(Number(pageSize)) );
+    const effPageSize = Number.isFinite(Number(pageSize)) && Number(pageSize) > 0 ? Number(pageSize) : 200;
+    let pageNum = Number.isFinite(Number(page)) && Number(page) > 0 ? Number(page) : 1;
+
+    let processed = 0;
+    let updated = 0;
+    let created = 0;
+    let skippedNoMatch = 0;
+    let errors = 0;
+
+    const ensureMainWarehouse = async () => {
+      let wh = await Warehouse.findOne({ name: 'Main Warehouse' });
+      if (!wh && !isDry) {
+        wh = await Warehouse.findOneAndUpdate(
+          { name: 'Main Warehouse' },
+          { $setOnInsert: { name: 'Main Warehouse' } },
+          { new: true, upsert: true }
+        );
+      }
+      return wh;
+    };
+
+    const upsertInventoryFor = async ({ productId, variantId, qty, size, color }) => {
+      const wh = await ensureMainWarehouse();
+      const filter = variantId
+        ? { product: productId, variantId, warehouse: wh?._id }
+        : { product: productId, size: size || 'Default', color: color || 'Default', warehouse: wh?._id };
+      const update = { $set: { quantity: Math.max(0, Number(qty) || 0) } };
+      const opts = { new: true, upsert: true, setDefaultsOnInsert: true };
+      if (!isDry) {
+        const inv = await Inventory.findOneAndUpdate(filter, update, opts);
+        await inventoryService.recomputeProductStock(productId);
+        await new InventoryHistory({
+          product: productId,
+          type: 'update',
+          quantity: Math.max(0, Number(qty) || 0),
+          reason: 'MCG sync (pull)'
+        }).save();
+        return inv;
+      }
+      return null;
+    };
+
+    const processItems = async (items) => {
+      for (const it of items) {
+        try {
+          processed++;
+          const mcgId = ((it?.ItemID ?? it?.id ?? it?.itemId ?? it?.item_id ?? '') + '').trim();
+          const barcode = ((it?.Barcode ?? it?.barcode ?? it?.item_code ?? '') + '').trim();
+          const qty = Number(it?.StockQuantity ?? it?.stock ?? it?.item_inventory ?? 0);
+          const qtySafe = Number.isFinite(qty) ? qty : 0;
+
+          // Try variant match by barcode first
+          let prod = null; let variant = null;
+          if (barcode) {
+            prod = await Product.findOne({ 'variants.barcode': barcode }).select('_id variants');
+            if (prod && Array.isArray(prod.variants)) {
+              variant = prod.variants.find(v => String(v?.barcode || '').trim() === barcode);
+            }
+          }
+          // Fallback: product barcode
+          if (!prod && barcode) {
+            prod = await Product.findOne({ mcgBarcode: barcode }).select('_id');
+          }
+          // Fallback: product by mcgItemId (non-variant)
+          if (!prod && mcgId) {
+            prod = await Product.findOne({ mcgItemId: mcgId }).select('_id');
+          }
+
+          if (!prod) { skippedNoMatch++; continue; }
+
+          if (variant && variant._id) {
+            await upsertInventoryFor({ productId: prod._id, variantId: variant._id, qty: qtySafe });
+            updated++;
+          } else {
+            const inv = await upsertInventoryFor({ productId: prod._id, qty: qtySafe, size: 'Default', color: 'Default' });
+            if (inv && inv.wasNew) created++; else updated++;
+          }
+        } catch (err) {
+          errors++;
+        }
+      }
+    };
+
+    if (isUpli || !doLoop) {
+      const data = await getItemsList({ PageNumber: pageNum, PageSize: effPageSize });
+      const items = Array.isArray(data?.items || data?.data || data?.Items) ? (data?.items || data?.data || data?.Items) : (Array.isArray(data) ? data : []);
+      await processItems(items);
+    } else {
+      // Legacy: paginate until empty
+      while (true) {
+        const data = await getItemsList({ PageNumber: pageNum, PageSize: effPageSize });
+        const items = Array.isArray(data?.Items) ? data.Items : (Array.isArray(data) ? data : []);
+        if (!items.length) break;
+        await processItems(items);
+        if (!syncAll) break; // process only one page unless syncAll=true
+        pageNum++;
+      }
+    }
+
+    res.json({
+      ok: true,
+      dryRun: isDry,
+      processed,
+      updated,
+      created,
+      skippedNoMatch,
+      errors
+    });
+  } catch (e) {
+    const status = e?.status || 500;
+    res.status(status).json({ message: e?.message || 'mcg_sync_inventory_failed' });
+  }
+});
+
 // Import items from MCG into Products (create-only, skip duplicates)
 router.post('/sync-items', adminAuth, async (req, res) => {
   try {
