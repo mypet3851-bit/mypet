@@ -378,6 +378,8 @@ settingsSchema.add({
     vendorCode: { type: String, default: '' },
     retailerKey: { type: String, default: '' },
     retailerClientId: { type: String, default: '' },
+    // Optional group id for Uplîcali API (some retailers segment inventory by group)
+    group: { type: Number },
     // Price tax multiplier to apply for MCG-imported prices when item_final_price is not provided
     taxMultiplier: { type: Number, default: 1.18, min: 1 },
     // When true, push stock decrements back to MCG as delta updates

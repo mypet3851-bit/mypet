@@ -64,6 +64,7 @@ router.get('/config', adminAuth, async (req, res) => {
       tokenUrl: m.tokenUrl || '',
       extraHeaderName: m.extraHeaderName || '',
       extraHeaderValue: m.extraHeaderValue ? '***' : '',
+      group: typeof m.group === 'number' ? m.group : undefined,
   vendorCode: m.vendorCode || '',
   retailerKey: m.retailerKey ? '***' : '',
       retailerClientId: m.retailerClientId || '',
@@ -130,6 +131,10 @@ router.put('/config', adminAuth, async (req, res) => {
       if (inc.retailerKey !== '***') s.mcg.retailerKey = inc.retailerKey.trim();
     }
     if (typeof inc.retailerClientId === 'string') s.mcg.retailerClientId = inc.retailerClientId.trim();
+    if (typeof inc.group !== 'undefined') {
+      const g = Number(inc.group);
+      if (Number.isFinite(g)) s.mcg.group = g; else s.mcg.group = undefined;
+    }
     if (typeof inc.taxMultiplier !== 'undefined') {
       const t = Number(inc.taxMultiplier);
       if (Number.isFinite(t) && t >= 1) s.mcg.taxMultiplier = t;
@@ -153,6 +158,7 @@ router.put('/config', adminAuth, async (req, res) => {
       tokenUrl: s.mcg.tokenUrl || '',
       extraHeaderName: s.mcg.extraHeaderName || '',
       extraHeaderValue: s.mcg.extraHeaderValue ? '***' : '',
+      group: typeof s.mcg.group === 'number' ? s.mcg.group : undefined,
   vendorCode: s.mcg.vendorCode || '',
   retailerKey: s.mcg.retailerKey ? '***' : '',
       retailerClientId: s.mcg.retailerClientId || '',
