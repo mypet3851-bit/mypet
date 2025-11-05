@@ -7,7 +7,7 @@ import { StatusCodes } from 'http-status-codes';
 import { ApiError } from '../utils/ApiError.js';
 import { realTimeEventService } from './realTimeEventService.js';
 import Settings from '../models/Settings.js';
-import { updateItemsQuantities, setItemsList } from './mcgService.js';
+import { updateItemsQuantities, setItemsList, getItemsList } from './mcgService.js';
 
 class InventoryService {
   // Public: force recomputation of product and per-variant stock totals
@@ -186,6 +186,7 @@ class InventoryService {
     // Fire-and-forget push to MCG if enabled and we have updates
     if (pushToMcg) {
       const flavor = String(settings?.mcg?.apiFlavor || '').toLowerCase();
+      const group = Number.isFinite(Number(settings?.mcg?.group)) ? Number(settings?.mcg?.group) : undefined;
       try {
         if (flavor === 'uplicali' && mcgAbsMap.size) {
           const itemsForSet = Array.from(mcgAbsMap.entries()).map(([key, qty]) => {
@@ -194,9 +195,28 @@ class InventoryService {
             return { item_id: val, item_inventory: qty };
           });
           const sample = itemsForSet[0]?.item_code || itemsForSet[0]?.item_id || 'n/a';
-          try { console.log('[mcg][push-back] flavor=uplicali items=%d sample=%s', itemsForSet.length, sample); } catch {}
-          await setItemsList(itemsForSet);
+          try { console.log('[mcg][push-back] flavor=uplicali items=%d sample=%s group=%s', itemsForSet.length, sample, group ?? 'default'); } catch {}
+          await setItemsList(itemsForSet, group);
           try { console.log('[mcg][push-back] set_items_list ok (count=%d)', itemsForSet.length); } catch {}
+          // Optional post-verify (for small batches) controlled by env flag
+          try {
+            const verifyFlag = String(process.env.MCG_VERIFY_AFTER_SET || '').toLowerCase() === 'true';
+            if (verifyFlag && itemsForSet.length <= 5) {
+              const data = await getItemsList({ group });
+              const arr = Array.isArray(data?.items) ? data.items : (Array.isArray(data?.Items) ? data.Items : (Array.isArray(data) ? data : []));
+              const norm = (v) => (v === undefined || v === null) ? '' : String(v).trim();
+              for (const it of itemsForSet) {
+                const code = norm(it.item_code);
+                const id = norm(it.item_id);
+                const expected = Number(it.item_inventory);
+                const found = arr.find(x => (code && norm(x?.item_code ?? x?.Barcode ?? x?.barcode) === code) || (id && norm(x?.item_id ?? x?.ItemID ?? x?.id) === id));
+                const observed = Number(found?.item_inventory ?? found?.StockQuantity ?? found?.stock);
+                console.log('[mcg][verify] %s=%s expected=%s observed=%s', code ? 'code' : 'id', code || id || 'n/a', expected, Number.isFinite(observed) ? observed : 'n/a');
+              }
+            }
+          } catch (verr) {
+            try { console.warn('[mcg][verify] skipped:', verr?.message || verr); } catch {}
+          }
         } else if (mcgBatch.length) {
           try { console.log('[mcg][push-back] flavor=legacy deltas=%d sample=%s', mcgBatch.length, mcgBatch[0]?.ItemCode || 'n/a'); } catch {}
           await updateItemsQuantities(mcgBatch);
