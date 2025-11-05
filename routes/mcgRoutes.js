@@ -3,7 +3,7 @@ import { adminAuth } from '../middleware/auth.js';
 import Settings from '../models/Settings.js';
 import Product from '../models/Product.js';
 import Category from '../models/Category.js';
-import { getItemsList } from '../services/mcgService.js';
+import { getItemsList, setItemsList } from '../services/mcgService.js';
 import Inventory from '../models/Inventory.js';
 import InventoryHistory from '../models/InventoryHistory.js';
 import Warehouse from '../models/Warehouse.js';
@@ -169,6 +169,31 @@ router.put('/config', adminAuth, async (req, res) => {
     });
   } catch (e) {
     res.status(500).json({ message: e?.message || 'mcg_config_update_failed' });
+  }
+});
+
+// Lookup a single item in MCG by barcode (item_code) or item_id
+// POST /api/mcg/item-lookup { code?: string, id?: string, group?: number }
+router.post('/item-lookup', adminAuth, async (req, res) => {
+  try {
+    const { code, id, group } = req.body || {};
+    const norm = (v) => (v === undefined || v === null) ? '' : String(v).trim();
+    const c = norm(code);
+    const i = norm(id);
+    if (!c && !i) return res.status(400).json({ message: 'Provide code or id' });
+    const s = await Settings.findOne();
+    if (!s?.mcg?.enabled) return res.status(412).json({ message: 'MCG integration disabled' });
+    const grp = (group !== undefined && group !== null && !Number.isNaN(Number(group))) ? Number(group) : (Number.isFinite(Number(s?.mcg?.group)) ? Number(s.mcg.group) : undefined);
+    const data = await getItemsList({ group: grp });
+    const arr = Array.isArray(data?.items) ? data.items : (Array.isArray(data?.Items) ? data.Items : (Array.isArray(data) ? data : []));
+    const getCode = (x) => norm(x?.item_code ?? x?.Barcode ?? x?.barcode);
+    const getId = (x) => norm(x?.item_id ?? x?.ItemID ?? x?.id ?? x?.itemId);
+    const found = arr.find(x => (c && getCode(x) === c) || (i && getId(x) === i));
+    if (!found) return res.status(404).json({ message: 'not_found', count: Array.isArray(arr) ? arr.length : 0, group: grp ?? 'default' });
+    return res.json({ group: grp ?? 'default', item: found });
+  } catch (e) {
+    const status = e?.status || 500;
+    res.status(status).json({ message: e?.message || 'mcg_item_lookup_failed' });
   }
 });
 
@@ -567,6 +592,66 @@ router.post('/sync-items', adminAuth, async (req, res) => {
 // Sync a single existing product from MCG by mcgItemId or mcgBarcode
 router.post('/sync-product/:productId', adminAuth, async (req, res) => {
   try {
+
+// Push a single absolute inventory value to MCG for diagnostics/testing
+// POST /api/mcg/push-absolute
+// Body can be: { productId, variantId?, quantity?, group? } or { code?, id?, quantity?, group? }
+router.post('/push-absolute', adminAuth, async (req, res) => {
+  try {
+    const { productId, variantId, code, id, quantity, group } = req.body || {};
+    const s = await Settings.findOne();
+    if (!s?.mcg?.enabled) return res.status(412).json({ message: 'MCG integration disabled' });
+
+    // Resolve identifier
+    const norm = (v) => (v === undefined || v === null) ? '' : String(v).trim();
+    let item_code = norm(code);
+    let item_id = norm(id);
+
+    let computedQty = undefined;
+    if (!item_code && !item_id) {
+      // Derive mapping from product
+      if (!productId) return res.status(400).json({ message: 'Provide productId (or code/id)' });
+      const prod = await Product.findById(productId).select('variants mcgBarcode mcgItemId').lean();
+      if (!prod) return res.status(404).json({ message: 'Product not found' });
+      if (variantId && Array.isArray(prod.variants)) {
+        const v = prod.variants.find(x => String(x?._id) === String(variantId));
+        if (v && v.barcode) item_code = norm(v.barcode);
+      }
+      if (!item_code) item_code = norm(prod.mcgBarcode);
+      const preferItemId = String(s?.mcg?.apiFlavor || '').toLowerCase() === 'uplicali' && !!s?.mcg?.preferItemId && norm(prod.mcgItemId);
+      if (preferItemId) {
+        item_id = norm(prod.mcgItemId);
+        item_code = '';
+      } else if (!item_code && norm(prod.mcgItemId)) {
+        item_id = norm(prod.mcgItemId);
+      }
+      if (!item_code && !item_id) return res.status(400).json({ message: 'No MCG mapping found. Set variant.barcode or product.mcgBarcode (or mcgItemId for Uplîcali).' });
+    }
+
+    // Resolve quantity: use provided override or compute from Inventory
+    const qtyOverride = Number(quantity);
+    if (Number.isFinite(qtyOverride) && qtyOverride >= 0) {
+      computedQty = Math.floor(qtyOverride);
+    } else {
+      if (productId) {
+        const filter = variantId ? { product: productId, variantId } : { product: productId };
+        const rows = await Inventory.find(filter).select('quantity').lean();
+        const total = rows.reduce((s,x)=> s + (Number(x.quantity)||0), 0);
+        computedQty = Math.max(0, total);
+      } else {
+        return res.status(400).json({ message: 'Provide quantity or productId to compute from inventory' });
+      }
+    }
+
+    const grp = (group !== undefined && group !== null && !Number.isNaN(Number(group))) ? Number(group) : (Number.isFinite(Number(s?.mcg?.group)) ? Number(s.mcg.group) : undefined);
+    const item = { ...(item_code ? { item_code } : {}), ...(item_id ? { item_id } : {}), item_inventory: computedQty };
+    const resp = await setItemsList([item], grp);
+    return res.json({ ok: true, group: grp ?? 'default', pushed: item, response: resp });
+  } catch (e) {
+    const status = e?.status || 500;
+    res.status(status).json({ message: e?.message || 'mcg_push_absolute_failed' });
+  }
+});
     const s = await Settings.findOne();
     if (!s?.mcg?.enabled) return res.status(412).json({ message: 'MCG integration disabled' });
 
