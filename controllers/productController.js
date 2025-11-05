@@ -127,7 +127,15 @@ async function buildProductQuery(params) {
 
 export const getProducts = async (req, res) => {
   try {
-    const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
+    let reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
+    // Normalize language code to primary subtag we actually store ('ar' | 'he' | 'en')
+    if (reqLang) {
+      reqLang = String(reqLang).toLowerCase();
+      const dash = reqLang.indexOf('-');
+      if (dash > 0) reqLang = reqLang.slice(0, dash);
+      if (reqLang === 'iw') reqLang = 'he';
+      if (!['ar','he','en'].includes(reqLang)) reqLang = '';
+    }
     // Allow category to be provided as slug or name (not just ObjectId) just like filters endpoint.
     // Also: if a non-existent category slug/name is supplied, return an empty list instead of all products.
     let forceEmpty = false;
@@ -396,7 +404,14 @@ export const getProductFilters = async (req, res) => {
 export const getProduct = async (req, res) => {
   try {
   // Currency query param ignored; no conversion performed
-    const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
+    let reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
+    if (reqLang) {
+      reqLang = String(reqLang).toLowerCase();
+      const dash = reqLang.indexOf('-');
+      if (dash > 0) reqLang = reqLang.slice(0, dash);
+      if (reqLang === 'iw') reqLang = 'he';
+      if (!['ar','he','en'].includes(reqLang)) reqLang = '';
+    }
     
     const product = await Product.findById(req.params.id)
       .populate('category')
@@ -1058,7 +1073,14 @@ export const deleteProduct = async (req, res) => {
 export const searchProducts = async (req, res) => {
   try {
     let { query } = req.query;
-    const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
+    let reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
+    if (reqLang) {
+      reqLang = String(reqLang).toLowerCase();
+      const dash = reqLang.indexOf('-');
+      if (dash > 0) reqLang = reqLang.slice(0, dash);
+      if (reqLang === 'iw') reqLang = 'he';
+      if (!['ar','he','en'].includes(reqLang)) reqLang = '';
+    }
 
     // Basic sanitization
     if (typeof query !== 'string') query = '';
@@ -1126,7 +1148,14 @@ export const getProductLite = async (req, res) => {
   try {
     const id = req.params.id;
     if (!id) return res.status(400).json({ message: 'Missing id' });
-    const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
+    let reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
+    if (reqLang) {
+      reqLang = String(reqLang).toLowerCase();
+      const dash = reqLang.indexOf('-');
+      if (dash > 0) reqLang = reqLang.slice(0, dash);
+      if (reqLang === 'iw') reqLang = 'he';
+      if (!['ar','he','en'].includes(reqLang)) reqLang = '';
+    }
     const prod = await Product.findById(id).select('name name_i18n price images').lean();
     if (!prod) return res.status(404).json({ message: 'Product not found' });
     if (reqLang) {
