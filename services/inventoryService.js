@@ -196,8 +196,12 @@ class InventoryService {
           });
           const sample = itemsForSet[0]?.item_code || itemsForSet[0]?.item_id || 'n/a';
           try { console.log('[mcg][push-back] flavor=uplicali items=%d sample=%s group=%s', itemsForSet.length, sample, group ?? 'default'); } catch {}
-          await setItemsList(itemsForSet, group);
-          try { console.log('[mcg][push-back] set_items_list ok (count=%d)', itemsForSet.length); } catch {}
+          const res = await setItemsList(itemsForSet, group);
+          try {
+            // Log minimal response to detect API-level soft failures
+            const summary = (res && typeof res === 'object') ? JSON.stringify(res).slice(0,180) : String(res);
+            console.log('[mcg][push-back] set_items_list ok (count=%d) resp=%s', itemsForSet.length, summary);
+          } catch {}
           // Optional post-verify (for small batches) controlled by env flag
           try {
             const verifyFlag = String(process.env.MCG_VERIFY_AFTER_SET || '').toLowerCase() === 'true';
@@ -714,14 +718,18 @@ class InventoryService {
 
       if (!mcgAbsMap.size) return;
       if (flavor === 'uplicali') {
+        const group = Number.isFinite(Number(mcgCfg?.group)) ? Number(mcgCfg.group) : undefined;
         const itemsForSet = Array.from(mcgAbsMap.entries()).map(([key, qty]) => {
           const [kind, val] = String(key).split(':', 2);
           return kind === 'code' ? { item_code: val, item_inventory: qty } : { item_id: val, item_inventory: qty };
         });
         const sample = itemsForSet[0]?.item_code || itemsForSet[0]?.item_id || 'n/a';
         try { console.log('[mcg][push-back] flavor=uplicali items=%d sample=%s', itemsForSet.length, sample); } catch {}
-        await setItemsList(itemsForSet);
-        try { console.log('[mcg][push-back] set_items_list ok (count=%d)', itemsForSet.length); } catch {}
+        const res = await setItemsList(itemsForSet, group);
+        try {
+          const summary = (res && typeof res === 'object') ? JSON.stringify(res).slice(0,180) : String(res);
+          console.log('[mcg][push-back] set_items_list ok (count=%d) resp=%s', itemsForSet.length, summary);
+        } catch {}
       } else {
         // Legacy absolute push not supported reliably; skip to avoid wrong updates
         try { console.log('[mcg][push-back] legacy flavor detected: absolute sync skipped for %d skus', mcgAbsMap.size); } catch {}

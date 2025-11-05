@@ -278,14 +278,15 @@ export async function setItemsList(items = [], group) {
   for (const it of items) {
     if (!it) continue;
     // Normalize primary identifiers and inventory
-    const item_id = (it.item_id ?? it.ItemID ?? it.itemId ?? it.ItemCode ?? it.item_code ?? '').toString().trim();
-    const item_code = (it.item_code ?? it.ItemCode ?? '').toString().trim();
+    const item_id = (it.item_id ?? it.ItemID ?? it.itemId ?? '').toString().trim();
+    const item_code = (it.item_code ?? it.ItemCode ?? it.barcode ?? '').toString().trim();
     const invRaw = it.item_inventory ?? it.inventory ?? it.quantity ?? it.Quantity;
     const item_inventory = Number.isFinite(Number(invRaw)) ? Number(invRaw) : undefined;
     if (!item_id && !item_code) continue;
     const payload = { };
+    // Include both identifiers when available so MCG can match on either
     if (item_id) payload.item_id = item_id;
-    if (!item_id && item_code) payload.item_code = item_code;
+    if (item_code) payload.item_code = item_code;
     if (item_inventory !== undefined) payload.item_inventory = item_inventory;
     // pass-through optional known fields if provided
     for (const k of ['item_name','item_price','item_department','item_image','item_weight','item_ads','item_attribute']) {
