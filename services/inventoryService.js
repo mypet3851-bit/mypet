@@ -346,6 +346,93 @@ class InventoryService {
     }
   }
 
+  // Paginated/filtered inventory query for admin UI
+  async queryInventory({ page = 1, limit = 50, search = '', status = '', location = '', sort = '' } = {}) {
+    try {
+      const match = {};
+      if (status) match.status = status;
+      if (location) match.location = location;
+
+      const sortMap = {
+        'lastUpdated:desc': { lastUpdated: -1 },
+        'lastUpdated:asc': { lastUpdated: 1 },
+        'quantity:desc': { quantity: -1 },
+        'quantity:asc': { quantity: 1 },
+        'productName:asc': { 'product.name': 1 },
+        'productName:desc': { 'product.name': -1 },
+        'updatedAt:desc': { updatedAt: -1 },
+        'updatedAt:asc': { updatedAt: 1 }
+      };
+      const sortKey = sort && sortMap[sort] ? sort : 'lastUpdated:desc';
+      const sortStage = sortMap[sortKey];
+
+      const regex = search ? new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') : null;
+
+      const pipeline = [
+        { $match: match },
+        // Join product to search by name and filter inactive products out
+        { $lookup: { from: 'products', localField: 'product', foreignField: '_id', as: 'product' } },
+        { $unwind: '$product' },
+        { $match: { 'product.isActive': { $ne: false } } },
+      ];
+
+      if (regex) {
+        pipeline.push({
+          $match: {
+            $or: [
+              { 'product.name': { $regex: regex } },
+              { size: { $regex: regex } },
+              { color: { $regex: regex } },
+              { location: { $regex: regex } },
+              // Quick text search on attributesSnapshot.textValue if present
+              { 'attributesSnapshot.textValue': { $regex: regex } }
+            ]
+          }
+        });
+      }
+
+      pipeline.push(
+        { $sort: sortStage },
+        {
+          $facet: {
+            items: [
+              { $skip: (Math.max(1, page) - 1) * Math.max(1, limit) },
+              { $limit: Math.max(1, limit) },
+              // Keep product minimal to reduce payload
+              { $project: {
+                  _id: 1,
+                  product: { _id: '$product._id', name: '$product.name', images: '$product.images' },
+                  variantId: 1,
+                  size: 1,
+                  color: 1,
+                  quantity: 1,
+                  lowStockThreshold: 1,
+                  warehouse: 1,
+                  location: 1,
+                  status: 1,
+                  attributesSnapshot: 1,
+                  lastUpdated: 1,
+                  createdAt: 1,
+                  updatedAt: 1
+                }
+              }
+            ],
+            total: [ { $count: 'count' } ]
+          }
+        }
+      );
+
+      const [result] = await Inventory.aggregate(pipeline).allowDiskUse(true);
+      const items = Array.isArray(result?.items) ? result.items : [];
+      const total = Array.isArray(result?.total) && result.total[0]?.count ? result.total[0].count : 0;
+      const pageSize = Math.max(1, limit);
+      const totalPages = pageSize ? Math.max(1, Math.ceil(total / pageSize)) : 1;
+      return { items, total, page: Math.max(1, page), pageSize, totalPages };
+    } catch (error) {
+      throw new ApiError(StatusCodes.INTERNAL_SERVER_ERROR, 'Error fetching inventory (paged)');
+    }
+  }
+
   async getProductInventory(productId) {
     try {
       const inventory = await Inventory.find({ product: productId })

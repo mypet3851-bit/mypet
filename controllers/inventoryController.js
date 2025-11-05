@@ -54,10 +54,25 @@ import Product from '../models/Product.js';
 export const getInventory = asyncHandler(async (req, res) => {
   console.log('getInventory controller called');
   console.log('User:', req.user?._id, req.user?.role);
-  
-  const inventory = await inventoryService.getAllInventory();
-  console.log('Inventory fetched, count:', inventory.length);
-  res.status(StatusCodes.OK).json(inventory);
+
+  // Optional pagination + filters
+  const page = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1);
+  const limit = Math.min(200, Math.max(1, parseInt(String(req.query.limit || '50'), 10) || 50));
+  const search = typeof req.query.search === 'string' ? req.query.search : '';
+  const status = typeof req.query.status === 'string' ? req.query.status : '';
+  const location = typeof req.query.location === 'string' ? req.query.location : '';
+  const sort = typeof req.query.sort === 'string' ? req.query.sort : '';
+
+  // If no pagination params supplied, keep backward compatibility by returning full list
+  const usingPaging = req.query.page !== undefined || req.query.limit !== undefined || search || status || location || sort;
+  if (!usingPaging) {
+    const inventory = await inventoryService.getAllInventory();
+    console.log('Inventory fetched, count:', inventory.length);
+    return res.status(StatusCodes.OK).json(inventory);
+  }
+
+  const result = await inventoryService.queryInventory({ page, limit, search, status, location, sort });
+  return res.status(StatusCodes.OK).json(result);
 });
 
 export const getProductInventory = asyncHandler(async (req, res) => {
