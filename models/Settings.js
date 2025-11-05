@@ -378,6 +378,8 @@ settingsSchema.add({
     vendorCode: { type: String, default: '' },
     retailerKey: { type: String, default: '' },
     retailerClientId: { type: String, default: '' },
+  // When true (Uplîcali), prefer item_id (mcgItemId) over barcode for push-back mapping when both exist
+  preferItemId: { type: Boolean, default: false },
     // Optional group id for Uplîcali API (some retailers segment inventory by group)
     group: { type: Number },
     // Price tax multiplier to apply for MCG-imported prices when item_final_price is not provided

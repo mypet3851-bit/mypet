@@ -138,6 +138,9 @@ class InventoryService {
           }
           if (!itemCode) itemCode = String(prodDoc?.mcgBarcode || '').trim();
           const itemIdFallback = String(prodDoc?.mcgItemId || '').trim();
+          const preferItemId = String(settings?.mcg?.apiFlavor||'').toLowerCase()==='uplicali' && !!settings?.mcg?.preferItemId && !!itemIdFallback;
+          // If configured to prefer item_id for Uplîcali and mcgItemId exists, clear itemCode to force item_id mapping
+          if (preferItemId) itemCode = '';
           if (itemCode) {
             const settingsNow = settings; // already loaded above
             const flavor = String(settingsNow?.mcg?.apiFlavor || '').toLowerCase();
@@ -195,7 +198,10 @@ class InventoryService {
             return { item_id: val, item_inventory: qty };
           });
           const sample = itemsForSet[0]?.item_code || itemsForSet[0]?.item_id || 'n/a';
-          try { console.log('[mcg][push-back] flavor=uplicali items=%d sample=%s group=%s', itemsForSet.length, sample, group ?? 'default'); } catch {}
+          // Determine which key was used for the first item for clearer logs
+          const first = itemsForSet[0] || {};
+          const usedKey = first.item_code ? 'item_code' : (first.item_id ? 'item_id' : 'unknown');
+          try { console.log('[mcg][push-back] flavor=uplicali items=%d sample=%s using=%s group=%s', itemsForSet.length, sample, usedKey, group ?? 'default'); } catch {}
           const res = await setItemsList(itemsForSet, group);
           try {
             // Log minimal response to detect API-level soft failures
@@ -681,7 +687,7 @@ class InventoryService {
       if (!mcgCfg.pushStockBackEnabled) return;
       const flavor = String(mcgCfg.apiFlavor || '').toLowerCase();
 
-      const mcgAbsMap = new Map();
+  const mcgAbsMap = new Map();
       const prodCache = new Map();
 
       for (const sku of skus) {
@@ -700,6 +706,8 @@ class InventoryService {
         }
         if (!itemCode) itemCode = String(prodDoc?.mcgBarcode || '').trim();
         const itemIdFallback = String(prodDoc?.mcgItemId || '').trim();
+        const preferItemId = flavor === 'uplicali' && !!(settings?.mcg?.preferItemId) && !!itemIdFallback;
+        if (preferItemId) itemCode = '';
 
         // Compute absolute final quantity for this SKU across inventories
         const filter = sku.variantId
@@ -728,7 +736,9 @@ class InventoryService {
         const res = await setItemsList(itemsForSet, group);
         try {
           const summary = (res && typeof res === 'object') ? JSON.stringify(res).slice(0,180) : String(res);
-          console.log('[mcg][push-back] set_items_list ok (count=%d) resp=%s', itemsForSet.length, summary);
+          const first = itemsForSet[0] || {};
+          const usedKey = first.item_code ? 'item_code' : (first.item_id ? 'item_id' : 'unknown');
+          console.log('[mcg][push-back] set_items_list ok (count=%d) using=%s resp=%s', itemsForSet.length, usedKey, summary);
         } catch {}
       } else {
         // Legacy absolute push not supported reliably; skip to avoid wrong updates
