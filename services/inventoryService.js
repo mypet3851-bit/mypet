@@ -25,7 +25,9 @@ class InventoryService {
     const mcgCfg = settings?.mcg || {};
     const pushToMcg = !!mcgCfg.pushStockBackEnabled;
   const mcgBatch = [];
-  const mcgAbsMap = new Map(); // ItemCode -> absolute qty (for Uplîcali set_items_list)
+  // For Uplîcali absolute updates we support either item_code (barcode) or item_id (mcgItemId)
+  // Key format: 'code:<value>' or 'id:<value>' -> qty
+  const mcgAbsMap = new Map();
     const affectedProducts = new Set();
     for (const it of items) {
       const { product, quantity } = it;
@@ -124,13 +126,14 @@ class InventoryService {
       if (pushToMcg) {
         try {
           // Fetch mapping to MCG ItemCode (prefer variant barcode, else product mcgBarcode)
-          const prodDoc = await Product.findById(product).select('mcgBarcode variants').lean();
+          const prodDoc = await Product.findById(product).select('mcgBarcode mcgItemId variants').lean();
           let itemCode = '';
           if (it.variantId && Array.isArray(prodDoc?.variants)) {
             const vv = prodDoc.variants.find(v => String(v?._id) === String(it.variantId));
             if (vv && vv.barcode) itemCode = String(vv.barcode).trim();
           }
           if (!itemCode) itemCode = String(prodDoc?.mcgBarcode || '').trim();
+          const itemIdFallback = String(prodDoc?.mcgItemId || '').trim();
           if (itemCode) {
             const settingsNow = settings; // already loaded above
             const flavor = String(settingsNow?.mcg?.apiFlavor || '').toLowerCase();
@@ -142,10 +145,25 @@ class InventoryService {
               const finalRows = await Inventory.find(filter).select('quantity').lean();
               const totalQty = finalRows.reduce((s,x)=> s + (Number(x.quantity)||0), 0);
               // Many external systems expect non-negative inventory; clamp at 0 to be safe
-              mcgAbsMap.set(itemCode, Math.max(0, totalQty));
+              mcgAbsMap.set(`code:${itemCode}`, Math.max(0, totalQty));
             } else {
               // Legacy flavors: send deltas
               mcgBatch.push({ ItemCode: itemCode, Quantity: -Math.abs(Number(quantity) || 0) });
+            }
+          } else if (itemIdFallback) {
+            // No barcode, fallback to MCG item id when using Uplîcali flavor (supports item_id)
+            const settingsNow = settings;
+            const flavor = String(settingsNow?.mcg?.apiFlavor || '').toLowerCase();
+            if (flavor === 'uplicali') {
+              const filter = it.variantId
+                ? { product, variantId: it.variantId }
+                : { product, size: (it.size && String(it.size).trim()) ? it.size : 'Default', color: (it.color && String(it.color).trim()) ? it.color : 'Default' };
+              const finalRows = await Inventory.find(filter).select('quantity').lean();
+              const totalQty = finalRows.reduce((s,x)=> s + (Number(x.quantity)||0), 0);
+              mcgAbsMap.set(`id:${itemIdFallback}`, Math.max(0, totalQty));
+            } else {
+              // Legacy may or may not accept ItemID in ItemCode field; attempt as best-effort
+              mcgBatch.push({ ItemCode: itemIdFallback, Quantity: -Math.abs(Number(quantity) || 0) });
             }
           }
         } catch {}
@@ -162,8 +180,13 @@ class InventoryService {
       const flavor = String(settings?.mcg?.apiFlavor || '').toLowerCase();
       try {
         if (flavor === 'uplicali' && mcgAbsMap.size) {
-          const itemsForSet = Array.from(mcgAbsMap.entries()).map(([code, qty]) => ({ item_id: code, item_inventory: qty }));
-          try { console.log('[mcg][push-back] flavor=uplicali items=%d sample=%s', itemsForSet.length, itemsForSet[0]?.item_id || 'n/a'); } catch {}
+          const itemsForSet = Array.from(mcgAbsMap.entries()).map(([key, qty]) => {
+            const [kind, val] = String(key).split(':', 2);
+            if (kind === 'code') return { item_code: val, item_inventory: qty };
+            return { item_id: val, item_inventory: qty };
+          });
+          const sample = itemsForSet[0]?.item_code || itemsForSet[0]?.item_id || 'n/a';
+          try { console.log('[mcg][push-back] flavor=uplicali items=%d sample=%s', itemsForSet.length, sample); } catch {}
           await setItemsList(itemsForSet);
           try { console.log('[mcg][push-back] set_items_list ok (count=%d)', itemsForSet.length); } catch {}
         } else if (mcgBatch.length) {
