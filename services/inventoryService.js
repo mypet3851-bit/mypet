@@ -206,6 +206,8 @@ class InventoryService {
   async incrementItems(items, userId, reason = 'Manual increase', session = null) {
     if (!Array.isArray(items) || !items.length) return;
     const affectedProducts = new Set();
+    // Track the specific SKUs we touched so we can push absolute quantities to MCG (Uplîcali)
+    const touchedSkus = [];
     for (const it of items) {
       const { product, quantity } = it;
       if (!product || !quantity || quantity <= 0) {
@@ -231,8 +233,14 @@ class InventoryService {
       }
       await this.#createHistoryRecord({ product, type: 'increase', quantity, reason, user: userId });
       affectedProducts.add(String(product));
+      // Record SKU for MCG absolute push
+      touchedSkus.push(usingVariant
+        ? { product, variantId: it.variantId }
+        : { product, size: baseFilter.size, color: baseFilter.color });
     }
     for (const pid of affectedProducts) await this.#updateProductStock(pid);
+    // Push absolute quantities to MCG where enabled (Uplîcali)
+    try { await this.#pushMcgForSkus(touchedSkus); } catch {}
   }
   // Move stock between warehouses
   async moveStockBetweenWarehouses({ product, size, color, variantId, quantity, fromWarehouse, toWarehouse, userId, reason }) {
@@ -347,7 +355,15 @@ class InventoryService {
       };
       console.log('About to create InventoryHistory with:', historyData);
       await this.#createHistoryRecord(historyData);
-
+      // Push absolute quantity for the affected SKU to MCG (Uplîcali)
+      try {
+        await this.#pushMcgForSkus([{
+          product: inventory.product._id,
+          variantId: inventory.variantId,
+          size: inventory.size,
+          color: inventory.color
+        }]);
+      } catch {}
       return inventory;
     } catch (error) {
       if (error instanceof ApiError) throw error;
@@ -450,7 +466,15 @@ class InventoryService {
         reason: 'Initial stock',
         user: userId
       });
-
+      // Push absolute quantity for the affected SKU to MCG (Uplîcali)
+      try {
+        await this.#pushMcgForSkus([{
+          product: savedInventory.product,
+          variantId: savedInventory.variantId,
+          size: savedInventory.size,
+          color: savedInventory.color
+        }]);
+      } catch {}
       return savedInventory;
     } catch (error) {
       // If it's already an ApiError, just re-throw it
@@ -488,6 +512,7 @@ class InventoryService {
 
   async bulkUpdateInventory(items, userId) {
     try {
+      const skus = [];
       const updates = items.map(async (item) => {
         const inventory = await Inventory.findByIdAndUpdate(
           item._id,
@@ -505,10 +530,18 @@ class InventoryService {
             reason: 'Bulk update',
             user: userId
           });
+          skus.push({
+            product: inventory.product._id,
+            variantId: inventory.variantId,
+            size: inventory.size,
+            color: inventory.color
+          });
         }
       });
 
       await Promise.all(updates);
+      // Push absolute quantities for all touched SKUs to MCG (Uplîcali)
+      try { await this.#pushMcgForSkus(skus); } catch {}
     } catch (error) {
       throw new ApiError(StatusCodes.INTERNAL_SERVER_ERROR, 'Error performing bulk update');
     }
@@ -602,6 +635,69 @@ class InventoryService {
       console.error('Error in #createHistoryRecord:', error);
       console.error('Data that caused error:', data);
       throw new ApiError(StatusCodes.INTERNAL_SERVER_ERROR, 'Error creating history record');
+    }
+  }
+
+  // Internal: Push absolute quantities for a list of SKUs to MCG (supports Uplîcali; legacy skipped or best-effort)
+  async #pushMcgForSkus(skus) {
+    try {
+      if (!Array.isArray(skus) || !skus.length) return;
+      const settings = await Settings.findOne().lean();
+      const mcgCfg = settings?.mcg || {};
+      if (!mcgCfg.pushStockBackEnabled) return;
+      const flavor = String(mcgCfg.apiFlavor || '').toLowerCase();
+
+      const mcgAbsMap = new Map();
+      const prodCache = new Map();
+
+      for (const sku of skus) {
+        const productId = sku.product;
+        if (!productId) continue;
+        let prodDoc = prodCache.get(String(productId));
+        if (!prodDoc) {
+          prodDoc = await Product.findById(productId).select('mcgBarcode mcgItemId variants').lean();
+          prodCache.set(String(productId), prodDoc || {});
+        }
+        // Prefer variant barcode if variant specified
+        let itemCode = '';
+        if (sku.variantId && Array.isArray(prodDoc?.variants)) {
+          const vv = prodDoc.variants.find(v => String(v?._id) === String(sku.variantId));
+          if (vv && vv.barcode) itemCode = String(vv.barcode).trim();
+        }
+        if (!itemCode) itemCode = String(prodDoc?.mcgBarcode || '').trim();
+        const itemIdFallback = String(prodDoc?.mcgItemId || '').trim();
+
+        // Compute absolute final quantity for this SKU across inventories
+        const filter = sku.variantId
+          ? { product: productId, variantId: sku.variantId }
+          : { product: productId, size: (sku.size && String(sku.size).trim()) ? sku.size : 'Default', color: (sku.color && String(sku.color).trim()) ? sku.color : 'Default' };
+        const finalRows = await Inventory.find(filter).select('quantity').lean();
+        const totalQty = finalRows.reduce((s,x)=> s + (Number(x.quantity)||0), 0);
+        const clamped = Math.max(0, totalQty);
+
+        if (itemCode) {
+          mcgAbsMap.set(`code:${itemCode}`, clamped);
+        } else if (itemIdFallback && flavor === 'uplicali') {
+          mcgAbsMap.set(`id:${itemIdFallback}`, clamped);
+        }
+      }
+
+      if (!mcgAbsMap.size) return;
+      if (flavor === 'uplicali') {
+        const itemsForSet = Array.from(mcgAbsMap.entries()).map(([key, qty]) => {
+          const [kind, val] = String(key).split(':', 2);
+          return kind === 'code' ? { item_code: val, item_inventory: qty } : { item_id: val, item_inventory: qty };
+        });
+        const sample = itemsForSet[0]?.item_code || itemsForSet[0]?.item_id || 'n/a';
+        try { console.log('[mcg][push-back] flavor=uplicali items=%d sample=%s', itemsForSet.length, sample); } catch {}
+        await setItemsList(itemsForSet);
+        try { console.log('[mcg][push-back] set_items_list ok (count=%d)', itemsForSet.length); } catch {}
+      } else {
+        // Legacy absolute push not supported reliably; skip to avoid wrong updates
+        try { console.log('[mcg][push-back] legacy flavor detected: absolute sync skipped for %d skus', mcgAbsMap.size); } catch {}
+      }
+    } catch (e) {
+      try { console.warn('[mcg][push-back] batch absolute failed:', e?.message || e); } catch {}
     }
   }
 }
