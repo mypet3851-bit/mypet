@@ -24,6 +24,10 @@ class InventoryService {
     const allowNegative = !!invCfg.allowNegativeStock;
     const mcgCfg = settings?.mcg || {};
     const pushToMcg = !!mcgCfg.pushStockBackEnabled;
+    try {
+      const flavor = String(mcgCfg?.apiFlavor || '').toLowerCase() || 'legacy';
+      console.log('[inventory][reserve] items=%d allowNegative=%s mcg.pushBack=%s flavor=%s', items.length, allowNegative, pushToMcg, flavor);
+    } catch {}
   const mcgBatch = [];
   // For Uplîcali absolute updates we support either item_code (barcode) or item_id (mcgItemId)
   // Key format: 'code:<value>' or 'id:<value>' -> qty
@@ -165,6 +169,10 @@ class InventoryService {
               // Legacy may or may not accept ItemID in ItemCode field; attempt as best-effort
               mcgBatch.push({ ItemCode: itemIdFallback, Quantity: -Math.abs(Number(quantity) || 0) });
             }
+          } else {
+            try {
+              console.warn('[mcg][push-back] missing mapping for product=%s variantId=%s. Set variant.barcode or product.mcgBarcode (or mcgItemId for Uplîcali).', String(product), it.variantId ? String(it.variantId) : '');
+            } catch {}
           }
         } catch {}
       }
@@ -199,6 +207,8 @@ class InventoryService {
       } catch (e) {
         try { console.warn('[mcg][push-back] failed:', e?.message || e); } catch {}
       }
+    } else {
+      try { console.log('[mcg][push-back] disabled by settings (Settings.mcg.pushStockBackEnabled=false)'); } catch {}
     }
   }
 

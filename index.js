@@ -76,6 +76,7 @@ import mobilePushRoutes from './routes/mobilePushRoutes.js';
 // Lazy import function to warm DeepSeek config from DB
 import { loadDeepseekConfigFromDb } from './services/translate/deepseek.js';
 import { startPushScheduler } from './services/pushScheduler.js';
+import { startMcgSyncScheduler } from './services/mcgSyncScheduler.js';
 
 // Path Setup
 const __filename = fileURLToPath(import.meta.url);
@@ -539,6 +540,7 @@ const startServer = async () => {
     console.log(`WebSocket server running on ws://localhost:${PORT}/ws`);
   });
   try { startPushScheduler(app); console.log('[startup] Push scheduler started'); } catch {}
+  try { startMcgSyncScheduler(); console.log('[startup] MCG auto-pull scheduler started'); } catch {}
 };
 
 // Start server

@@ -381,7 +381,11 @@ settingsSchema.add({
     // Price tax multiplier to apply for MCG-imported prices when item_final_price is not provided
     taxMultiplier: { type: Number, default: 1.18, min: 1 },
     // When true, push stock decrements back to MCG as delta updates
-    pushStockBackEnabled: { type: Boolean, default: false }
+    pushStockBackEnabled: { type: Boolean, default: false },
+    // Automatic pull: periodically sync stock from MCG into local inventory
+    autoPullEnabled: { type: Boolean, default: false },
+    // How often to pull in minutes (min 1, default 15)
+    pullEveryMinutes: { type: Number, default: 15, min: 1 }
   }
 });
 
