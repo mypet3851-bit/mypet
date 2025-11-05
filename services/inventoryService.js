@@ -163,9 +163,15 @@ class InventoryService {
       try {
         if (flavor === 'uplicali' && mcgAbsMap.size) {
           const itemsForSet = Array.from(mcgAbsMap.entries()).map(([code, qty]) => ({ item_id: code, item_inventory: qty }));
+          try { console.log('[mcg][push-back] flavor=uplicali items=%d sample=%s', itemsForSet.length, itemsForSet[0]?.item_id || 'n/a'); } catch {}
           await setItemsList(itemsForSet);
+          try { console.log('[mcg][push-back] set_items_list ok (count=%d)', itemsForSet.length); } catch {}
         } else if (mcgBatch.length) {
+          try { console.log('[mcg][push-back] flavor=legacy deltas=%d sample=%s', mcgBatch.length, mcgBatch[0]?.ItemCode || 'n/a'); } catch {}
           await updateItemsQuantities(mcgBatch);
+          try { console.log('[mcg][push-back] update_items_quantities ok (count=%d)', mcgBatch.length); } catch {}
+        } else {
+          try { console.log('[mcg][push-back] skipped: no mapped item codes on this reservation'); } catch {}
         }
       } catch (e) {
         try { console.warn('[mcg][push-back] failed:', e?.message || e); } catch {}
