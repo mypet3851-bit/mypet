@@ -6,6 +6,17 @@ import { deepseekTranslate, isDeepseekConfigured } from '../services/translate/d
 
 const router = express.Router();
 
+// Normalize language to primary subtag we store in i18n maps
+function normalizeLang(lang) {
+  if (!lang || typeof lang !== 'string') return '';
+  let l = String(lang).trim().toLowerCase();
+  const dash = l.indexOf('-');
+  if (dash > 0) l = l.slice(0, dash);
+  if (l === 'iw') l = 'he';
+  if (!['ar','he','en'].includes(l)) return '';
+  return l;
+}
+
 function sanitizeSlug(input) {
   if (!input) return '';
   return String(input)
@@ -38,7 +49,7 @@ async function ensureUniqueSlug(desired, excludeId) {
 // Get all navigation categories
 router.get('/', async (req, res) => {
   try {
-  const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
+  const reqLang = normalizeLang(req.query.lang);
   // Only auto-translate when explicitly requested to avoid slowing default responses
   const allowAuto = isDeepseekConfigured() && String(req.query.autoTranslate || 'false').toLowerCase() === 'true';
     const categories = await NavigationCategory.find()
@@ -312,7 +323,7 @@ router.delete('/:id([0-9a-fA-F]{24})', adminAuth, async (req, res) => {
 // GET groups for a navigation item
 router.get('/:id([0-9a-fA-F]{24})/groups', async (req, res) => {
   try {
-    const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
+    const reqLang = normalizeLang(req.query.lang);
     const allowAuto = isDeepseekConfigured();
     const doc = await NavigationCategory.findById(req.params.id)
       .populate('slugGroups.categories', '_id name slug path');
@@ -452,7 +463,7 @@ router.delete('/:id([0-9a-fA-F]{24})/groups/:groupSlug', adminAuth, async (req, 
 // Public: fetch by group slug (across all navigation items)
 router.get('/group/by-slug/:groupSlug', async (req, res) => {
   try {
-    const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
+    const reqLang = normalizeLang(req.query.lang);
     const allowAuto = isDeepseekConfigured();
     const doc = await NavigationCategory.findOne({ 'slugGroups.slug': req.params.groupSlug, isActive: true })
       .populate('slugGroups.categories', '_id name slug path');
@@ -507,7 +518,7 @@ router.get('/group/by-slug/:groupSlug', async (req, res) => {
 // Public: get a single navigation category by slug with its mapped categories
 router.get('/:slug', async (req, res) => {
   try {
-    const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
+    const reqLang = normalizeLang(req.query.lang);
     const allowAuto = isDeepseekConfigured();
     const doc = await NavigationCategory.findOne({ slug: req.params.slug, isActive: true })
       .populate('categories', '_id name slug path')

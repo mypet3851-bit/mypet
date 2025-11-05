@@ -2,6 +2,17 @@ import Category from '../models/Category.js';
 import Product from '../models/Product.js';
 import { deepseekTranslate, deepseekTranslateBatch, isDeepseekConfigured } from '../services/translate/deepseek.js';
 
+// Normalize language to primary subtag we store in i18n maps
+function normalizeLang(lang) {
+  if (!lang || typeof lang !== 'string') return '';
+  let l = String(lang).trim().toLowerCase();
+  const dash = l.indexOf('-');
+  if (dash > 0) l = l.slice(0, dash);
+  if (l === 'iw') l = 'he';
+  if (!['ar','he','en'].includes(l)) return '';
+  return l;
+}
+
 // Helper: localize a category object in-place for a given language
 function localizeCategoryInPlace(cat, lang) {
   const nm = cat?.name_i18n?.[lang] ?? cat?.name_i18n?.get?.(lang);
@@ -97,7 +108,7 @@ async function translateAndPersistCategories(categories, lang, allowAuto) {
 // Get all categories
 export const getAllCategories = async (req, res) => {
   try {
-  const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
+  const reqLang = normalizeLang(req.query.lang);
   const allowAuto = isDeepseekConfigured() && String(req.query.autoTranslate || 'false').toLowerCase() === 'true';
     // Optional: asTree=true to return nested structure, otherwise flat list
     const asTree = String(req.query.asTree || '').toLowerCase() === 'true';
@@ -132,7 +143,7 @@ export const getAllCategories = async (req, res) => {
 // Get single category
 export const getCategory = async (req, res) => {
   try {
-  const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
+  const reqLang = normalizeLang(req.query.lang);
   const allowAuto = isDeepseekConfigured() && String(req.query.autoTranslate || 'false').toLowerCase() === 'true';
     const category = await Category.findById(req.params.id);
     if (!category) {
@@ -339,7 +350,7 @@ export const getSubcategories = async (req, res) => {
   try {
     const parentId = req.params.parentId === 'root' ? null : req.params.parentId;
     const filter = parentId ? { parent: parentId } : { parent: null };
-    const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
+    const reqLang = normalizeLang(req.query.lang);
     const allowAuto = isDeepseekConfigured();
     const list = await Category.find(filter).sort({ order: 1, name: 1 }).lean();
     if (reqLang) await translateAndPersistCategories(list, reqLang, allowAuto);
@@ -352,7 +363,7 @@ export const getSubcategories = async (req, res) => {
 // Get the full category tree starting from root
 export const getCategoryTree = async (req, res) => {
   try {
-    const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
+    const reqLang = normalizeLang(req.query.lang);
     const allowAuto = isDeepseekConfigured();
     const categories = await Category.find().sort({ depth: 1, order: 1, name: 1 }).lean();
     if (reqLang) await translateAndPersistCategories(categories, reqLang, allowAuto);
