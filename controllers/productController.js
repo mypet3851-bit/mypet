@@ -1072,7 +1072,11 @@ export const deleteProduct = async (req, res) => {
 // Search products
 export const searchProducts = async (req, res) => {
   try {
+    // Accept both `query` and `q` for flexibility (/api/products/search?query=... OR /api/products?q=...)
     let { query } = req.query;
+    if (!query && typeof req.query.q === 'string') {
+      query = req.query.q; // alias
+    }
     let reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
     if (reqLang) {
       reqLang = String(reqLang).toLowerCase();
@@ -1111,6 +1115,12 @@ export const searchProducts = async (req, res) => {
       { name: regex },
       { description: regex }
     ];
+    // If a supported language is requested, also search the translated field
+    if (reqLang) {
+      // name_i18n is stored as a Map/Object with keys ar/he/en; dot-path query works in Mongo
+      const field = `name_i18n.${reqLang}`;
+      orConditions.push({ [field]: regex });
+    }
     if (categoryIds.length) {
       orConditions.push({ category: { $in: categoryIds } });
       orConditions.push({ categories: { $in: categoryIds } });
