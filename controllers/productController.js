@@ -612,57 +612,46 @@ export const createProduct = async (req, res) => {
   savedProduct = await savedProduct.populate(['category','categories','brand']);
 
 
-    // Find or create a default warehouse
+    // Find or create a default warehouse (used for initial inventory location info)
     let warehouse = await Warehouse.findOne();
     if (!warehouse) {
       warehouse = await Warehouse.create({ name: 'Main Warehouse' });
     }
 
     if (!simpleMode) {
-      // Legacy variant inventory creation
-      let totalQty = 0;
-      const inventoryPromises = (req.body.colors || []).flatMap(color =>
-        (color.sizes || []).map(size => {
-          totalQty += Number(size.stock) || 0;
-          return new Inventory({
-            product: savedProduct._id,
-            size: size.name,
-            color: color.name,
-            quantity: size.stock,
-            warehouse: warehouse._id,
-            location: warehouse.name,
-            lowStockThreshold: 5
-          }).save();
-        })
-      );
-      await Promise.all(inventoryPromises);
-
-      await new InventoryHistory({
-        product: savedProduct._id,
-        type: 'increase',
-        quantity: totalQty,
-        reason: 'Initial stock',
-        user: req.user?._id
-      }).save();
+      // Create inventory per color/size using inventoryService so MCG is updated immediately when enabled
+      const colorArr = Array.isArray(req.body.colors) ? req.body.colors : [];
+      const tasks = [];
+      for (const color of colorArr) {
+        const sizes = Array.isArray(color?.sizes) ? color.sizes : [];
+        for (const size of sizes) {
+          const qty = Number(size?.stock) || 0;
+          tasks.push(
+            inventoryService.addInventory({
+              product: savedProduct._id,
+              size: String(size?.name || '').trim(),
+              color: String(color?.name || '').trim(),
+              quantity: qty,
+              warehouse: warehouse?._id,
+              location: warehouse?.name,
+              lowStockThreshold: 5
+            }, req.user?._id)
+          );
+        }
+      }
+      await Promise.all(tasks);
     } else {
-      // Simple mode: single inventory record representing total stock (use placeholder variant)
+      // Simple mode: create a single inventory row via inventoryService to trigger MCG push
       const baseQty = Number(req.body.stock) || 0;
-      await new Inventory({
+      await inventoryService.addInventory({
         product: savedProduct._id,
         size: 'Default',
         color: 'Default',
         quantity: baseQty,
-        warehouse: warehouse._id,
-        location: warehouse.name,
+        warehouse: warehouse?._id,
+        location: warehouse?.name,
         lowStockThreshold: 5
-      }).save();
-      await new InventoryHistory({
-        product: savedProduct._id,
-        type: 'increase',
-        quantity: baseQty,
-        reason: 'Initial stock (simple mode)',
-        user: req.user?._id
-      }).save();
+      }, req.user?._id);
     }
 
   res.status(201).json(savedProduct);
@@ -1794,33 +1783,25 @@ export const bulkCreateProducts = async (req, res) => {
 
         const savedProduct = await product.save();
 
-        // Create inventory per size/color combination
-        const sizes = body.sizes || [];
-        const colors = body.colors || [];
-        const inventoryPromises = sizes.flatMap((size) =>
-          (colors.length ? colors : [{ name: 'Default', code: '#000000' }]).map((color) =>
-            new Inventory({
-              product: savedProduct._id,
-              size: size.name,
-              color: color.name,
-              quantity: size.stock,
-              location: 'Main Warehouse',
-              lowStockThreshold: 5
-            }).save()
-          )
-        );
-
-        await Promise.all(inventoryPromises);
-
-        // Inventory history
-        const totalQty = sizes.reduce((sum, s) => sum + (Number(s.stock) || 0), 0);
-        await new InventoryHistory({
-          product: savedProduct._id,
-          type: 'increase',
-          quantity: totalQty,
-          reason: 'Bulk upload initial stock',
-          user: req.user?._id
-        }).save();
+        // Create inventory via service (triggers stock recompute and MCG push when enabled)
+        const sizes = Array.isArray(body.sizes) ? body.sizes : [];
+        const colors = Array.isArray(body.colors) && body.colors.length ? body.colors : [{ name: 'Default', code: '#000000' }];
+        const invTasks = [];
+        for (const sz of sizes) {
+          const qty = Number(sz?.stock) || 0;
+          for (const col of colors) {
+            invTasks.push(
+              inventoryService.addInventory({
+                product: savedProduct._id,
+                size: String(sz?.name || '').trim(),
+                color: String(col?.name || '').trim(),
+                quantity: qty,
+                lowStockThreshold: 5
+              }, req.user?._id)
+            );
+          }
+        }
+        await Promise.all(invTasks);
 
         results.push({ index: i, status: 'success', id: savedProduct._id });
       } catch (err) {
