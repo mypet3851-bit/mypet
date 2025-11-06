@@ -91,20 +91,24 @@ class InventoryAnalyticsService {
     }
   }
 
-  async getStockMovements(dateRange) {
+  async getStockMovements(options) {
     try {
-      const { start, end } = dateRange;
+      const { start, end, limit } = options || {};
 
       // Validate/normalize dates to avoid invalid query ranges
   const startDate = start instanceof Date && !isNaN(start.getTime()) ? start : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
   const endDate = end instanceof Date && !isNaN(end.getTime()) ? end : new Date();
 
+      const limitNum = Number.isFinite(Number(limit)) ? Math.max(1, Math.min(Number(limit), 1000)) : 200; // cap to 1000, default 200
+
       const movements = await InventoryHistory.find({
         timestamp: { $gte: startDate, $lte: endDate }
       })
+        .select('timestamp product type quantity reason user createdAt')
         .populate('product', 'name')
         .populate('user', 'name')
         .sort({ timestamp: -1 })
+        .limit(limitNum)
         .lean();
 
       // Safely map movements even if related docs are missing
@@ -136,9 +140,9 @@ class InventoryAnalyticsService {
     }
   }
 
-  async getTurnoverAnalysis(dateRange) {
+  async getTurnoverAnalysis(options) {
     try {
-      const { start, end } = dateRange;
+      const { start, end, limit } = options || {};
       const DAY_MS = 1000 * 60 * 60 * 24;
       const startMs = start instanceof Date ? start.getTime() : Date.now() - 30 * DAY_MS;
       const endMs = end instanceof Date ? end.getTime() : Date.now();
@@ -153,18 +157,26 @@ class InventoryAnalyticsService {
       const orders = await Order.find({
         createdAt: { $gte: new Date(startMs), $lte: new Date(endMs) },
         status: { $in: ['delivered', 'completed'] }
-      }).select('items totalAmount createdAt status').lean();
+      }).select('items.product items.quantity totalAmount createdAt status').lean();
+
+      // Build a fast lookup: productId -> soldQuantity within period
+      const soldByProduct = new Map();
+      for (const order of orders) {
+        for (const it of order.items || []) {
+          const pid = typeof it.product === 'string' ? it.product : it.product?.toString?.();
+          if (!pid) continue;
+          const prev = soldByProduct.get(pid) || 0;
+          soldByProduct.set(pid, prev + (Number(it.quantity) || 0));
+        }
+      }
 
       const turnoverData = [];
 
       for (const item of inventory) {
         if (!item.product) continue;
 
-        // Calculate sold quantity from orders
-        const soldQuantity = orders.reduce((sum, order) => {
-          const orderItem = order.items.find(oi => oi.product.toString() === item.product._id.toString());
-          return sum + (orderItem ? orderItem.quantity : 0);
-        }, 0);
+        // Fast sold quantity lookup
+        const soldQuantity = soldByProduct.get(item.product._id.toString()) || 0;
 
         // Calculate metrics
         const currentStock = item.quantity;
@@ -198,7 +210,10 @@ class InventoryAnalyticsService {
         });
       }
 
-      return turnoverData;
+      // Optionally limit the size returned to keep payload light
+      const limitNum = Number.isFinite(Number(limit)) ? Math.max(1, Math.min(Number(limit), 2000)) : undefined;
+      const sorted = turnoverData.sort((a, b) => b.soldQuantity - a.soldQuantity);
+      return typeof limitNum === 'number' ? sorted.slice(0, limitNum) : sorted;
     } catch (error) {
       throw new ApiError(StatusCodes.INTERNAL_SERVER_ERROR, 'Error calculating turnover analysis');
     }

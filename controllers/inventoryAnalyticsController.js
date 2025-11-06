@@ -23,7 +23,7 @@ export const getInventoryAnalytics = asyncHandler(async (req, res) => {
 
 export const getStockMovements = asyncHandler(async (req, res) => {
   console.log('getStockMovements called with query:', req.query);
-  const { startDate, endDate } = req.query;
+  const { startDate, endDate, limit } = req.query;
   
   // Handle missing date parameters
   const start = startDate ? new Date(startDate) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
@@ -33,7 +33,8 @@ export const getStockMovements = asyncHandler(async (req, res) => {
   
   const movements = await inventoryAnalyticsService.getStockMovements({
     start,
-    end
+    end,
+    limit: limit ? Number(limit) : undefined
   });
   
   console.log('Movements result:', movements);
@@ -42,7 +43,7 @@ export const getStockMovements = asyncHandler(async (req, res) => {
 
 export const getTurnoverAnalysis = asyncHandler(async (req, res) => {
   console.log('getTurnoverAnalysis called with query:', req.query);
-  const { startDate, endDate } = req.query;
+  const { startDate, endDate, limit } = req.query;
   
   // Handle missing date parameters
   const start = startDate ? new Date(startDate) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
@@ -52,7 +53,8 @@ export const getTurnoverAnalysis = asyncHandler(async (req, res) => {
   
   const turnover = await inventoryAnalyticsService.getTurnoverAnalysis({
     start,
-    end
+    end,
+    limit: limit ? Number(limit) : undefined
   });
   
   console.log('Turnover result:', turnover);
