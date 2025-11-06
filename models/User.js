@@ -49,7 +49,7 @@ const userSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['user', 'admin', 'inventory'],
+    enum: ['user', 'admin'],
     default: 'user'
   },
   whatsappOptIn: {
