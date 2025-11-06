@@ -39,7 +39,6 @@ router.get('/', (req, res, next) => {
   }
   return getProducts(req, res, next);
 });
-router.get('/', getProducts);
 router.get('/filters', getProductFilters); // must be before :id
 router.get('/search', searchProducts);
 router.get('/lite/:id', getProductLite);
