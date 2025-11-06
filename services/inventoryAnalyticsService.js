@@ -8,84 +8,123 @@ import { ApiError } from '../utils/ApiError.js';
 import * as XLSX from 'xlsx';
 
 class InventoryAnalyticsService {
+  constructor() {
+    // simple in-memory cache to avoid recomputing heavy analytics repeatedly
+    this._cache = new Map(); // key -> { ts: number, data: any, inFlight: Promise<any> | null }
+    this._CACHE_TTL_MS = 30_000; // 30s cache window
+  }
+
   async getAnalytics(dateRange) {
     try {
       const { start, end } = dateRange;
 
-      // Get current inventory data (lean for speed, minimal fields)
-      const inventory = await Inventory.find()
-        .populate('product', 'name price category')
-        .lean();
-  const totalValue = inventory.reduce((sum, item) => {
-        const price = item.product?.price || 0;
-        return sum + (item.quantity * price);
-      }, 0);
-
-  // Get historical data for comparison
-  const DAY_MS = 1000 * 60 * 60 * 24;
-  const startMs = start instanceof Date ? start.getTime() : Date.now() - 30 * DAY_MS;
-  const endMs = end instanceof Date ? end.getTime() : Date.now();
-  const diffDays = Math.max(1, Math.ceil((endMs - startMs) / DAY_MS));
-  const previousStart = new Date(startMs);
-  previousStart.setDate(previousStart.getDate() - diffDays);
-      
-      const previousInventory = await this.getHistoricalInventoryValue(previousStart, start);
-      const valueChange = previousInventory > 0 ? ((totalValue - previousInventory) / previousInventory) * 100 : 0;
-
-      // Get value history for the period
-      const valueHistory = await this.getValueHistory(start, end);
-
-      // Calculate turnover metrics
-      const turnoverMetrics = await this.calculateTurnoverMetrics(start, end);
-
-
-      // Robust totals and unique counts
-      const totalItems = inventory.reduce((sum, item) => {
-        const qty = Number(item.quantity);
-        return sum + (Number.isFinite(qty) && qty > 0 ? qty : 0);
-      }, 0);
-
-      // Estimate reserved units from open orders (pending -> shipped)
-      const openOrders = await Order.find({
-        status: { $in: ['pending', 'processing', 'shipped'] }
-      }).select('items').lean();
-      const reservedUnits = openOrders.reduce((sum, o) => sum + (o.items?.reduce((s, it) => s + (Number(it.quantity) || 0), 0) || 0), 0);
-      const availableUnits = Math.max(0, totalItems - reservedUnits);
-
-  const uniqueProducts = (() => {
-        const ids = new Set();
-        for (const item of inventory) {
-          const pid = item.product?._id?.toString?.() || (typeof item.product === 'string' ? item.product : null);
-          if (pid) ids.add(pid);
-        }
-        return ids.size;
+      // cache key based on rounded date range to minute precision
+      const key = (() => {
+        const toKey = (d) => {
+          const t = d instanceof Date ? d.getTime() : Date.now();
+          return Math.floor(t / 60_000); // minute bucket
+        };
+        return `core:${toKey(start)}:${toKey(end)}`;
       })();
 
-  const variantsInStockCount = inventory.reduce((sum, item) => sum + ((Number(item.quantity) || 0) > 0 ? 1 : 0), 0);
+      const cached = this._cache.get(key);
+      const now = Date.now();
+      if (cached && cached.data && (now - cached.ts) < this._CACHE_TTL_MS) {
+        return cached.data;
+      }
+      if (cached && cached.inFlight) {
+        // de-duplicate concurrent requests
+        return await cached.inFlight;
+      }
 
-      // Status breakdown and variant count (useful for UI)
-      const statusCounts = inventory.reduce((acc, item) => {
-        const st = item.status || 'in_stock';
-        acc[st] = (acc[st] || 0) + 1;
-        return acc;
-      }, {});
+      // create in-flight promise and store
+      const computePromise = (async () => {
+        // Get current inventory data (lean for speed, minimal fields)
+        const inventoryPromise = Inventory.find()
+          .select('product quantity status lowStockThreshold lastUpdated location')
+          .populate('product', 'price') // only need price for total value
+          .lean();
 
-      return {
-        totalValue,
-        valueChange,
-  totalItems,
-  reservedUnits,
-  availableUnits,
-        uniqueProducts,
-  variantCount: inventory.length,
-  variantsInStockCount,
-        inStockCount: statusCounts['in_stock'] || 0,
-        lowStockCount: statusCounts['low_stock'] || 0,
-        outOfStockCount: statusCounts['out_of_stock'] || 0,
-        turnoverRate: turnoverMetrics.averageTurnover,
-        avgDaysInStock: turnoverMetrics.averageDaysInStock,
-        valueHistory
-      };
+        // Estimate reserved units from open orders (pending -> shipped)
+        const openOrdersPromise = Order.find({
+          status: { $in: ['pending', 'processing', 'shipped'] }
+        }).select('items.quantity').lean();
+
+        // Pre-compute helpers in parallel
+        const valueHistoryPromise = this.getValueHistory(start, end);
+        const turnoverPromise = this.calculateTurnoverMetrics(start, end);
+
+        const [inventory, openOrders] = await Promise.all([inventoryPromise, openOrdersPromise]);
+
+        // Compute totals
+        const totalValue = inventory.reduce((sum, item) => {
+          const price = item.product?.price || 0;
+          const qty = Number(item.quantity) || 0;
+          return sum + (qty * price);
+        }, 0);
+
+        // Get historical data for comparison
+        const DAY_MS = 1000 * 60 * 60 * 24;
+        const startMs = start instanceof Date ? start.getTime() : Date.now() - 30 * DAY_MS;
+        const endMs = end instanceof Date ? end.getTime() : Date.now();
+        const diffDays = Math.max(1, Math.ceil((endMs - startMs) / DAY_MS));
+        const previousStart = new Date(startMs);
+        previousStart.setDate(previousStart.getDate() - diffDays);
+
+        const previousInventory = await this.getHistoricalInventoryValue(previousStart, start);
+        const valueChange = previousInventory > 0 ? ((totalValue - previousInventory) / previousInventory) * 100 : 0;
+
+        // Robust totals and unique counts
+        const totalItems = inventory.reduce((sum, item) => {
+          const qty = Number(item.quantity);
+          return sum + (Number.isFinite(qty) && qty > 0 ? qty : 0);
+        }, 0);
+
+        const reservedUnits = openOrders.reduce((sum, o) => sum + (o.items?.reduce((s, it) => s + (Number(it.quantity) || 0), 0) || 0), 0);
+        const availableUnits = Math.max(0, totalItems - reservedUnits);
+
+        const uniqueProducts = (() => {
+          const ids = new Set();
+          for (const item of inventory) {
+            const pid = item.product?._id?.toString?.() || (typeof item.product === 'string' ? item.product : null);
+            if (pid) ids.add(pid);
+          }
+          return ids.size;
+        })();
+
+        const variantsInStockCount = inventory.reduce((sum, item) => sum + ((Number(item.quantity) || 0) > 0 ? 1 : 0), 0);
+
+        // Status breakdown and variant count (useful for UI)
+        const statusCounts = inventory.reduce((acc, item) => {
+          const st = item.status || 'in_stock';
+          acc[st] = (acc[st] || 0) + 1;
+          return acc;
+        }, {});
+
+        const [valueHistory, turnoverMetrics] = await Promise.all([valueHistoryPromise, turnoverPromise]);
+
+        return {
+          totalValue,
+          valueChange,
+          totalItems,
+          reservedUnits,
+          availableUnits,
+          uniqueProducts,
+          variantCount: inventory.length,
+          variantsInStockCount,
+          inStockCount: statusCounts['in_stock'] || 0,
+          lowStockCount: statusCounts['low_stock'] || 0,
+          outOfStockCount: statusCounts['out_of_stock'] || 0,
+          turnoverRate: turnoverMetrics.averageTurnover,
+          avgDaysInStock: turnoverMetrics.averageDaysInStock,
+          valueHistory
+        };
+      })();
+
+      this._cache.set(key, { ts: now, data: null, inFlight: computePromise });
+      const data = await computePromise;
+      this._cache.set(key, { ts: Date.now(), data, inFlight: null });
+      return data;
     } catch (error) {
       throw new ApiError(StatusCodes.INTERNAL_SERVER_ERROR, 'Error calculating analytics');
     }
