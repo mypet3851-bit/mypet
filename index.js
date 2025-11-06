@@ -279,23 +279,50 @@ const PORT = process.env.PORT || 5000;
 // Create HTTP server
 const server = createServer(app);
 
-// WebSocket setup (expanded)
-// Accept all upgrade paths so platform/proxy rewrites (e.g. /api/ws) still succeed.
+// WebSocket setup (explicit upgrade handling for stability behind proxies)
+// We handle upgrades only for /ws (primary) and /api/ws (fallback when proxied)
 // Disable perMessageDeflate to reduce chances of proxy interference closing connection early.
-const wss = new WebSocketServer({ server, perMessageDeflate: false });
+const wss = new WebSocketServer({ noServer: true, perMessageDeflate: false });
 
-// Extra upgrade diagnostics
+// Extra upgrade diagnostics + explicit routing
 server.on('upgrade', (req, socket, head) => {
   try {
-    console.log('[WS][upgrade] incoming', {
-      url: req.url,
-      host: req.headers.host,
-      origin: req.headers.origin,
-      ua: req.headers['user-agent'],
-      secVersion: req.headers['sec-websocket-version'],
-      secProtocol: req.headers['sec-websocket-protocol']
+    const url = req.url || '/';
+    const host = req.headers.host;
+    const origin = req.headers.origin;
+    const ua = req.headers['user-agent'];
+    const secVersion = req.headers['sec-websocket-version'];
+    const secProtocol = req.headers['sec-websocket-protocol'];
+    console.log('[WS][upgrade] incoming', { url, host, origin, ua, secVersion, secProtocol });
+
+    // Parse path and accept only known endpoints
+    let pathname = '/';
+    try { pathname = new URL(url, 'http://placeholder').pathname; } catch {}
+    const allowed = pathname === '/ws' || pathname === '/api/ws';
+
+    if (!allowed) {
+      // Not a ws endpoint we serve – let other listeners (if any) handle or gracefully refuse
+      console.warn('[WS][upgrade] rejecting unknown path', pathname);
+      socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+
+    // If client requested a subprotocol, echo first value when establishing (optional)
+    const protocols = (secProtocol || '').split(',').map(s => s.trim()).filter(Boolean);
+
+    wss.handleUpgrade(req, socket, head, (ws, request) => {
+      // Node ws automatically negotiates permessage-deflate per config; set protocol explicitly
+      if (protocols.length && typeof ws.emit === 'function') {
+        try { ws.protocol = protocols[0]; } catch {}
+      }
+      wss.emit('connection', ws, request);
     });
-  } catch {}
+  } catch (e) {
+    try { socket.write('HTTP/1.1 500 Internal Server Error\r\n\r\n'); } catch {}
+    try { socket.destroy(); } catch {}
+    console.error('[WS][upgrade] fatal error', e?.message || e);
+  }
 });
 
 // Track clients (WebSocket) and Server-Sent Events (SSE)
