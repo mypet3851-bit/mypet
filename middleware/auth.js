@@ -49,20 +49,3 @@ export const adminAuth = async (req, res, next) => {
     });
   }
 };
-
-// Allow users with either 'inventory' role or 'admin' to access inventory endpoints
-export const inventoryAuth = async (req, res, next) => {
-  console.log('inventoryAuth middleware called for:', req.method, req.path);
-  try {
-    await auth(req, res, () => {
-      const role = req.user?.role;
-      if (role !== 'admin' && role !== 'inventory') {
-        return res.status(403).json({ message: 'Inventory access required' });
-      }
-      next();
-    });
-  } catch (error) {
-    console.error('Inventory auth error:', error);
-    res.status(403).json({ message: 'Inventory access required' });
-  }
-};
