@@ -25,24 +25,15 @@ function detectLangFromText(text) {
   }
 }
 
-// Normalize imported MCG price values: adjust edge fractional cases (e.g. 9.92 -> 9.99 or 10)
+// Normalize imported MCG price values for all items to a clean "even" whole number.
 // Policy:
-//  - If fraction >= 0.90 and < 0.95, lift to .99 (9.92 -> 9.99)
-//  - If fraction >= 0.95, round up to next integer (9.96 -> 10.00)
-//  - Else keep two-decimal rounding as-is.
-// This can be refined later or made configurable under Settings.mcg.* if needed.
+//  - Always round UP to the next whole number (Math.ceil). Examples: 9.92 -> 10, 89.24 -> 90
+//  - Non-finite or negative inputs return 0
+// Note: stored as a Number (no forced .00). Formatting is a UI concern.
 function normalizeMcgImportedPrice(p) {
   const val = Number(p);
   if (!Number.isFinite(val) || val < 0) return 0;
-  const whole = Math.floor(val);
-  const frac = val - whole;
-  if (frac >= 0.90 && frac < 0.95) {
-    return Number((whole + 0.99).toFixed(2));
-  }
-  if (frac >= 0.95) {
-    return Number((whole + 1).toFixed(2));
-  }
-  return Number(val.toFixed(2));
+  return Math.ceil(val);
 }
 
 // Public health ping (no auth). Returns a simple OK to verify routing reaches this service.
@@ -716,6 +707,9 @@ router.post('/push-absolute', adminAuth, async (req, res) => {
       const priceRaw = Number(it?.Price ?? it?.price ?? it?.item_price ?? 0);
       const base = Number.isFinite(priceRaw) && priceRaw >= 0 ? priceRaw : undefined;
       price = typeof base === 'number' ? Math.round(base * taxMultiplier * 100) / 100 : undefined;
+    }
+    if (typeof price === 'number') {
+      price = normalizeMcgImportedPrice(price);
     }
   const barcodeFromMcg = ((it?.Barcode ?? it?.barcode ?? it?.item_code ?? '') + '').trim();
   const idFromMcg = ((it?.ItemID ?? it?.id ?? it?.itemId ?? it?.item_id ?? '') + '').trim();
