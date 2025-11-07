@@ -25,6 +25,26 @@ function detectLangFromText(text) {
   }
 }
 
+// Normalize imported MCG price values: adjust edge fractional cases (e.g. 9.92 -> 9.99 or 10)
+// Policy:
+//  - If fraction >= 0.90 and < 0.95, lift to .99 (9.92 -> 9.99)
+//  - If fraction >= 0.95, round up to next integer (9.96 -> 10.00)
+//  - Else keep two-decimal rounding as-is.
+// This can be refined later or made configurable under Settings.mcg.* if needed.
+function normalizeMcgImportedPrice(p) {
+  const val = Number(p);
+  if (!Number.isFinite(val) || val < 0) return 0;
+  const whole = Math.floor(val);
+  const frac = val - whole;
+  if (frac >= 0.90 && frac < 0.95) {
+    return Number((whole + 0.99).toFixed(2));
+  }
+  if (frac >= 0.95) {
+    return Number((whole + 1).toFixed(2));
+  }
+  return Number(val.toFixed(2));
+}
+
 // Public health ping (no auth). Returns a simple OK to verify routing reaches this service.
 router.get('/ping', (req, res) => {
   res.json({ ok: true, service: 'mcg', timestamp: new Date().toISOString() });
@@ -404,6 +424,8 @@ router.post('/sync-items', adminAuth, async (req, res) => {
         const base = Number.isFinite(priceRaw) && priceRaw >= 0 ? priceRaw : 0;
         price = Math.round(base * taxMultiplier * 100) / 100;
       }
+      // Apply normalization rule (e.g., 9.92 -> 9.99, 9.96 -> 10.00)
+      price = normalizeMcgImportedPrice(price);
       const stockRaw = Number(it?.StockQuantity ?? it?.stock ?? it?.item_inventory ?? 0);
       const stock = Number.isFinite(stockRaw) ? Math.max(0, stockRaw) : 0;
       const img = (it?.ImageURL ?? it?.imageUrl ?? (it?.item_image || '')) + '';
