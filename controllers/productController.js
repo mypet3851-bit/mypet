@@ -19,6 +19,7 @@ export const getProductStock = async (req, res) => {
 };
 
 import Product from '../models/Product.js';
+import FlashSale from '../models/FlashSale.js';
 import Attribute from '../models/Attribute.js';
 import AttributeValue from '../models/AttributeValue.js';
 import Inventory from '../models/Inventory.js';
@@ -212,6 +213,44 @@ export const getProducts = async (req, res) => {
     if (limit > 0) q = q.limit(limit);
     const products = await q;
 
+    // Prepare active flash sales context (single read per request)
+    const now = new Date();
+    let activeSales = [];
+    try {
+      activeSales = await FlashSale.find({ active: true, startDate: { $lte: now }, endDate: { $gte: now } })
+        .select('items targetType categoryIds pricingMode discountPercent')
+        .lean();
+    } catch {}
+
+    // Build product-targeted price map for quick lookup
+    const productFlashMap = new Map(); // id -> price
+    for (const s of activeSales) {
+      if (s && s.targetType !== 'categories' && Array.isArray(s.items)) {
+        for (const it of s.items) {
+          const id = String(it?.product?._id || it?.product || '');
+          if (!id) continue;
+          const price = Number(it?.flashPrice);
+          if (!(price > 0)) continue;
+          // Keep the lowest flash price if multiple sales overlap
+          const prev = productFlashMap.get(id);
+          if (prev == null || price < prev) productFlashMap.set(id, price);
+        }
+      }
+    }
+
+    // Keep category-targeted sales aside for per-product computation
+    const categorySales = activeSales.filter(s => s && s.targetType === 'categories' && Array.isArray(s.categoryIds) && s.categoryIds.length);
+
+    const computePercentPrice = (base, pct) => {
+      if (typeof base !== 'number' || !isFinite(base) || base <= 0) return 0;
+      if (typeof pct !== 'number' || !isFinite(pct) || pct <= 0 || pct >= 100) return 0;
+      const v = base * (1 - pct / 100);
+      const r = Math.round(v * 100) / 100;
+      if (r <= 0) return 0;
+      if (r >= base) return Math.max(0, Math.round((base - 0.01) * 100) / 100);
+      return r;
+    };
+
   // Only auto-translate on demand to avoid slowing product listing with external API calls.
   // Enable by passing ?autoTranslate=true along with lang.
   const allowAutoTranslate = isDeepseekConfigured() && String(req.query.autoTranslate || 'false').toLowerCase() === 'true';
@@ -220,6 +259,27 @@ export const getProducts = async (req, res) => {
         const inventory = await Inventory.find({ product: product._id });
         const productObj = product.toObject();
         productObj.inventory = inventory;
+        // Attach active flashPrice if applicable
+        try {
+          const pid = String(productObj._id);
+          let fp = productFlashMap.get(pid) ?? null;
+          if (fp == null && categorySales.length) {
+            for (const s of categorySales) {
+              const pct = Number(s?.discountPercent);
+              if (!(pct > 0 && pct < 100)) continue;
+              const catIds = (s.categoryIds || []).map((c)=> String(c));
+              const primary = productObj.category && String(productObj.category._id || productObj.category);
+              const secondary = Array.isArray(productObj.categories) ? productObj.categories.map((c)=> String(c._id || c)) : [];
+              const intersects = (arr1, arr2) => arr1.some(v => arr2.includes(v));
+              const prodCats = [primary, ...secondary].filter(Boolean);
+              if (prodCats.length && intersects(prodCats, catIds)) {
+                const calc = computePercentPrice(productObj.price || 0, pct);
+                if (calc > 0) fp = (fp == null ? calc : Math.min(fp, calc));
+              }
+            }
+          }
+          if (fp != null) productObj.flashPrice = fp;
+        } catch {}
         // Localize name/description if requested and available
         if (reqLang) {
           try {
@@ -446,6 +506,47 @@ export const getProduct = async (req, res) => {
     const inventory = await Inventory.find({ product: product._id });
     const productObj = product.toObject();
     productObj.inventory = inventory;
+
+    // Attach active flashPrice for this product (either explicit or via category sale)
+    try {
+      const now = new Date();
+      const sList = await FlashSale.find({ active: true, startDate: { $lte: now }, endDate: { $gte: now } })
+        .select('items targetType categoryIds pricingMode discountPercent')
+        .lean();
+      let fp = null;
+      for (const s of sList) {
+        if (s.targetType === 'categories') continue;
+        if (!Array.isArray(s.items)) continue;
+        const hit = s.items.find(it => String(it?.product?._id || it?.product) === String(productObj._id));
+        if (hit && Number(hit.flashPrice) > 0) fp = fp == null ? Number(hit.flashPrice) : Math.min(fp, Number(hit.flashPrice));
+      }
+      const pctSales = sList.filter(s => s.targetType === 'categories' && Array.isArray(s.categoryIds) && s.categoryIds.length);
+      if (fp == null && pctSales.length) {
+        const computePercentPrice = (base, pct) => {
+          if (typeof base !== 'number' || !isFinite(base) || base <= 0) return 0;
+          if (typeof pct !== 'number' || !isFinite(pct) || pct <= 0 || pct >= 100) return 0;
+          const v = base * (1 - pct / 100);
+          const r = Math.round(v * 100) / 100;
+          if (r <= 0) return 0;
+          if (r >= base) return Math.max(0, Math.round((base - 0.01) * 100) / 100);
+          return r;
+        };
+        const primary = productObj.category && String(productObj.category._id || productObj.category);
+        const secondary = Array.isArray(productObj.categories) ? productObj.categories.map((c)=> String(c._id || c)) : [];
+        const prodCats = [primary, ...secondary].filter(Boolean);
+        for (const s of pctSales) {
+          const pct = Number(s.discountPercent);
+          if (!(pct > 0 && pct < 100)) continue;
+          const catIds = (s.categoryIds || []).map((c)=> String(c));
+          const intersects = (arr1, arr2) => arr1.some(v => arr2.includes(v));
+          if (prodCats.length && intersects(prodCats, catIds)) {
+            const calc = computePercentPrice(productObj.price || 0, pct);
+            if (calc > 0) fp = fp == null ? calc : Math.min(fp, calc);
+          }
+        }
+      }
+      if (fp != null) productObj.flashPrice = fp;
+    } catch {}
 
     // Localize name/description if requested and available
     if (reqLang) {
@@ -1117,12 +1218,57 @@ export const searchProducts = async (req, res) => {
 
     const products = await Product.find({ $or: orConditions, isActive: { $ne: false } })
       // Include i18n maps so we can localize name in results when lang is provided
-      .select('name name_i18n price images category colors')
+      .select('name name_i18n price originalPrice images category categories colors')
       .limit(12)
       .sort('-createdAt')
       .lean();
     if (process.env.NODE_ENV !== 'production') {
       console.log(`searchProducts query="${query}" matches=${products.length} categoriesMatched=${categoryIds.length}`);
+    }
+    // Attach active flashPrice for product or via category-based percent sales
+    try {
+      const activeSales = await FlashSale.find({ status: 'active' })
+        .select('items targetType categoryIds pricingMode discountPercent')
+        .lean();
+      const productFlashMap = new Map(); // productId -> min flash price from explicit items
+      for (const s of activeSales || []) {
+        if (!s || s.targetType === 'categories') continue;
+        const items = Array.isArray(s.items) ? s.items : [];
+        for (const it of items) {
+          const pid = String((it?.product?._id || it?.product || ''));
+          const price = Number(it?.flashPrice);
+          if (!pid || !(price > 0)) continue;
+          const prev = productFlashMap.get(pid);
+          if (prev == null || price < prev) productFlashMap.set(pid, price);
+        }
+      }
+      const categorySales = (activeSales || []).filter(s => s && s.targetType === 'categories' && Array.isArray(s.categoryIds) && s.categoryIds.length);
+      for (const p of products) {
+        const pid = String(p?._id || '');
+        if (!pid) continue;
+        let fp = productFlashMap.get(pid) ?? null;
+        if (categorySales.length) {
+          const cats = [];
+          if (p?.category) cats.push(String(p.category));
+          if (Array.isArray(p?.categories)) cats.push(...p.categories.map((c)=> String((c?._id || c))));
+          for (const s of categorySales) {
+            if (!Array.isArray(s.categoryIds) || !s.categoryIds.length) continue;
+            const set = new Set((s.categoryIds || []).map((id)=> String((id?._id || id))));
+            const matches = cats.some(c => set.has(String(c)));
+            if (!matches) continue;
+            if (String(s.pricingMode || '').toLowerCase() !== 'percent') continue;
+            const pct = Number(s.discountPercent);
+            if (!(pct > 0 && pct < 100)) continue;
+            const base = Number(p?.price || 0);
+            if (!(base > 0)) continue;
+            const cand = +(base * (1 - (pct/100))).toFixed(2);
+            fp = fp == null ? cand : Math.min(fp, cand);
+          }
+        }
+        if (fp != null) p.flashPrice = fp;
+      }
+    } catch (e) {
+      try { console.warn('[searchProducts] flash enrichment error', e?.message || e); } catch {}
     }
     // Localize name if requested and available (do NOT auto-translate here to keep search fast)
     if (reqLang) {
