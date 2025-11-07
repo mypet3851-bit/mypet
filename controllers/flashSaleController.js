@@ -33,6 +33,25 @@ async function expandCategoriesToItems(categoryIds = [], discountPercent) {
   return items;
 }
 
+// Build public response items for category-targeted sales, hydrating product fields directly
+async function buildPublicItemsForCategories(categoryIds = [], discountPercent) {
+  if (!Array.isArray(categoryIds) || categoryIds.length === 0) return [];
+  const prods = await Product.find({
+    $or: [
+      { category: { $in: categoryIds } },
+      { categories: { $in: categoryIds } }
+    ]
+  }).select('name images colors attributeImages price originalPrice').lean();
+  return prods
+    .map((p, idx) => ({
+      product: p,
+      flashPrice: computePercentPrice(p.price || 0, discountPercent),
+      quantityLimit: 0,
+      order: idx,
+    }))
+    .filter(it => it.flashPrice > 0);
+}
+
 export const listAdmin = async (req, res) => {
   try {
     const sales = await FlashSale.find()
@@ -122,7 +141,20 @@ export const publicActiveList = async (req, res) => {
 
     // Localize embedded products (name) if lang provided; persist missing translations when DeepSeek configured
     const out = await Promise.all(sales.map(async (s) => {
-      const items = await Promise.all((s.items || []).map(async (it) => {
+      // If this sale targets categories, compute items dynamically to ensure store reflects latest products/prices
+      let baseItems = Array.isArray(s.items) ? s.items : [];
+      if (s.targetType === 'categories') {
+        const pct = Number(s.discountPercent);
+        if (pct > 0 && pct < 100) {
+          try {
+            baseItems = await buildPublicItemsForCategories(s.categoryIds || [], pct);
+          } catch {}
+        } else {
+          baseItems = [];
+        }
+      }
+
+      const items = await Promise.all((baseItems || []).map(async (it) => {
         const p = it.product;
         if (p && reqLang) {
           try {
@@ -183,7 +215,20 @@ export const publicGetById = async (req, res) => {
       })
       .lean();
     if (!s) return res.status(404).json({ message: 'Flash sale not found or not active' });
-    const items = await Promise.all((s.items || []).map(async (it) => {
+    // Compute base items (dynamic when targeting categories)
+    let baseItems = Array.isArray(s.items) ? s.items : [];
+    if (s.targetType === 'categories') {
+      const pct = Number(s.discountPercent);
+      if (pct > 0 && pct < 100) {
+        try {
+          baseItems = await buildPublicItemsForCategories(s.categoryIds || [], pct);
+        } catch {}
+      } else {
+        baseItems = [];
+      }
+    }
+
+    const items = await Promise.all((baseItems || []).map(async (it) => {
       const p = it.product;
       if (p && reqLang) {
         try {

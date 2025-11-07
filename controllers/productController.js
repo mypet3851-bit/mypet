@@ -43,12 +43,6 @@ async function resolveCategoryAndDescendants(categoryParam) {
   let catDoc = null;
   if (typeof categoryParam === 'string' && /^[a-fA-F0-9]{24}$/.test(categoryParam)) {
     catDoc = await Category.findById(categoryParam).select('_id');
-    // If an ObjectId-like value is provided but the category document no longer exists,
-    // fall back to using the raw id without descendants, so products tagged with this id
-    // (e.g., legacy data) are not hidden. This avoids forcing an empty result set.
-    if (!catDoc) {
-      return { ids: [String(categoryParam)], notFound: false };
-    }
   } else if (typeof categoryParam === 'string') {
     catDoc = await Category.findOne({ $or: [ { slug: categoryParam }, { name: new RegExp(`^${categoryParam}$`, 'i') } ] }).select('_id');
   }
