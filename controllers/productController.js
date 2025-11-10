@@ -1,20 +1,101 @@
-// Get stock levels for a product (including per-size)
+// Get stock levels for a product or a specific generated variant.
+// Accepts either:
+//   /api/products/:productId/stock
+//   /api/products/:productId_:variantIndex/stock   (where variantIndex is a numeric position)
+// The original implementation returned { productId, name, stock, sizes } for legacy color/size matrix.
+// We keep that shape for backward compatibility and add variant details when variantIndex is supplied.
 export const getProductStock = async (req, res) => {
+  const rawId = req.params.id;
+  let productId = rawId;
+  let variantIndex = null;
+  // Pattern: 24 hex chars + '_' + digits -> treat as productId + variantIndex token.
+  const match = /^([a-fA-F0-9]{24})_(\d+)$/.exec(rawId);
+  if (match) {
+    productId = match[1];
+    variantIndex = parseInt(match[2], 10);
+  }
+
+  // Basic ObjectId format validation before hitting mongoose (avoid CastError 500s)
+  if (!/^([a-fA-F0-9]{24})$/.test(productId)) {
+    return res.status(400).json({ message: 'Invalid product id format' });
+  }
+
   try {
-    const product = await Product.findById(req.params.id);
+    const product = await Product.findById(productId).lean();
     if (!product) {
       return res.status(404).json({ message: 'Product not found' });
     }
-    const stockInfo = {
+
+    // Legacy sizes extraction (colors.sizes)
+    const legacySizes = Array.isArray(product.colors)
+      ? product.colors.flatMap(color => (color?.sizes || []).map(sz => ({
+          color: color?.name,
+          name: sz?.name,
+          stock: Number(sz?.stock) || 0
+        })))
+      : [];
+
+    const response = {
       productId: product._id,
       name: product.name,
-      stock: product.stock,
-      sizes: product.sizes?.map(size => ({ name: size.name, stock: size.stock })) || []
+      stock: Number(product.stock) || 0,
+      sizes: legacySizes // kept for backward compatibility (may be empty when using new variants system)
     };
-    res.json(stockInfo);
+
+    // Variant branch
+    if (variantIndex !== null) {
+      const variants = Array.isArray(product.variants) ? product.variants.filter(v => v?.isActive !== false) : [];
+      if (!variants.length) {
+        return res.status(404).json({ message: 'No variants found for product' });
+      }
+      // Support both 0-based and 1-based indexes: prefer exact, else try (index-1)
+      let idx = variantIndex;
+      if (idx < 0) idx = 0;
+      if (idx >= variants.length && (variantIndex - 1) >= 0 && (variantIndex - 1) < variants.length) {
+        idx = variantIndex - 1;
+      }
+      const variant = variants[idx];
+      if (!variant) {
+        return res.status(404).json({ message: 'Variant index out of range' });
+      }
+      // Aggregate variant list minimal info for clients wanting a quick stock map
+      response.variants = variants.map((v, i) => ({
+        index: i,
+        id: v._id,
+        sku: v.sku,
+        stock: Number(v.stock) || 0,
+        price: v.price != null ? v.price : product.price,
+        originalPrice: v.originalPrice != null ? v.originalPrice : product.originalPrice
+      }));
+      response.selectedVariant = {
+        index: idx,
+        id: variant._id,
+        sku: variant.sku,
+        stock: Number(variant.stock) || 0,
+        price: variant.price != null ? variant.price : product.price,
+        originalPrice: variant.originalPrice != null ? variant.originalPrice : product.originalPrice,
+        images: Array.isArray(variant.images) && variant.images.length ? variant.images : undefined
+      };
+    } else if (Array.isArray(product.variants) && product.variants.length) {
+      // When no specific variant requested, still expose aggregated variant stock map if variants exist.
+      response.variants = product.variants.filter(v => v?.isActive !== false).map((v, i) => ({
+        index: i,
+        id: v._id,
+        sku: v.sku,
+        stock: Number(v.stock) || 0,
+        price: v.price != null ? v.price : product.price,
+        originalPrice: v.originalPrice != null ? v.originalPrice : product.originalPrice
+      }));
+    }
+
+    return res.json(response);
   } catch (error) {
-    console.error('Error fetching product stock:', error);
-    res.status(500).json({ message: 'Failed to fetch product stock' });
+    // Distinguish cast errors
+    if (error?.name === 'CastError') {
+      return res.status(400).json({ message: 'Invalid product id' });
+    }
+    console.error('[getProductStock] Error:', error);
+    return res.status(500).json({ message: 'Failed to fetch product stock' });
   }
 };
 
