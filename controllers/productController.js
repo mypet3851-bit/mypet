@@ -526,7 +526,29 @@ export const getProduct = async (req, res) => {
       if (!['ar','he','en'].includes(reqLang)) reqLang = '';
     }
     
-    const product = await Product.findById(req.params.id)
+    // Support underscore-suffixed product id tokens like <productId>_<variantIndex>
+    // Frontend sometimes appends _<n> when selecting a variant for direct deep-linking.
+    // Example: 690dd5d9d4db98e7e3b24529_1 (1-based variant index)
+    const rawId = String(req.params.id || '').trim();
+    let baseId = rawId;
+    let variantIndex = null;
+    if (rawId.includes('_')) {
+      const parts = rawId.split('_');
+      baseId = parts[0];
+      const tail = parts[1];
+      if (tail && /^\d+$/.test(tail)) {
+        const parsed = Number(tail);
+        if (Number.isFinite(parsed) && parsed > 0) {
+          variantIndex = parsed - 1; // convert to 0-based
+        }
+      }
+    }
+    // Validate baseId is a 24-hex ObjectId; otherwise return 400 (avoid Mongoose CastError 500)
+    if (!/^[a-fA-F0-9]{24}$/.test(baseId)) {
+      return res.status(400).json({ message: 'Invalid product id' });
+    }
+
+    const product = await Product.findById(baseId)
       .populate('category')
       .populate('categories')
       .populate('brand')
@@ -575,28 +597,7 @@ export const getProduct = async (req, res) => {
       }
       const pctSales = sList.filter(s => s.targetType === 'categories' && Array.isArray(s.categoryIds) && s.categoryIds.length);
       if (fp == null && pctSales.length) {
-          // Support underscore-suffixed product id tokens like <productId>_<variantIndex>
-          // Frontend sometimes appends _<n> when selecting a variant for direct deep-linking.
-          // Example: 690dd5d9d4db98e7e3b24529_1 (1-based variant index)
-          const rawId = String(req.params.id || '').trim();
-          let baseId = rawId;
-          let variantIndex = null;
-          if (rawId.includes('_')) {
-            const parts = rawId.split('_');
-            baseId = parts[0];
-            const tail = parts[1];
-            if (tail && /^\d+$/.test(tail)) {
-              const parsed = Number(tail);
-              if (Number.isFinite(parsed) && parsed > 0) {
-                variantIndex = parsed - 1; // convert to 0-based
-              }
-            }
-          }
-          // Validate baseId is a 24-hex ObjectId; otherwise return 400 (avoid Mongoose CastError 500)
-          if (!/^[a-fA-F0-9]{24}$/.test(baseId)) {
-            return res.status(400).json({ message: 'Invalid product id' });
-          }
-          const product = await Product.findById(baseId)
+        const computePercentPrice = (base, pct) => {
           if (typeof base !== 'number' || !isFinite(base) || base <= 0) return 0;
           if (typeof pct !== 'number' || !isFinite(pct) || pct <= 0 || pct >= 100) return 0;
           const v = base * (1 - pct / 100);
@@ -1383,8 +1384,11 @@ export const searchProducts = async (req, res) => {
 // Lightweight product by id (name, price, images) for admin selectors
 export const getProductLite = async (req, res) => {
   try {
-    const id = req.params.id;
-    if (!id) return res.status(400).json({ message: 'Missing id' });
+    const rawId = String(req.params.id || '').trim();
+    if (!rawId) return res.status(400).json({ message: 'Missing id' });
+    // Allow underscore-suffixed token; ignore variant index for lite
+    const baseId = rawId.includes('_') ? rawId.split('_')[0] : rawId;
+    if (!/^[a-fA-F0-9]{24}$/.test(baseId)) return res.status(400).json({ message: 'Invalid product id' });
     let reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
     if (reqLang) {
       reqLang = String(reqLang).toLowerCase();
@@ -1393,7 +1397,7 @@ export const getProductLite = async (req, res) => {
       if (reqLang === 'iw') reqLang = 'he';
       if (!['ar','he','en'].includes(reqLang)) reqLang = '';
     }
-    const prod = await Product.findById(id).select('name name_i18n price images').lean();
+    const prod = await Product.findById(baseId).select('name name_i18n price images').lean();
     if (!prod) return res.status(404).json({ message: 'Product not found' });
     if (reqLang) {
       try {
