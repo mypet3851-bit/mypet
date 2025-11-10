@@ -121,7 +121,7 @@ const defaultAllowedOrigins = [
   'http://127.0.0.1:3000',
   'https://relaxed-cucurucho-360448.netlify.app',
   // Self origin (Render) – harmless for health checks and internal tools
-  'https://mypet-98uh.onrender.com'
+  'https://mypet-778751110625.europe-west1.run.app'
 ];
 
 // Allow override via env (comma-separated list)
@@ -274,7 +274,7 @@ app.use((req, res) => {
   res.status(404).json({ message: 'Route not found' });
 });
 
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 8080;
 
 // Create HTTP server
 const server = createServer(app);
