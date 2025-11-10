@@ -20,7 +20,10 @@ router.put('/:id', adminAuth, updateCoupon);
 router.delete('/:id', adminAuth, deleteCoupon);
 
 // Public routes
+// Primary POST validate endpoint (expects JSON body { code, totalAmount })
 router.post('/validate', validateCoupon);
+// Convenience GET variant to reduce accidental 404s from incorrect method usage
+router.get('/validate', validateCoupon);
 router.post('/:code/apply', applyCoupon);
 
 export default router;

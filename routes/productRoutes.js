@@ -15,7 +15,8 @@ import {
   uploadProductVideo,
   uploadTempProductVideo,
   getProductFilters,
-  getProductLite
+  getProductLite,
+  getProductStats
 } from '../controllers/productController.js';
 import { videoUpload } from '../middleware/videoUpload.js';
 import {
@@ -40,6 +41,8 @@ router.get('/', (req, res, next) => {
   return getProducts(req, res, next);
 });
 router.get('/filters', getProductFilters); // must be before :id
+// Admin stats (total/active counts)
+router.get('/stats', adminAuth, getProductStats);
 router.get('/search', searchProducts);
 router.get('/lite/:id', getProductLite);
 // Place static paths before dynamic ':id' to avoid conflicts

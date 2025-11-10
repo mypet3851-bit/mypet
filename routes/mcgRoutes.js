@@ -8,6 +8,7 @@ import Inventory from '../models/Inventory.js';
 import InventoryHistory from '../models/InventoryHistory.js';
 import Warehouse from '../models/Warehouse.js';
 import { inventoryService } from '../services/inventoryService.js';
+import { runMcgSyncOnce } from '../services/mcgSyncScheduler.js';
 
 const router = express.Router();
 
@@ -337,6 +338,20 @@ router.post('/sync-inventory', adminAuth, async (req, res) => {
   } catch (e) {
     const status = e?.status || 500;
     res.status(status).json({ message: e?.message || 'mcg_sync_inventory_failed' });
+  }
+});
+
+// Force an immediate automated stock sync using the scheduler's logic (single run)
+// POST /api/mcg/auto-sync/run-now { }
+router.post('/auto-sync/run-now', adminAuth, async (req, res) => {
+  try {
+    const s = await Settings.findOne();
+    if (!s?.mcg?.enabled) return res.status(412).json({ message: 'MCG integration disabled' });
+    await runMcgSyncOnce();
+    return res.json({ ok: true, message: 'MCG auto sync executed once' });
+  } catch (e) {
+    const status = e?.status || 500;
+    res.status(status).json({ message: e?.message || 'mcg_auto_sync_run_failed' });
   }
 });
 
