@@ -10,7 +10,9 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install production dependencies only
-RUN npm ci --omit=dev || npm ci --only=production
+# Using npm install instead of npm ci to tolerate an out-of-sync lockfile during initial deploy.
+# Once package-lock.json is updated/committed, revert to `npm ci --omit=dev` for reproducible builds.
+RUN npm install --omit=dev --no-audit --no-fund
 
 # Copy the rest of the sources (server, public, scripts, etc.)
 COPY . ./
