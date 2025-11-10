@@ -129,13 +129,46 @@ export const publicActiveList = async (req, res) => {
   try {
   const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
   const allowAutoTranslate = isDeepseekConfigured() && String(req.query.autoTranslate || 'false').toLowerCase() === 'true';
+  const metaOnly = String(req.query.metaOnly || 'false').toLowerCase() === 'true';
     const now = new Date();
-    const sales = await FlashSale.find({ active: true, startDate: { $lte: now }, endDate: { $gte: now } })
+    let sales = await FlashSale.find({ active: true, startDate: { $lte: now }, endDate: { $gte: now } })
+      .sort({ startDate: 1 })
+      .lean();
+
+    // If only metadata is requested, do not populate heavy items list
+    if (metaOnly) {
+      const outMeta = await Promise.all(sales.map(async (s) => {
+        let itemsCount = Array.isArray(s.items) ? s.items.length : 0;
+        if (s.targetType === 'categories') {
+          try {
+            itemsCount = await Product.countDocuments({
+              $or: [
+                { category: { $in: s.categoryIds || [] } },
+                { categories: { $in: s.categoryIds || [] } }
+              ]
+            });
+          } catch {}
+        }
+        return {
+          _id: s._id,
+          name: s.name,
+          startDate: s.startDate,
+          endDate: s.endDate,
+          pricingMode: s.pricingMode || 'fixed',
+          discountPercent: s.discountPercent,
+          itemsCount,
+        };
+      }));
+      try { const c = await getStoreCurrency(); res.set('X-Store-Currency', c); } catch {}
+      return res.json(outMeta);
+    }
+
+    // Otherwise return the full (legacy) payload with items populated
+    sales = await FlashSale.find({ active: true, startDate: { $lte: now }, endDate: { $gte: now } })
       .sort({ startDate: 1 })
       .populate({
         path: 'items.product',
-          // Include attributeImages so storefront can show per-attribute images on flash cards
-          select: 'name images colors attributeImages price originalPrice',
+        select: 'name images colors attributeImages price originalPrice',
       })
       .lean();
 
@@ -271,5 +304,100 @@ export const publicGetById = async (req, res) => {
     res.json(out);
   } catch (e) {
     res.status(500).json({ message: 'Failed to load flash sale' });
+  }
+};
+
+// Public: paginated items for a specific active flash sale
+export const publicGetActiveItems = async (req, res) => {
+  try {
+    const reqLang = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
+    const allowAutoTranslate = isDeepseekConfigured() && String(req.query.autoTranslate || 'false').toLowerCase() === 'true';
+    const slim = String(req.query.slim || 'true').toLowerCase() === 'true';
+    const page = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1);
+    const pageSize = Math.max(1, Math.min(100, parseInt(String(req.query.pageSize || '12'), 10) || 12));
+    const skip = (page - 1) * pageSize;
+
+    const { id } = req.params;
+    const now = new Date();
+    const s = await FlashSale.findOne({ _id: id, active: true, startDate: { $lte: now }, endDate: { $gte: now } })
+      .lean();
+    if (!s) return res.status(404).json({ message: 'Flash sale not found or not active' });
+
+    // Determine total count and fetch the current page of items
+    let totalItems = 0;
+    let pageItems = [];
+    const selectFields = slim
+      ? 'name images price originalPrice' // lean payload for storefront card
+      : 'name images colors attributeImages price originalPrice name_i18n';
+
+    if (s.targetType === 'categories') {
+      // Dynamic from categories: page directly on products query
+      const query = {
+        $or: [
+          { category: { $in: s.categoryIds || [] } },
+          { categories: { $in: s.categoryIds || [] } }
+        ]
+      };
+      totalItems = await Product.countDocuments(query);
+      const prods = await Product.find(query)
+        .select(selectFields + ' name_i18n')
+        .skip(skip)
+        .limit(pageSize)
+        .lean();
+      pageItems = prods.map((p, idx) => ({
+        product: p,
+        flashPrice: computePercentPrice(p.price || 0, Number(s.discountPercent)),
+        quantityLimit: 0,
+        order: skip + idx,
+      })).filter(it => it.flashPrice > 0);
+    } else {
+      // Manual items array: slice then hydrate only the subset
+      const baseItems = Array.isArray(s.items) ? s.items.slice().sort((a,b)=> (a.order||0)-(b.order||0)) : [];
+      totalItems = baseItems.length;
+      const slice = baseItems.slice(skip, skip + pageSize);
+      const productIds = slice.map(it => it.product).filter(Boolean);
+      const products = await Product.find({ _id: { $in: productIds } })
+        .select(selectFields + ' name_i18n')
+        .lean();
+      const productById = new Map(products.map(p => [String(p._id), p]));
+      pageItems = slice.map((it) => ({
+        product: productById.get(String(it.product)) || null,
+        flashPrice: it.flashPrice,
+        quantityLimit: it.quantityLimit,
+        order: it.order,
+      })).filter(x => x.product);
+    }
+
+    // Localize names if possible
+    if (reqLang) {
+      for (const it of pageItems) {
+        const p = it.product;
+        if (p && p.name_i18n) {
+          try {
+            const nm = (typeof p.name_i18n.get === 'function' ? p.name_i18n.get(reqLang) : p.name_i18n[reqLang]) || null;
+            if (nm) p.name = nm;
+            else if (allowAutoTranslate && typeof p.name === 'string' && p.name.trim()) {
+              try {
+                const tr = await deepseekTranslate(p.name, 'auto', reqLang);
+                // note: we don't persist here to keep endpoint fast
+                p.name = tr;
+              } catch {}
+            }
+          } catch {}
+        }
+        // Remove i18n data from payload if present to keep it slim
+        if (p && p.name_i18n) delete p.name_i18n;
+      }
+    }
+
+    try { const c = await getStoreCurrency(); res.set('X-Store-Currency', c); } catch {}
+    return res.json({
+      items: pageItems,
+      totalItems,
+      page,
+      pageSize,
+    });
+  } catch (e) {
+    res.status(500).json({ message: 'Failed to load flash sale items' });
   }
 };
