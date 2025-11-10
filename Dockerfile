@@ -45,6 +45,13 @@ RUN set -eux; \
 		fi; \
 		rm -rf /tmp/context
 
+# Optional diagnostic: show where the server entry should be
+RUN set -eux; \
+	echo "[diagnostic] Listing /app and /app/project and /app/server"; \
+	ls -la /app || true; \
+	ls -la /app/project || true; \
+	ls -la /app/server || true
+
 # Environment
 ENV NODE_ENV=${NODE_ENV}
 # Cloud Run provides $PORT; default to 8080 for local runs
@@ -53,5 +60,5 @@ ENV PORT=8080
 # Expose container port (for documentation; Cloud Run maps it)
 EXPOSE 8080
 
-# Start the API server (path stable now)
-CMD ["node", "server/index.js"]
+# Start the API server: try common entry locations to be resilient across layouts
+CMD ["/bin/sh", "-lc", "for p in /app/project/server/index.js /app/server/index.js /app/project/index.js /app/index.js; do if [ -f \"$p\" ]; then echo \"[startup] Starting node $p\"; exec node \"$p\"; fi; done; echo '[startup][error] No entry file found'; echo 'Tree of /app:'; ls -la /app; echo 'Tree of /app/project:'; ls -la /app/project || true; echo 'Tree of /app/server:'; ls -la /app/server || true; exit 1"]
