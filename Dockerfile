@@ -1,28 +1,30 @@
-## Cloud Run container for Node.js API when build CONTEXT is the REPO ROOT (Dockerfile in project/)
-## This version explicitly copies the project/ subfolder so CMD can find server/index.js at /app/project/server/index.js.
-
+# Cloud Run container for Node.js API (server lives under project/server)
+# Uses Node 20 LTS on a small Alpine base image.
 FROM node:20-alpine
 
-# Root workdir for staging copy
+# Container workdir
 WORKDIR /app
 
-# Copy only manifests first (from build context root) for layer caching
-COPY project/package*.json ./project/
+# NOTE: This Dockerfile assumes the Docker build CONTEXT is the project/ subfolder
+# (e.g., Cloud Build/Cloud Run configured with dir: project). If your context is the
+# repo root instead, use project/Dockerfile or adjust COPY paths accordingly.
 
-# Switch to project folder to install dependencies
-WORKDIR /app/project
+# Copy package manifests first for better layer caching (project-context)
+COPY package*.json ./
 
-# Install production dependencies (tolerate unsynced lockfile). Later prefer: npm ci --omit=dev
-RUN npm install --omit=dev --no-audit --no-fund
+# Install production dependencies only
+RUN npm ci --omit=dev || npm ci --only=production
 
-# Copy application source (only project subtree)
-COPY project/ /app/project/
+# Copy the rest of the project sources (project-context)
+COPY . ./
 
 # Environment
 ENV NODE_ENV=production
+# Cloud Run provides $PORT; default to 8080 for local runs
 ENV PORT=8080
 
+# Expose container port (for documentation; Cloud Run maps it)
 EXPOSE 8080
 
-# Explicit path after changing WORKDIR above
+# Start the API server from project root
 CMD ["node", "server/index.js"]
