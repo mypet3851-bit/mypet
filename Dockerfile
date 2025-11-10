@@ -16,18 +16,34 @@ WORKDIR /app/project
 # Copy only the app's package manifest(s) first for better layer caching.
 # Note: We copy both package.json and package-lock.json (if present) to leverage cache,
 # but we will gracefully fall back to `npm install` if `npm ci` detects a mismatch.
-COPY project/package.json ./
-COPY project/package-lock.json ./
+# Copy the entire build context to a temp location, then detect the app root.
+# This supports both contexts:
+#  - repo root (expects project/package.json)
+#  - project folder (expects package.json)
+COPY . /tmp/context
 
-# Install production dependencies only. Prefer reproducible `npm ci`,
-# but if lockfile is out-of-sync, fall back to `npm install --omit=dev`.
-RUN npm ci --omit=dev \
-	|| (echo "[warn] npm ci failed; falling back to npm install --omit=dev" \
-			&& rm -f package-lock.json \
-			&& npm install --omit=dev)
-
-# Copy the rest of the project sources
-COPY project/. ./
+# Detect app directory, copy into /app/project, then install production deps
+RUN set -eux; \
+		SRC=/tmp/context; \
+		if [ -f "$SRC/package.json" ]; then \
+			APP_DIR="$SRC"; \
+		elif [ -f "$SRC/project/package.json" ]; then \
+			APP_DIR="$SRC/project"; \
+		else \
+			echo "[error] Could not find package.json in build context or project/ subfolder"; \
+			ls -la "$SRC" || true; \
+			ls -la "$SRC/project" || true; \
+			exit 1; \
+		fi; \
+		mkdir -p /app/project; \
+		cp -R "$APP_DIR"/. /app/project/; \
+		cd /app/project; \
+		if [ -f package-lock.json ]; then \
+			(npm ci --omit=dev || (echo "[warn] npm ci failed; removing lock and npm install --omit=dev" && rm -f package-lock.json && npm install --omit=dev)); \
+		else \
+			npm install --omit=dev; \
+		fi; \
+		rm -rf /tmp/context
 
 # Environment
 ENV NODE_ENV=${NODE_ENV}
