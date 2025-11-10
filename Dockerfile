@@ -1,19 +1,19 @@
-# Cloud Run container for Node.js API (server lives under project/server)
-# Uses Node 20 LTS on a small Alpine base image.
+# Cloud Run container for the Node.js API using project/ as build context
+# Place this Dockerfile in the project/ folder and set Cloud Run to use this path.
+
 FROM node:20-alpine
 
-# Create app directory and set working dir to the project subfolder
+# Create app directory
 WORKDIR /app
 
 # Copy package manifests first for better layer caching
-COPY project/package*.json ./project/
+COPY package*.json ./
 
 # Install production dependencies only
-WORKDIR /app/project
 RUN npm ci --omit=dev || npm ci --only=production
 
-# Copy the rest of the project sources
-COPY project/ /app/project/
+# Copy the rest of the sources (server, public, scripts, etc.)
+COPY . ./
 
 # Environment
 ENV NODE_ENV=production
