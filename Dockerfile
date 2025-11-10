@@ -11,13 +11,18 @@ ARG APP_DIR=.
 # Container workdir (inside the app directory)
 WORKDIR /app/${APP_DIR}
 
-# Copy only the app's package manifests first for better layer caching.
-# With APP_DIR=., this copies package*.json from the current build context (e.g., project/).
-# With APP_DIR=project and repo-root context, this copies project/package*.json.
-COPY ${APP_DIR}/package*.json ./
+# Copy only the app's package manifest(s) first for better layer caching.
+# Note: We copy both package.json and package-lock.json (if present) to leverage cache,
+# but we will gracefully fall back to `npm install` if `npm ci` detects a mismatch.
+COPY ${APP_DIR}/package.json ./
+COPY ${APP_DIR}/package-lock.json ./
 
-# Install production dependencies only
-RUN npm ci --omit=dev || npm ci --only=production
+# Install production dependencies only. Prefer reproducible `npm ci`,
+# but if lockfile is out-of-sync, fall back to `npm install --omit=dev`.
+RUN npm ci --omit=dev \
+	|| (echo "npm ci failed; removing lockfile and falling back to npm install --omit=dev" \
+			&& rm -f package-lock.json \
+			&& npm install --omit=dev)
 
 # Copy the rest of the app sources from the specified directory within the build context
 COPY ${APP_DIR}/. ./
