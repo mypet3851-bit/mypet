@@ -2,21 +2,21 @@
 # Uses Node 20 LTS on a small Alpine base image.
 FROM node:20-alpine
 
-# Container workdir
-WORKDIR /app
+# Build argument to allow overriding the app directory (defaults to project)
+ARG APP_DIR=project
 
-# NOTE: This Dockerfile assumes the Docker build CONTEXT is the project/ subfolder
-# (e.g., Cloud Build/Cloud Run configured with dir: project). If your context is the
-# repo root instead, use project/Dockerfile or adjust COPY paths accordingly.
+# Container workdir (inside the app directory)
+WORKDIR /app/${APP_DIR}
 
-# Copy package manifests first for better layer caching (project-context)
-COPY package*.json ./
+# Copy only the app's package manifests first for better layer caching
+# This works when the Docker build context is the repo root.
+COPY ${APP_DIR}/package*.json ./
 
 # Install production dependencies only
 RUN npm ci --omit=dev || npm ci --only=production
 
-# Copy the rest of the project sources (project-context)
-COPY . ./
+# Copy the rest of the app sources from the specified directory
+COPY ${APP_DIR}/. ./
 
 # Environment
 ENV NODE_ENV=production
@@ -26,5 +26,5 @@ ENV PORT=8080
 # Expose container port (for documentation; Cloud Run maps it)
 EXPOSE 8080
 
-# Start the API server from project root
+# Start the API server from the app directory
 CMD ["node", "server/index.js"]
