@@ -575,7 +575,28 @@ export const getProduct = async (req, res) => {
       }
       const pctSales = sList.filter(s => s.targetType === 'categories' && Array.isArray(s.categoryIds) && s.categoryIds.length);
       if (fp == null && pctSales.length) {
-        const computePercentPrice = (base, pct) => {
+          // Support underscore-suffixed product id tokens like <productId>_<variantIndex>
+          // Frontend sometimes appends _<n> when selecting a variant for direct deep-linking.
+          // Example: 690dd5d9d4db98e7e3b24529_1 (1-based variant index)
+          const rawId = String(req.params.id || '').trim();
+          let baseId = rawId;
+          let variantIndex = null;
+          if (rawId.includes('_')) {
+            const parts = rawId.split('_');
+            baseId = parts[0];
+            const tail = parts[1];
+            if (tail && /^\d+$/.test(tail)) {
+              const parsed = Number(tail);
+              if (Number.isFinite(parsed) && parsed > 0) {
+                variantIndex = parsed - 1; // convert to 0-based
+              }
+            }
+          }
+          // Validate baseId is a 24-hex ObjectId; otherwise return 400 (avoid Mongoose CastError 500)
+          if (!/^[a-fA-F0-9]{24}$/.test(baseId)) {
+            return res.status(400).json({ message: 'Invalid product id' });
+          }
+          const product = await Product.findById(baseId)
           if (typeof base !== 'number' || !isFinite(base) || base <= 0) return 0;
           if (typeof pct !== 'number' || !isFinite(pct) || pct <= 0 || pct >= 100) return 0;
           const v = base * (1 - pct / 100);
@@ -635,6 +656,24 @@ export const getProduct = async (req, res) => {
           if (changed) { try { await product.save(); } catch {} }
         }
       } catch {}
+    }
+
+    // If a variantIndex was supplied, attach selectedVariant context & override price/stock/images if present.
+    if (variantIndex != null && Array.isArray(productObj.variants) && productObj.variants.length) {
+      const v = productObj.variants[variantIndex];
+      if (v) {
+        // Non-destructive: expose chosen variant under selectedVariant; override key pricing/display fields for convenience.
+        productObj.selectedVariant = v;
+        if (Number.isFinite(Number(v.price))) productObj.price = Number(v.price);
+        if (Number.isFinite(Number(v.originalPrice))) productObj.originalPrice = Number(v.originalPrice);
+        if (Number.isFinite(Number(v.stock))) productObj.stock = Number(v.stock);
+        if (Array.isArray(v.images) && v.images.length) {
+          // Provide variantImages separate from product images so client can decide merge behavior.
+          productObj.variantImages = v.images;
+        }
+      } else {
+        productObj._variantNotFound = true;
+      }
     }
 
     res.json(productObj);
