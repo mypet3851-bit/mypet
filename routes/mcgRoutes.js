@@ -81,7 +81,10 @@ router.get('/config', adminAuth, async (req, res) => {
   retailerKey: m.retailerKey ? '***' : '',
       retailerClientId: m.retailerClientId || '',
       taxMultiplier: typeof m.taxMultiplier === 'number' ? m.taxMultiplier : 1.18,
-      pushStockBackEnabled: !!m.pushStockBackEnabled
+      pushStockBackEnabled: !!m.pushStockBackEnabled,
+      autoPullEnabled: !!m.autoPullEnabled,
+      pullEveryMinutes: typeof m.pullEveryMinutes === 'number' ? m.pullEveryMinutes : 15,
+      autoCreateItemsEnabled: !!m.autoCreateItemsEnabled
     });
   } catch (e) {
     res.status(500).json({ message: e?.message || 'mcg_config_read_failed' });
@@ -157,6 +160,8 @@ router.put('/config', adminAuth, async (req, res) => {
       const m = Number(inc.pullEveryMinutes);
       if (Number.isFinite(m) && m >= 1 && m <= 720) s.mcg.pullEveryMinutes = Math.floor(m);
     }
+    if (typeof inc.autoCreateItemsEnabled !== 'undefined') s.mcg.autoCreateItemsEnabled = !!inc.autoCreateItemsEnabled;
+    if (typeof inc.autoCreatePlaceholderImage === 'string') s.mcg.autoCreatePlaceholderImage = inc.autoCreatePlaceholderImage.trim();
     try { s.markModified('mcg'); } catch {}
     await s.save();
     res.json({
@@ -177,7 +182,9 @@ router.put('/config', adminAuth, async (req, res) => {
       taxMultiplier: typeof s.mcg.taxMultiplier === 'number' ? s.mcg.taxMultiplier : 1.18,
       pushStockBackEnabled: !!s.mcg.pushStockBackEnabled,
       autoPullEnabled: !!s.mcg.autoPullEnabled,
-      pullEveryMinutes: typeof s.mcg.pullEveryMinutes === 'number' ? s.mcg.pullEveryMinutes : 15
+      pullEveryMinutes: typeof s.mcg.pullEveryMinutes === 'number' ? s.mcg.pullEveryMinutes : 15,
+      autoCreateItemsEnabled: !!s.mcg.autoCreateItemsEnabled,
+      autoCreatePlaceholderImage: s.mcg.autoCreatePlaceholderImage || ''
     });
   } catch (e) {
     res.status(500).json({ message: e?.message || 'mcg_config_update_failed' });

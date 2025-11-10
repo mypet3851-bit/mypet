@@ -387,9 +387,13 @@ settingsSchema.add({
     // When true, push stock decrements back to MCG as delta updates
     pushStockBackEnabled: { type: Boolean, default: false },
     // Automatic pull: periodically sync stock from MCG into local inventory
-    autoPullEnabled: { type: Boolean, default: false },
-    // How often to pull in minutes (min 1, default 15)
-    pullEveryMinutes: { type: Number, default: 15, min: 1 }
+    autoPullEnabled: { type: Boolean, default: true },
+    // How often to pull in minutes (min 1, default 1)
+    pullEveryMinutes: { type: Number, default: 1, min: 1 },
+    // Automatically create new Product documents for unseen MCG items during auto pull
+    autoCreateItemsEnabled: { type: Boolean, default: true },
+    // (Optional) placeholder image URL for auto-created items; when empty uses a generic placeholder service
+    autoCreatePlaceholderImage: { type: String, default: '' }
   }
 });
 
