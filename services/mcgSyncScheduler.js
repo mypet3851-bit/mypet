@@ -3,6 +3,7 @@
 
 import Settings from '../models/Settings.js';
 import Product from '../models/Product.js';
+import Category from '../models/Category.js';
 import Inventory from '../models/Inventory.js';
 import InventoryHistory from '../models/InventoryHistory.js';
 import Warehouse from '../models/Warehouse.js';
@@ -55,7 +56,26 @@ async function oneRun() {
     const baseUrl = String(mcg.baseUrl || '').trim();
     const isUpli = apiFlavor === 'uplicali' || /apis\.uplicali\.com/i.test(baseUrl) || /SuperMCG\/MCG_API/i.test(baseUrl);
 
-    let processed = 0, updated = 0, created = 0, skippedNoMatch = 0, errors = 0;
+    let processed = 0, updated = 0, created = 0, skippedNoMatch = 0, errors = 0, autoCreated = 0;
+
+    // Resolve default category for auto-created products (first existing or create 'Imported')
+    let defaultCategoryId = null;
+    if (mcg.autoCreateItemsEnabled) {
+      try {
+        const firstCat = await Category.findOne({}).select('_id name').sort({ createdAt: 1 });
+        if (firstCat) defaultCategoryId = firstCat._id;
+        if (!defaultCategoryId) {
+          const imported = await Category.findOneAndUpdate(
+            { name: 'Imported' },
+            { $setOnInsert: { name: 'Imported', description: 'Auto-created category for MCG imported items' } },
+            { new: true, upsert: true }
+          ).select('_id');
+          if (imported) defaultCategoryId = imported._id;
+        }
+      } catch (e) {
+        try { console.warn('[mcg][auto-pull] failed to resolve default category:', e?.message || e); } catch {}
+      }
+    }
 
     const processItems = async (items) => {
       for (const it of items) {
@@ -83,7 +103,44 @@ async function oneRun() {
             prod = await Product.findOne({ mcgItemId: mcgId }).select('_id');
           }
 
-          if (!prod) { skippedNoMatch++; continue; }
+          if (!prod) {
+            // Optionally auto-create product record
+            if (mcg.autoCreateItemsEnabled && defaultCategoryId) {
+              try {
+                const rawName = (it?.Name || it?.name || it?.ItemName || it?.ItemDescription || barcode || mcgId || 'Imported Item') + '';
+                const name = rawName.trim().slice(0, 160) || 'Imported Item';
+                const descSource = (it?.Description || it?.description || it?.ItemDescription || it?.LongDescription || name) + '';
+                const description = descSource.trim().length ? descSource.trim() : name;
+                const priceRaw = Number(it?.item_final_price ?? it?.finalPrice ?? it?.FinalPrice ?? it?.Price ?? it?.price ?? it?.item_price ?? 0);
+                const taxMultiplier = Number(mcg?.taxMultiplier || 1.18);
+                const price = Number.isFinite(priceRaw) ? Math.ceil(priceRaw * (taxMultiplier > 0 ? taxMultiplier : 1)) : 0;
+                const imgCandidate = (it?.ImageUrl || it?.image_url || it?.ImageURL || it?.image || it?.Image || '') + '';
+                const placeholder = (mcg.autoCreatePlaceholderImage || '').trim() || 'https://via.placeholder.com/600x600.png?text=Imported';
+                const images = [ (imgCandidate && /^(https?:\/\/|\/)/i.test(imgCandidate) ? imgCandidate : placeholder) ];
+                const doc = new Product({
+                  name,
+                  description,
+                  price,
+                  stock: qtySafe,
+                  images,
+                  category: defaultCategoryId,
+                  mcgItemId: mcgId || undefined,
+                  mcgBarcode: barcode || undefined,
+                  isNew: true
+                });
+                await doc.save();
+                autoCreated++;
+                prod = { _id: doc._id }; // allow inventory sync below
+              } catch (ce) {
+                // Duplicate key or validation errors -> skip silently to avoid blocking inventory sync
+                skippedNoMatch++;
+                continue;
+              }
+            } else {
+              skippedNoMatch++;
+              continue;
+            }
+          }
 
           if (variant && variant._id) {
             await upsertInventoryFor({ productId: prod._id, variantId: variant._id, qty: qtySafe });
@@ -109,7 +166,7 @@ async function oneRun() {
       await processItems(items);
     }
 
-    try { console.log('[mcg][auto-pull] processed=%d updated=%d created=%d skipped=%d errors=%d', processed, updated, created, skippedNoMatch, errors); } catch {}
+  try { console.log('[mcg][auto-pull] processed=%d updated=%d createdInv=%d autoCreatedProducts=%d skipped=%d errors=%d', processed, updated, created, autoCreated, skippedNoMatch, errors); } catch {}
     _lastRunAt = Date.now();
   } catch (e) {
     try { console.warn('[mcg][auto-pull] failed:', e?.message || e); } catch {}
@@ -124,8 +181,14 @@ export function startMcgSyncScheduler() {
     try {
       const s = await Settings.findOne().lean();
       const mcg = s?.mcg || {};
-      if (!mcg.enabled || !mcg.autoPullEnabled) return; // not enabled
-      const intervalMs = Math.max(1, Number(mcg.pullEveryMinutes || 15)) * 60 * 1000;
+      const envForce = String(process.env.MCG_AUTO_PULL || '').toLowerCase() === 'true';
+      const enabled = (mcg.enabled && (mcg.autoPullEnabled || envForce)) || (envForce && !!process.env.MCG_BASE_URL);
+      if (!enabled) return; // not enabled
+      const pullMinutesEnv = Number(process.env.MCG_PULL_MINUTES);
+      const configuredMinutes = Number.isFinite(pullMinutesEnv) && pullMinutesEnv > 0
+        ? pullMinutesEnv
+        : (mcg.pullEveryMinutes !== undefined && mcg.pullEveryMinutes !== null ? mcg.pullEveryMinutes : 1);
+      const intervalMs = Math.max(1, Number(configuredMinutes)) * 60 * 1000;
       if (!_lastRunAt || Date.now() - _lastRunAt >= intervalMs) {
         await oneRun();
       }
