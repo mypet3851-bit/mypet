@@ -8,8 +8,8 @@ FROM node:20-alpine
 # so paths resolve correctly.
 ARG APP_DIR=.
 
-# Container workdir (inside the app directory)
-WORKDIR /app/${APP_DIR}
+# Container workdir (fixed). We'll copy sources into /app regardless of context.
+WORKDIR /app
 
 # Copy only the app's package manifest(s) first for better layer caching.
 # Note: We copy both package.json and package-lock.json (if present) to leverage cache,
@@ -35,5 +35,7 @@ ENV PORT=8080
 # Expose container port (for documentation; Cloud Run maps it)
 EXPOSE 8080
 
-# Start the API server from the app directory
-CMD ["node", "server/index.js"]
+# Start the API server. Support both build contexts:
+#  - If sources are at /app (context=project), use server/index.js
+#  - If sources are under /app/project (context=repo-root), use project/server/index.js
+CMD ["/bin/sh", "-c", "if [ -f server/index.js ]; then exec node server/index.js; else exec node project/server/index.js; fi"]
