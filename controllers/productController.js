@@ -328,6 +328,59 @@ export const getProducts = async (req, res) => {
   }
 };
 
+// Lightweight stats endpoint for admin UI (total counts without loading all docs)
+export const getProductStats = async (req, res) => {
+  try {
+    // Support same category/brand resolution logic for consistency
+    let forceEmpty = false;
+    const catParam = req.query.category;
+    if (catParam && typeof catParam === 'string' && !/^[a-fA-F0-9]{24}$/.test(catParam)) {
+      try {
+        const catDoc = await Category.findOne({
+          $or: [ { slug: catParam }, { name: new RegExp(`^${catParam}$`, 'i') } ]
+        }).select('_id');
+        if (catDoc) {
+          req.query.category = catDoc._id.toString();
+        } else {
+          forceEmpty = true;
+        }
+      } catch {
+        forceEmpty = true;
+      }
+    }
+    if (!forceEmpty && (req.query.brand || req.query.brandSlug || req.query.brandName)) {
+      try {
+        if (req.query.brandSlug) {
+          const b = await Brand.findOne({ slug: String(req.query.brandSlug).toLowerCase() }).select('_id');
+          if (b) req.query.brand = b._id.toString(); else forceEmpty = true;
+        } else if (req.query.brand && /^[a-fA-F0-9]{24}$/.test(String(req.query.brand))) {
+          // already id; ok
+        } else if (req.query.brandName) {
+          const b = await Brand.findOne({ name: new RegExp(`^${String(req.query.brandName).trim()}$`, 'i') }).select('_id');
+          if (b) req.query.brand = b._id.toString(); else forceEmpty = true;
+        }
+      } catch {
+        forceEmpty = true;
+      }
+    }
+    if (forceEmpty) {
+      return res.json({ total: 0, active: 0 });
+    }
+    const query = await buildProductQuery(req.query);
+    // Total (including inactive if includeInactive=true used) already represented by query
+    const total = await Product.countDocuments(query);
+    // Active products count (ignoring includeInactive override) for quick dashboard stat
+    const baseActiveQuery = { ...query };
+    // Remove any forced isActive filter so we can compute independently
+    if (baseActiveQuery.isActive) delete baseActiveQuery.isActive;
+    const active = await Product.countDocuments({ ...baseActiveQuery, isActive: { $ne: false } });
+    res.json({ total, active });
+  } catch (e) {
+    console.error('Error fetching product stats:', e);
+    res.status(500).json({ message: 'Failed to fetch product stats' });
+  }
+};
+
 // Aggregate available filter facets from active products
 export const getProductFilters = async (req, res) => {
   try {

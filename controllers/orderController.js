@@ -7,6 +7,9 @@ import { inventoryService } from '../services/inventoryService.js';
 import { SUPPORTED_CURRENCIES } from '../utils/currency.js';
 import { realTimeEventService } from '../services/realTimeEventService.js';
 import { sendPushToAll, sendPushToAdmins } from '../services/pushService.js';
+// Mobile (Expo) push support
+import MobilePushToken from '../models/MobilePushToken.js';
+import { sendExpoPush } from '../services/expoPushService.js';
 import { whatsappFallbackForNewOrder } from '../services/whatsappFallbackService.js';
 import Settings from '../models/Settings.js';
 import jwt from 'jsonwebtoken';
@@ -421,14 +424,14 @@ export const createOrder = async (req, res) => {
     // Emit real-time event for new order
     realTimeEventService.emitNewOrder(savedOrder);
 
-    // Fire a web push notification targeted to admins (fallback broadcast if none subscribed)
-    let pushSent = 0;
+    // Fire web push notification targeted to admins (fallback broadcast)
+    let webPushSent = 0;
     try {
       const contactEnabled = String(process.env.WHATSAPP_CONTACT_IN_PUSH || 'false').toLowerCase() === 'true';
       const primaryContact = process.env.WHATSAPP_PRIMARY_CONTACT_NUMBER || '';
       const contactLine = (contactEnabled && primaryContact) ? ` • WhatsApp: ${primaryContact}` : '';
       const icon = '/favicon.svg';
-      const orderAdminUrl = `/admin/orders/${savedOrder._id}`; // more specific deep-link
+      const orderAdminUrl = `/admin/orders/${savedOrder._id}`; // deep-link target
       const payload = {
         title: 'New Order Received',
         body: `Order ${savedOrder.orderNumber} • ${savedOrder.items.length} item(s) • ${savedOrder.totalAmount} ${savedOrder.currency}${contactLine}`,
@@ -440,21 +443,57 @@ export const createOrder = async (req, res) => {
         silent: false,
         vibrate: [200,100,200]
       };
-      console.log('[Push][NewOrder] Prepared payload', payload);
+      console.log('[Push][NewOrder][Web] Prepared payload', payload);
       const adminResult = await sendPushToAdmins(payload);
-      console.log('[Push][NewOrder] Admin result', adminResult);
-      pushSent = adminResult.sent || 0;
-      if (pushSent === 0) {
+      console.log('[Push][NewOrder][Web] Admin result', adminResult);
+      webPushSent = adminResult.sent || 0;
+      if (webPushSent === 0) {
         const allResult = await sendPushToAll(payload);
-        console.log('[Push][NewOrder] Fallback broadcast result', allResult);
-        pushSent = allResult.sent || 0;
+        console.log('[Push][NewOrder][Web] Fallback broadcast result', allResult);
+        webPushSent = allResult.sent || 0;
       }
     } catch (pushErr) {
-      console.warn('Failed to send push for new order', pushErr);
+      console.warn('[Push][NewOrder][Web] Failed to send web push', pushErr);
     }
 
-    // If no push delivered, generate WhatsApp manual notification links (internal logging only)
-    if (pushSent === 0) {
+    // Fire Expo (mobile) push notifications to admin devices, fallback to all devices
+    let expoPushSent = 0;
+    try {
+      const expoEnable = String(process.env.EXPO_PUSH_ON_NEW_ORDER || 'true').toLowerCase() !== 'false';
+      if (expoEnable) {
+        // Aggregate admin tokens (similar to mobilePushController.broadcastToAdmins)
+        const adminTokensAgg = await MobilePushToken.aggregate([
+          { $lookup: { from: 'users', localField: 'user', foreignField: '_id', as: 'u' } },
+          { $unwind: '$u' },
+          { $match: { 'u.role': 'admin' } },
+          { $project: { expoPushToken: 1 } }
+        ]);
+        const adminTokens = adminTokensAgg.map(d => d.expoPushToken);
+        const title = 'طلب جديد'; // Arabic for "New Order"
+        const body = `${savedOrder.orderNumber} • ${savedOrder.items.length} عناصر • ${savedOrder.totalAmount} ${savedOrder.currency}`;
+        const data = { type: 'new-order', orderId: savedOrder._id.toString(), orderNumber: savedOrder.orderNumber, items: savedOrder.items.length };
+        if (adminTokens.length) {
+          const result = await sendExpoPush({ tokens: adminTokens, title, body, data });
+          console.log('[Push][NewOrder][Expo] Admin receipts', result);
+          expoPushSent = adminTokens.length; // assume delivery attempt count
+        }
+        if (expoPushSent === 0) {
+          // Fallback broadcast to all tokens
+          const allDocs = await MobilePushToken.find({}).lean().select('expoPushToken');
+          const allTokens = allDocs.map(d => d.expoPushToken);
+          if (allTokens.length) {
+            const resultAll = await sendExpoPush({ tokens: allTokens, title, body, data });
+            console.log('[Push][NewOrder][Expo] Fallback all receipts', resultAll);
+            expoPushSent = allTokens.length;
+          }
+        }
+      }
+    } catch (expoErr) {
+      console.warn('[Push][NewOrder][Expo] Failed to send expo push', expoErr);
+    }
+
+    // If no push delivered across both channels, generate WhatsApp manual notification links (internal logging only)
+    if ((webPushSent === 0) && (expoPushSent === 0)) {
       try {
         await whatsappFallbackForNewOrder(savedOrder);
       } catch (waErr) {

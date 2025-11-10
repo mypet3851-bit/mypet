@@ -142,3 +142,8 @@ export function stopMcgSyncScheduler() {
     _timer = null;
   }
 }
+
+// Admin-triggerable single run (useful for testing or forcing an immediate pull)
+export async function runMcgSyncOnce() {
+  await oneRun();
+}

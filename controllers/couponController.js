@@ -73,35 +73,36 @@ export const deleteCoupon = async (req, res) => {
 
 export const validateCoupon = async (req, res) => {
   try {
-    const { code, totalAmount } = req.body;
-    const coupon = await Coupon.findOne({ 
-      code: code.toUpperCase(),
+    // Support both POST body and optional GET query fallback
+    const codeRaw = (req.body?.code || req.query?.code || '').toString();
+    const totalAmountRaw = req.body?.totalAmount ?? req.query?.totalAmount ?? 0;
+    const totalAmount = Number(totalAmountRaw) || 0;
+
+    if (!codeRaw) {
+      return res.status(StatusCodes.BAD_REQUEST).json({ message: 'Coupon code is required' });
+    }
+
+    const code = codeRaw.toUpperCase();
+    const now = new Date();
+    const coupon = await Coupon.findOne({
+      code,
       isActive: true,
-      startDate: { $lte: new Date() },
-      endDate: { $gte: new Date() }
+      startDate: { $lte: now },
+      endDate: { $gte: now }
     });
 
     if (!coupon) {
-      return res.status(StatusCodes.NOT_FOUND).json({ 
-        message: 'Invalid or expired coupon code' 
-      });
+      return res.status(StatusCodes.NOT_FOUND).json({ message: 'Invalid or expired coupon code' });
     }
 
-    // Check minimum purchase requirement
     if (totalAmount < coupon.minPurchase) {
-      return res.status(StatusCodes.BAD_REQUEST).json({
-        message: `Minimum purchase amount of $${coupon.minPurchase} required`
-      });
+      return res.status(StatusCodes.BAD_REQUEST).json({ message: `Minimum purchase amount of $${coupon.minPurchase} required` });
     }
 
-    // Check usage limit
     if (coupon.usageLimit && coupon.usedCount >= coupon.usageLimit) {
-      return res.status(StatusCodes.BAD_REQUEST).json({
-        message: 'Coupon usage limit reached'
-      });
+      return res.status(StatusCodes.BAD_REQUEST).json({ message: 'Coupon usage limit reached' });
     }
 
-    // Calculate discount
     let discount = 0;
     if (coupon.type === 'percentage') {
       discount = (totalAmount * coupon.value) / 100;
@@ -112,10 +113,7 @@ export const validateCoupon = async (req, res) => {
       discount = coupon.value;
     }
 
-    res.json({
-      coupon,
-      discount: Number(discount.toFixed(2))
-    });
+    res.json({ coupon, discount: Number(discount.toFixed(2)) });
   } catch (error) {
     res.status(StatusCodes.INTERNAL_SERVER_ERROR).json({ message: error.message });
   }
