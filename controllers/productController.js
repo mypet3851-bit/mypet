@@ -1,32 +1,35 @@
+import Product from '../models/Product.js';
 // Get stock levels for a product or a specific generated variant.
-// Accepts either:
+// Supported path patterns:
 //   /api/products/:productId/stock
-//   /api/products/:productId_:variantIndex/stock   (where variantIndex is a numeric position)
-// The original implementation returned { productId, name, stock, sizes } for legacy color/size matrix.
-// We keep that shape for backward compatibility and add variant details when variantIndex is supplied.
+//   /api/products/:productId_:variantIndex/stock  (variantIndex numeric)
+//   /api/products/:productId_:variantId/stock     (variantId is 24-hex ObjectId of variant)
 export const getProductStock = async (req, res) => {
   const rawId = req.params.id;
   let productId = rawId;
-  let variantIndex = null;
-  // Pattern: 24 hex chars + '_' + digits -> treat as productId + variantIndex token.
-  const match = /^([a-fA-F0-9]{24})_(\d+)$/.exec(rawId);
-  if (match) {
-    productId = match[1];
-    variantIndex = parseInt(match[2], 10);
+  let variantIndex = null; // numeric index (client may send 1-based)
+  let variantId = null;    // explicit variant ObjectId
+
+  const compositeMatch = /^([a-fA-F0-9]{24})_([a-fA-F0-9]{24}|\d+)$/.exec(rawId);
+  if (compositeMatch) {
+    productId = compositeMatch[1];
+    const token = compositeMatch[2];
+    if (/^\d+$/.test(token)) {
+      variantIndex = parseInt(token, 10);
+    } else {
+      variantId = token.toLowerCase();
+    }
   }
 
-  // Basic ObjectId format validation before hitting mongoose (avoid CastError 500s)
   if (!/^([a-fA-F0-9]{24})$/.test(productId)) {
     return res.status(400).json({ message: 'Invalid product id format' });
   }
 
   try {
     const product = await Product.findById(productId).lean();
-    if (!product) {
-      return res.status(404).json({ message: 'Product not found' });
-    }
+    if (!product) return res.status(404).json({ message: 'Product not found' });
 
-    // Legacy sizes extraction (colors.sizes)
+    // Legacy size extraction from colors.sizes
     const legacySizes = Array.isArray(product.colors)
       ? product.colors.flatMap(color => (color?.sizes || []).map(sz => ({
           color: color?.name,
@@ -39,46 +42,12 @@ export const getProductStock = async (req, res) => {
       productId: product._id,
       name: product.name,
       stock: Number(product.stock) || 0,
-      sizes: legacySizes // kept for backward compatibility (may be empty when using new variants system)
+      sizes: legacySizes
     };
 
-    // Variant branch
-    if (variantIndex !== null) {
-      const variants = Array.isArray(product.variants) ? product.variants.filter(v => v?.isActive !== false) : [];
-      if (!variants.length) {
-        return res.status(404).json({ message: 'No variants found for product' });
-      }
-      // Support both 0-based and 1-based indexes: prefer exact, else try (index-1)
-      let idx = variantIndex;
-      if (idx < 0) idx = 0;
-      if (idx >= variants.length && (variantIndex - 1) >= 0 && (variantIndex - 1) < variants.length) {
-        idx = variantIndex - 1;
-      }
-      const variant = variants[idx];
-      if (!variant) {
-        return res.status(404).json({ message: 'Variant index out of range' });
-      }
-      // Aggregate variant list minimal info for clients wanting a quick stock map
-      response.variants = variants.map((v, i) => ({
-        index: i,
-        id: v._id,
-        sku: v.sku,
-        stock: Number(v.stock) || 0,
-        price: v.price != null ? v.price : product.price,
-        originalPrice: v.originalPrice != null ? v.originalPrice : product.originalPrice
-      }));
-      response.selectedVariant = {
-        index: idx,
-        id: variant._id,
-        sku: variant.sku,
-        stock: Number(variant.stock) || 0,
-        price: variant.price != null ? variant.price : product.price,
-        originalPrice: variant.originalPrice != null ? variant.originalPrice : product.originalPrice,
-        images: Array.isArray(variant.images) && variant.images.length ? variant.images : undefined
-      };
-    } else if (Array.isArray(product.variants) && product.variants.length) {
-      // When no specific variant requested, still expose aggregated variant stock map if variants exist.
-      response.variants = product.variants.filter(v => v?.isActive !== false).map((v, i) => ({
+    const activeVariants = Array.isArray(product.variants) ? product.variants.filter(v => v?.isActive !== false) : [];
+    if (activeVariants.length) {
+      response.variants = activeVariants.map((v, i) => ({
         index: i,
         id: v._id,
         sku: v.sku,
@@ -88,9 +57,39 @@ export const getProductStock = async (req, res) => {
       }));
     }
 
+    if (variantIndex !== null || variantId) {
+      let variant = null;
+      let resolvedIndex = null;
+      if (variantId) {
+        resolvedIndex = activeVariants.findIndex(v => String(v._id).toLowerCase() === variantId);
+        if (resolvedIndex >= 0) variant = activeVariants[resolvedIndex];
+      } else if (variantIndex !== null) {
+        let idx = variantIndex;
+        if (idx >= activeVariants.length && (variantIndex - 1) >= 0 && (variantIndex - 1) < activeVariants.length) {
+          idx = variantIndex - 1; // treat as 1-based fallback
+        }
+        resolvedIndex = idx;
+        variant = activeVariants[idx];
+      }
+
+      if (variant) {
+        response.selectedVariant = {
+          index: resolvedIndex,
+          id: variant._id,
+          sku: variant.sku,
+          stock: Number(variant.stock) || 0,
+          price: variant.price != null ? variant.price : product.price,
+          originalPrice: variant.originalPrice != null ? variant.originalPrice : product.originalPrice,
+          images: Array.isArray(variant.images) && variant.images.length ? variant.images : undefined
+        };
+      } else {
+        response.selectedVariant = null;
+        response.variantNotFound = true;
+      }
+    }
+
     return res.json(response);
   } catch (error) {
-    // Distinguish cast errors
     if (error?.name === 'CastError') {
       return res.status(400).json({ message: 'Invalid product id' });
     }
@@ -99,7 +98,6 @@ export const getProductStock = async (req, res) => {
   }
 };
 
-import Product from '../models/Product.js';
 import FlashSale from '../models/FlashSale.js';
 import Attribute from '../models/Attribute.js';
 import AttributeValue from '../models/AttributeValue.js';
