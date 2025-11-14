@@ -20,7 +20,11 @@ router.get('/config', async (req, res) => {
 	try {
 		const settings = await Settings.findOne();
 		const googleAuth = settings?.googleAuth || { enabled: false, clientId: '' };
-		res.json({ google: { enabled: !!googleAuth.enabled, clientId: googleAuth.clientId || '' } });
+		const facebookAuth = settings?.facebookAuth || { enabled: false, appId: '' };
+		res.json({
+			google: { enabled: !!googleAuth.enabled, clientId: googleAuth.clientId || '' },
+			facebook: { enabled: !!facebookAuth.enabled, appId: facebookAuth.appId || '' }
+		});
 	} catch (e) {
 		res.status(500).json({ message: 'Failed to load auth config' });
 	}

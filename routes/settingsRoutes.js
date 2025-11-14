@@ -118,6 +118,15 @@ router.get('/', async (req, res) => {
       };
       delete obj.googleAuth.clientSecret;
     }
+    if (obj.facebookAuth) {
+      obj.facebookAuth = {
+        enabled: !!obj.facebookAuth.enabled,
+        appId: obj.facebookAuth.appId || '',
+        secretSet: !!(obj.facebookAuth.appSecret && obj.facebookAuth.appSecret.length > 0),
+        graphVersion: obj.facebookAuth.graphVersion || ''
+      };
+      delete obj.facebookAuth.appSecret;
+    }
     // Translations (DeepSeek): mask secret
     if (obj.translations && obj.translations.deepseek) {
       obj.translations = obj.translations || {};
@@ -489,6 +498,25 @@ router.put('/', settingsWriteGuard, async (req, res) => {
         try { settings.markModified('googleAuth'); } catch {}
       }
 
+      // Facebook Auth (write-only appSecret)
+      if (req.body.facebookAuth && typeof req.body.facebookAuth === 'object') {
+        settings.facebookAuth = settings.facebookAuth || { enabled: false, appId: '', appSecret: '', graphVersion: '' };
+        const incomingFB = req.body.facebookAuth;
+        if (typeof incomingFB.enabled !== 'undefined') settings.facebookAuth.enabled = !!incomingFB.enabled;
+        if (typeof incomingFB.appId === 'string') settings.facebookAuth.appId = incomingFB.appId.trim();
+        if (typeof incomingFB.graphVersion === 'string') settings.facebookAuth.graphVersion = incomingFB.graphVersion.trim();
+        if (typeof incomingFB.appSecret === 'string') {
+          if (incomingFB.appSecret === '***') {
+            // preserve existing
+          } else if (incomingFB.appSecret === '') {
+            settings.facebookAuth.appSecret = '';
+          } else {
+            settings.facebookAuth.appSecret = incomingFB.appSecret.trim();
+          }
+        }
+        try { settings.markModified('facebookAuth'); } catch {}
+      }
+
       // Facebook Pixel
       if (req.body.facebookPixel && typeof req.body.facebookPixel === 'object') {
         settings.facebookPixel = {
@@ -669,7 +697,8 @@ router.put('/', settingsWriteGuard, async (req, res) => {
             // Auth pages background image
             authBackgroundImage: settings.authBackgroundImage,
             // Auth provider toggles
-            googleAuth: settings.googleAuth ? { enabled: !!settings.googleAuth.enabled, clientId: settings.googleAuth.clientId || '', secretSet: !!(settings.googleAuth.clientSecret && settings.googleAuth.clientSecret.length > 0) } : { enabled: false, clientId: '', secretSet: false }
+            googleAuth: settings.googleAuth ? { enabled: !!settings.googleAuth.enabled, clientId: settings.googleAuth.clientId || '', secretSet: !!(settings.googleAuth.clientSecret && settings.googleAuth.clientSecret.length > 0) } : { enabled: false, clientId: '', secretSet: false },
+            facebookAuth: settings.facebookAuth ? { enabled: !!settings.facebookAuth.enabled, appId: settings.facebookAuth.appId || '', secretSet: !!(settings.facebookAuth.appSecret && settings.facebookAuth.appSecret.length > 0), graphVersion: settings.facebookAuth.graphVersion || '' } : { enabled: false, appId: '', secretSet: false, graphVersion: '' }
           }
         });
       }
@@ -702,6 +731,14 @@ router.put('/', settingsWriteGuard, async (req, res) => {
         enabled: !!savedObj.googleAuth.enabled,
         clientId: savedObj.googleAuth.clientId || '',
         secretSet: !!(savedObj.googleAuth.clientSecret && savedObj.googleAuth.clientSecret.length > 0)
+      };
+    }
+    if (savedObj.facebookAuth) {
+      savedObj.facebookAuth = {
+        enabled: !!savedObj.facebookAuth.enabled,
+        appId: savedObj.facebookAuth.appId || '',
+        secretSet: !!(savedObj.facebookAuth.appSecret && savedObj.facebookAuth.appSecret.length > 0),
+        graphVersion: savedObj.facebookAuth.graphVersion || ''
       };
     }
     // Ensure addressLink always present for clients (empty string fallback)

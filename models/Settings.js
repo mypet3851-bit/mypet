@@ -312,6 +312,15 @@ const settingsSchema = new mongoose.Schema({
     clientId: { type: String, default: '' },
     // Write-only client secret (never returned in GET). If migrating to OAuth code flow.
     clientSecret: { type: String, default: '' }
+  },
+  // Facebook auth configuration (admin managed)
+  facebookAuth: {
+    enabled: { type: Boolean, default: false },
+    appId: { type: String, default: '' },
+    // Write-only App Secret (never returned in GET)
+    appSecret: { type: String, default: '' },
+    // Graph API version, optional (e.g., 'v19.0'). If empty, SDK default is used
+    graphVersion: { type: String, default: '' }
   }
 }, {
   timestamps: true
@@ -986,6 +995,11 @@ settingsSchema.statics.createDefaultSettings = async function() {
       // Ensure googleAuth exists
       if (!settings.googleAuth) {
         updateData.googleAuth = { enabled: false, clientId: '' };
+        needsUpdate = true;
+      }
+      // Ensure facebookAuth exists
+      if (!settings.facebookAuth) {
+        updateData.facebookAuth = { enabled: false, appId: '', appSecret: '', graphVersion: '' };
         needsUpdate = true;
       }
 
