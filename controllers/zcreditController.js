@@ -19,6 +19,7 @@ export const createSessionHandler = asyncHandler(async (req, res) => {
     customer,
     paymentType = 'regular',
     installments,
+    currency: reqCurrency,
     successUrl,
     cancelUrl,
     callbackUrl,
@@ -33,6 +34,34 @@ export const createSessionHandler = asyncHandler(async (req, res) => {
   }
 
   const { defaultSuccess, defaultCancel, defaultSuccessCb, defaultFailureCb } = buildDefaultUrls(req);
+
+  // Normalize cart items to include Amount and Currency as required by Z-Credit
+  const fallbackCurrency = (typeof reqCurrency === 'string' && reqCurrency) || process.env.STORE_CURRENCY || 'ILS';
+  const normalizedCartItems = cartItems.map((it) => {
+    const qty = Number(it?.Quantity ?? it?.quantity ?? 1) || 1;
+    const amountRaw = it?.Amount ?? it?.amount ?? it?.Price ?? it?.price;
+    const amt = Number(amountRaw);
+    const amount = Number.isFinite(amt) && amt > 0 ? +amt.toFixed(2) : 0;
+    const name = it?.Name || it?.name || 'Item';
+    const desc = it?.Description || it?.description || '';
+    const image = it?.Image || it?.image || '';
+    const currency = it?.Currency || it?.currency || fallbackCurrency;
+    return {
+      Amount: amount,
+      Currency: currency,
+      Name: name,
+      Description: desc,
+      Quantity: qty,
+      Image: image,
+      IsTaxFree: Boolean(it?.IsTaxFree ?? it?.isTaxFree ?? false),
+      AdjustAmount: Boolean(it?.AdjustAmount ?? it?.adjustAmount ?? false)
+    };
+  });
+
+  const total = normalizedCartItems.reduce((s, it) => s + (Number(it.Amount) || 0) * (Number(it.Quantity) || 0), 0);
+  if (!(total > 0)) {
+    return res.status(400).json({ message: 'Total cart amount must be greater than zero' });
+  }
 
   // Cap NumberOfFailures per provider constraint (error when >5)
   const maxFailures = 5;
@@ -61,7 +90,7 @@ export const createSessionHandler = asyncHandler(async (req, res) => {
     GooglePayButtonEnabled: req.body?.googlePayButtonEnabled ?? true,
     Installments: installments || undefined,
     Customer: customer || undefined,
-    CartItems: cartItems,
+    CartItems: normalizedCartItems,
     FocusType: req.body?.focusType || 'None',
     CardsIcons: req.body?.cardsIcons || undefined,
     IssuerWhiteList: req.body?.issuerWhiteList || undefined,
