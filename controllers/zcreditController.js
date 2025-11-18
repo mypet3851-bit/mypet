@@ -34,6 +34,14 @@ export const createSessionHandler = asyncHandler(async (req, res) => {
 
   const { defaultSuccess, defaultCancel, defaultSuccessCb, defaultFailureCb } = buildDefaultUrls(req);
 
+  // Cap NumberOfFailures per provider constraint (error when >5)
+  const maxFailures = 5;
+  const requestedFailures = typeof numberOfFailures === 'number' ? numberOfFailures : 99;
+  const effectiveFailures = Math.min(Math.max(1, requestedFailures), maxFailures);
+  if (requestedFailures !== effectiveFailures) {
+    try { console.warn('[zcredit][createSession] Adjusted NumberOfFailures from %s to %s (provider cap=%s)', requestedFailures, effectiveFailures, maxFailures); } catch {}
+  }
+
   const payload = {
     Local: req.body?.local || 'He',
     UniqueId: orderNumber || uniqueId || `wc_${Date.now()}`,
@@ -42,7 +50,7 @@ export const createSessionHandler = asyncHandler(async (req, res) => {
     CallbackUrl: callbackUrl || defaultSuccessCb,
     FailureCallBackUrl: failureCallbackUrl || defaultFailureCb,
     FailureRedirectUrl: failureRedirectUrl || '',
-    NumberOfFailures: typeof numberOfFailures === 'number' ? numberOfFailures : 99,
+    NumberOfFailures: effectiveFailures,
     PaymentType: paymentType,
     CreateInvoice: req.body?.createInvoice ?? false,
     AdditionalText: req.body?.additionalText || '',
