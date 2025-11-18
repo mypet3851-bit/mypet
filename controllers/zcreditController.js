@@ -77,6 +77,18 @@ export const createSessionHandler = asyncHandler(async (req, res) => {
     };
   });
 
+  // Final sanitization: drop any Image not strictly starting with https://
+  for (const item of normalizedCartItems) {
+    if (item.Image && !item.Image.startsWith('https://')) {
+      delete item.Image;
+    }
+  }
+
+  // Debug log (can be toggled off later)
+  if (process.env.NODE_ENV !== 'production') {
+    console.log('[zcredit][createSession] sanitized cart images:', normalizedCartItems.map(i => i.Image));
+  }
+
   const total = normalizedCartItems.reduce((s, it) => s + (Number(it.Amount) || 0) * (Number(it.Quantity) || 0), 0);
   if (!(total > 0)) {
     return res.status(400).json({ message: 'Total cart amount must be greater than zero' });
