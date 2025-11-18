@@ -16,6 +16,7 @@ export const createSessionHandler = asyncHandler(async (req, res) => {
     uniqueId,
     orderNumber,
     cartItems,
+    orderTotal,
     customer,
     paymentType = 'regular',
     installments,
@@ -35,7 +36,7 @@ export const createSessionHandler = asyncHandler(async (req, res) => {
 
   const { defaultSuccess, defaultCancel, defaultSuccessCb, defaultFailureCb } = buildDefaultUrls(req);
 
-  // Normalize cart items to include Amount and Currency as required by Z-Credit
+  // Normalize amounts and cart to include Order Total (if provided)
   const fallbackCurrency = (typeof reqCurrency === 'string' && reqCurrency) || process.env.STORE_CURRENCY || 'ILS';
   const normalizedCartItems = cartItems.map((it) => {
     const qty = Number(it?.Quantity ?? it?.quantity ?? 1) || 1;
@@ -77,8 +78,23 @@ export const createSessionHandler = asyncHandler(async (req, res) => {
     };
   });
 
+  // If caller provided an explicit order total, prefer sending a single consolidated item
+  let effectiveCart = normalizedCartItems;
+  const explicitTotal = Number(orderTotal);
+  if (Number.isFinite(explicitTotal) && explicitTotal > 0) {
+    effectiveCart = [{
+      Amount: +explicitTotal.toFixed(2),
+      Currency: fallbackCurrency,
+      Name: 'Order Total',
+      Description: 'Full order total (including shipping/discounts)',
+      Quantity: 1,
+      IsTaxFree: false,
+      AdjustAmount: false
+    }];
+  }
+
   // Final sanitization: drop any Image not strictly starting with https://
-  for (const item of normalizedCartItems) {
+  for (const item of effectiveCart) {
     if (item.Image && !item.Image.startsWith('https://')) {
       delete item.Image;
     }
@@ -86,10 +102,10 @@ export const createSessionHandler = asyncHandler(async (req, res) => {
 
   // Debug log (can be toggled off later)
   if (process.env.NODE_ENV !== 'production') {
-    console.log('[zcredit][createSession] sanitized cart images:', normalizedCartItems.map(i => i.Image));
+    console.log('[zcredit][createSession] sanitized cart images:', effectiveCart.map(i => i.Image));
   }
 
-  const total = normalizedCartItems.reduce((s, it) => s + (Number(it.Amount) || 0) * (Number(it.Quantity) || 0), 0);
+  const total = effectiveCart.reduce((s, it) => s + (Number(it.Amount) || 0) * (Number(it.Quantity) || 0), 0);
   if (!(total > 0)) {
     return res.status(400).json({ message: 'Total cart amount must be greater than zero' });
   }
@@ -126,7 +142,7 @@ export const createSessionHandler = asyncHandler(async (req, res) => {
     GooglePayButtonEnabled: req.body?.googlePayButtonEnabled ?? true,
     Installments: installments || undefined,
     Customer: customer || undefined,
-    CartItems: normalizedCartItems,
+    CartItems: effectiveCart,
     FocusType: req.body?.focusType || 'None',
     CardsIcons: req.body?.cardsIcons || undefined,
     IssuerWhiteList: req.body?.issuerWhiteList || undefined,
