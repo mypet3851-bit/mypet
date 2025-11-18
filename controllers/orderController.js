@@ -85,6 +85,13 @@ export const createOrder = async (req, res) => {
 
   try {
     console.log('createOrder called with body:', JSON.stringify(req.body, null, 2));
+    // Guard against SKIP_DB mode: meaningful error instead of opaque 500s when DB is intentionally disabled.
+    if (process.env.SKIP_DB === '1') {
+      return res.status(503).json({
+        message: 'Order creation unavailable with SKIP_DB=1. Disable SKIP_DB to persist orders and process payments.',
+        skipDb: true
+      });
+    }
   const { items, shippingAddress, paymentMethod, customerInfo } = req.body;
 
     // If the request includes a Bearer token, attempt to associate the order with the authenticated user
