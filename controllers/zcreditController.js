@@ -44,15 +44,34 @@ export const createSessionHandler = asyncHandler(async (req, res) => {
     const amount = Number.isFinite(amt) && amt > 0 ? +amt.toFixed(2) : 0;
     const name = it?.Name || it?.name || 'Item';
     const desc = it?.Description || it?.description || '';
-    const image = it?.Image || it?.image || '';
+    let image = it?.Image || it?.image || '';
     const currency = it?.Currency || it?.currency || fallbackCurrency;
+    if (typeof image === 'string') {
+      image = image.trim();
+      if (image) {
+        if (image.startsWith('http://')) {
+          image = 'https://' + image.slice('http://'.length);
+        } else if (image.startsWith('/')) {
+          const base = process.env.PUBLIC_WEB_URL || process.env.STORE_BASE_URL || ((req.protocol === 'https' ? 'https://' : 'http://') + req.get('host'));
+          image = base.replace(/\/$/, '') + image;
+        }
+        if (!image.startsWith('https://')) {
+          // If still not https, omit to avoid provider input error
+          image = undefined;
+        }
+      } else {
+        image = undefined;
+      }
+    } else {
+      image = undefined;
+    }
     return {
       Amount: amount,
       Currency: currency,
       Name: name,
       Description: desc,
       Quantity: qty,
-      Image: image,
+      Image: image, // Will be omitted if undefined when serialized
       IsTaxFree: Boolean(it?.IsTaxFree ?? it?.isTaxFree ?? false),
       AdjustAmount: Boolean(it?.AdjustAmount ?? it?.adjustAmount ?? false)
     };
