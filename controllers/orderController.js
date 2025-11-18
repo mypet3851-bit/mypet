@@ -151,8 +151,40 @@ export const createOrder = async (req, res) => {
     const exchangeRate = 1; // No runtime FX conversion; prices stored as-is
     const stockUpdates = []; // Track stock updates for rollback
 
+    // Defensive normalization of product/variant ids to avoid CastError from accidental suffixes
+    const isObjectId = (v) => typeof v === 'string' && /^[0-9a-fA-F]{24}$/.test(v);
+    const sanitizeItem = (it) => {
+      let productId = String(it.product || '');
+      let variantId = it.variantId ? String(it.variantId) : undefined;
+      const originalProductId = productId;
+      if (!isObjectId(productId)) {
+        // Try composite with colon (product:variant)
+        if (productId.includes(':')) {
+          const [pid, vid] = productId.split(':');
+          if (isObjectId(pid)) {
+            productId = pid;
+            if (!variantId && isObjectId(String(vid))) variantId = String(vid);
+          }
+        }
+      }
+      if (!isObjectId(productId) && productId.includes('_')) {
+        // Strip accidental UI suffix like _3
+        const [pid] = productId.split('_');
+        if (isObjectId(pid)) productId = pid;
+      }
+      if (originalProductId !== productId) {
+        try { console.warn('[createOrder] Normalized product id from %s to %s', originalProductId, productId); } catch {}
+      }
+      return { ...it, product: productId, variantId };
+    };
+    const normalizedItems = Array.isArray(items) ? items.map(sanitizeItem) : [];
+
   const reservationItems = [];
-  for (const item of items) {
+  for (const item of normalizedItems) {
+      if (!isObjectId(String(item.product))) {
+        if (session.inTransaction()) await session.abortTransaction();
+        return res.status(400).json({ message: `Invalid product id: ${String(item.product)}` });
+      }
       const baseProductQuery = Product.findById(item.product);
       const product = useTransaction ? await baseProductQuery.session(session) : await baseProductQuery;
 
