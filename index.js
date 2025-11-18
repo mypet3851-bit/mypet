@@ -66,6 +66,7 @@ import paymentsRoutes from './routes/paymentsRoutes.js';
 import pageRoutes from './routes/pageRoutes.js';
 import translateRoutes from './routes/translateRoutes.js';
 import formRoutes from './routes/formRoutes.js';
+import cancellationRequestRoutes from './routes/cancellationRequestRoutes.js';
 import flashSaleRoutes from './routes/flashSaleRoutes.js';
 import bundleOfferRoutes from './routes/bundleOfferRoutes.js';
 import attributeRoutes from './routes/attributeRoutes.js';
@@ -264,6 +265,7 @@ app.use('/api/rivhit', rivhitRoutes);
 app.use('/api/mcg', mcgRoutes);
 app.use('/api/zcredit', zcreditRoutes);
 app.use('/api/zcredit-gw', zcreditGatewayRoutes);
+app.use('/api/cancellation-requests', cancellationRequestRoutes);
 
 // Health Check Route
 app.get('/health', (req, res) => {
