@@ -102,11 +102,16 @@ export const createSessionHandler = asyncHandler(async (req, res) => {
     try { console.warn('[zcredit][createSession] Adjusted NumberOfFailures from %s to %s (provider cap=%s)', requestedFailures, effectiveFailures, maxFailures); } catch {}
   }
 
+  // Sanitize redirect URLs (provider requires http/https)
+  const isHttp = (u) => typeof u === 'string' && /^https?:\/\//i.test(u);
+  const safeSuccess = isHttp(successUrl) ? successUrl : (isHttp(defaultSuccess) ? defaultSuccess : undefined);
+  const safeCancel = isHttp(cancelUrl) ? cancelUrl : undefined; // optional; omit if invalid
+
   const payload = {
     Local: req.body?.local || 'He',
     UniqueId: orderNumber || uniqueId || `wc_${Date.now()}`,
-    SuccessUrl: successUrl || defaultSuccess,
-    CancelUrl: cancelUrl || defaultCancel,
+    SuccessUrl: safeSuccess,
+    ...(safeCancel ? { CancelUrl: safeCancel } : {}),
     CallbackUrl: callbackUrl || defaultSuccessCb,
     FailureCallBackUrl: failureCallbackUrl || defaultFailureCb,
     FailureRedirectUrl: failureRedirectUrl || '',
