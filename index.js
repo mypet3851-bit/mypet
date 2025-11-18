@@ -99,7 +99,7 @@ let APP_VERSION = process.env.APP_VERSION || '';
 try {
   if (!APP_VERSION) {
     // Attempt to read version from package.json one directory up
-    const pkg = await import(path.resolve(__dirname, '../package.json'), { assert: { type: 'json' } }).catch(() => null);
+    const pkg = await import(path.resolve(__dirname, '../package.json'), { with: { type: 'json' } }).catch(() => null);
     APP_VERSION = pkg?.default?.version || '0.0.0-dev';
   }
 } catch {}
