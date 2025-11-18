@@ -14,6 +14,7 @@ function buildDefaultUrls(req) {
 export const createSessionHandler = asyncHandler(async (req, res) => {
   const {
     uniqueId,
+    orderNumber,
     cartItems,
     customer,
     paymentType = 'regular',
@@ -35,7 +36,7 @@ export const createSessionHandler = asyncHandler(async (req, res) => {
 
   const payload = {
     Local: req.body?.local || 'He',
-    UniqueId: uniqueId || `wc_${Date.now()}`,
+    UniqueId: orderNumber || uniqueId || `wc_${Date.now()}`,
     SuccessUrl: successUrl || defaultSuccess,
     CancelUrl: cancelUrl || defaultCancel,
     CallbackUrl: callbackUrl || defaultSuccessCb,
@@ -94,14 +95,98 @@ export const successCallbackHandler = asyncHandler(async (req, res) => {
   try {
     console.log('[zcredit][callback][success]', JSON.stringify(req.body));
   } catch {}
-  res.json({ ok: true });
+
+  // Attempt to reconcile with existing order using UniqueID -> orderNumber
+  if (process.env.SKIP_DB === '1') {
+    return res.json({ ok: true, note: 'SKIP_DB=1; reconciliation skipped' });
+  }
+
+  try {
+    const { default: Order } = await import('../models/Order.js');
+    const uid = req.body?.UniqueID || req.body?.UniqueId || req.body?.uniqueId || '';
+    if (!uid) {
+      return res.json({ ok: true, warning: 'UniqueID missing in callback; order reconciliation skipped' });
+    }
+    const order = await Order.findOne({ orderNumber: uid });
+    if (!order) {
+      return res.json({ ok: true, warning: `Order not found by orderNumber=${uid}` });
+    }
+
+    // Update order payment fields
+    order.paymentMethod = order.paymentMethod || 'card';
+    order.paymentStatus = 'completed';
+    order.paymentReference = req.body?.ReferenceNumber || order.paymentReference;
+    const prevDetails = (order.paymentDetails && typeof order.paymentDetails === 'object') ? order.paymentDetails : {};
+    order.paymentDetails = {
+      ...prevDetails,
+      gateway: 'zcredit',
+      zcredit: {
+        SessionId: req.body?.SessionId,
+        ReferenceNumber: req.body?.ReferenceNumber,
+        ApprovalNumber: req.body?.ApprovalNumber,
+        Token: req.body?.Token,
+        VoucherNumber: req.body?.VoucherNumber,
+        InvoiceRecieptDocumentNumber: req.body?.InvoiceRecieptDocumentNumber,
+        InvoiceRecieptNumber: req.body?.InvoiceRecieptNumber,
+        CardNum: req.body?.CardNum,
+        ExpDate_MMYY: req.body?.ExpDate_MMYY,
+        PaymentMethod: req.body?.PaymentMethod
+      }
+    };
+    await order.save();
+
+    try {
+      const { realTimeEventService } = await import('../services/realTimeEventService.js');
+      realTimeEventService.emitOrderUpdate(order);
+    } catch {}
+
+    return res.json({ ok: true, orderId: order._id, orderNumber: order.orderNumber });
+  } catch (e) {
+    console.error('[zcredit][callback][success][reconcile] error', e?.message || e);
+    // Always 200 for provider; include note
+    return res.json({ ok: true, error: 'reconcile_failed' });
+  }
 });
 
 export const failureCallbackHandler = asyncHandler(async (req, res) => {
   try {
     console.warn('[zcredit][callback][failure]', JSON.stringify(req.body));
   } catch {}
-  res.json({ ok: true });
+
+  if (process.env.SKIP_DB === '1') {
+    return res.json({ ok: true, note: 'SKIP_DB=1; reconciliation skipped' });
+  }
+
+  try {
+    const { default: Order } = await import('../models/Order.js');
+    const uid = req.body?.UniqueID || req.body?.UniqueId || req.body?.uniqueId || '';
+    if (!uid) {
+      return res.json({ ok: true, warning: 'UniqueID missing in failure callback; order reconciliation skipped' });
+    }
+    const order = await Order.findOne({ orderNumber: uid });
+    if (!order) {
+      return res.json({ ok: true, warning: `Order not found by orderNumber=${uid}` });
+    }
+    order.paymentStatus = 'failed';
+    const prevDetails = (order.paymentDetails && typeof order.paymentDetails === 'object') ? order.paymentDetails : {};
+    order.paymentDetails = {
+      ...prevDetails,
+      gateway: 'zcredit',
+      zcreditFailure: {
+        ReturnCode: req.body?.ReturnCode,
+        ReturnMessage: req.body?.ReturnMessage
+      }
+    };
+    await order.save();
+    try {
+      const { realTimeEventService } = await import('../services/realTimeEventService.js');
+      realTimeEventService.emitOrderUpdate(order);
+    } catch {}
+    return res.json({ ok: true, orderId: order._id, orderNumber: order.orderNumber });
+  } catch (e) {
+    console.error('[zcredit][callback][failure][reconcile] error', e?.message || e);
+    return res.json({ ok: true, error: 'reconcile_failed' });
+  }
 });
 
 export default {
