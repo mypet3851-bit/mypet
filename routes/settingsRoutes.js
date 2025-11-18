@@ -433,6 +433,10 @@ router.put('/', settingsWriteGuard, async (req, res) => {
     // Preserve existing secrets when UI sends masked values like '***'
     const prevCloudinarySecret = settings?.cloudinary?.apiSecret;
     const prevPaypalSecret = settings?.payments?.paypal?.secret;
+    // Preserve existing visibility so partial updates do not wipe other flags
+    const prevVisibility = (settings?.payments?.visibility && typeof settings.payments.visibility === 'object')
+      ? { ...settings.payments.visibility }
+      : { card: true, cod: true, paypal: true };
 
     // Shallow assign for top-level scalars and simple objects
     Object.assign(settings, req.body);
@@ -464,7 +468,8 @@ router.put('/', settingsWriteGuard, async (req, res) => {
         }
         // Handle visibility sub-object
         if (req.body.payments.visibility && typeof req.body.payments.visibility === 'object') {
-          settings.payments.visibility = settings.payments.visibility || { card: true, cod: true, paypal: true };
+          // Start from previous persisted visibility (not from a possibly partially-overwritten object)
+          settings.payments.visibility = { ...prevVisibility };
           const vis = req.body.payments.visibility;
           // Basic validation: require booleans only
           ['card','cod','paypal'].forEach(k => {
