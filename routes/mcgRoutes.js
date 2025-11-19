@@ -427,8 +427,14 @@ router.post('/sync-items', adminAuth, async (req, res) => {
   // Duplicate rule (updated): dedupe ONLY by mcgItemId. Barcode duplicates are allowed by request.
   const isDupById = mcgId && (existId.has(mcgId) || seenIds.has(mcgId));
   if (isDupById) { skippedAsDuplicate++; continue; }
-  const name = (it?.Name ?? it?.name ?? it?.item_name ?? (barcode || mcgId || 'MCG Item')) + '';
-      const desc = (it?.Description ?? it?.description ?? (it?.item_department ? `Department: ${it.item_department}` : 'Imported from MCG')) + '';
+  // Prefer human-friendly names: ItemName/Name; fall back to ItemDescription/Description when name looks numeric.
+  const numericLike = (s) => /^\d{8,}$/.test(String(s||''));
+  let name = (it?.ItemName ?? it?.Name ?? it?.name ?? it?.item_name ?? it?.ItemDescription ?? it?.Description ?? '') + '';
+  name = name.trim();
+  const desc = (it?.ItemDescription ?? it?.Description ?? it?.description ?? (it?.item_department ? `Department: ${it.item_department}` : 'Imported from MCG')) + '';
+  if (!name || numericLike(name)) {
+    name = (desc || barcode || mcgId || 'MCG Item') + '';
+  }
       // Prefer provider's final (VAT-inclusive) price when available; otherwise apply configured tax multiplier
       let price = 0;
       if (it && (it.item_final_price !== undefined && it.item_final_price !== null)) {
@@ -460,6 +466,7 @@ router.post('/sync-items', adminAuth, async (req, res) => {
         relatedProducts: [],
         isActive: true,
         mcgItemId: mcgId || undefined,
+        // Keep real barcode when present; UI will display mcgItemId if barcode is missing
         mcgBarcode: barcode || undefined,
         ...(name_i18n ? { name_i18n } : {}),
         ...(description_i18n ? { description_i18n } : {})
@@ -688,8 +695,10 @@ router.post('/backfill-names', adminAuth, async (req, res) => {
       const it = (id && itemsById.get(id)) || (bc && itemsByBarcode.get(bc)) || null;
       if (!it) { notFound++; continue; }
 
-      const srcName = (it?.Name ?? it?.name ?? it?.item_name ?? '').toString().trim();
-      const srcDesc = (it?.Description ?? it?.description ?? (it?.item_department ? `Department: ${it.item_department}` : '')).toString();
+      const pickRawName = (it?.ItemName ?? it?.Name ?? it?.name ?? it?.item_name ?? it?.ItemDescription ?? it?.Description ?? '').toString().trim();
+      const srcDesc = (it?.ItemDescription ?? it?.Description ?? it?.description ?? (it?.item_department ? `Department: ${it.item_department}` : '')).toString();
+      const isNumericLike = (s) => /^\d{8,}$/.test(String(s||''));
+      const srcName = (pickRawName && !isNumericLike(pickRawName)) ? pickRawName : (srcDesc || pickRawName);
       if (!srcName) { skipped++; continue; }
 
       const curr = String(p.name || '').trim();
