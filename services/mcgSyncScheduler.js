@@ -121,15 +121,16 @@ async function oneRun() {
                 const taxMultiplier = Number(mcg?.taxMultiplier || 1.18);
                 const price = Number.isFinite(priceRaw) ? Math.ceil(priceRaw * (taxMultiplier > 0 ? taxMultiplier : 1)) : 0;
                 const imgCandidate = (it?.ImageUrl || it?.image_url || it?.ImageURL || it?.image || it?.Image || '') + '';
-                 // Prefer provided image; otherwise use a lightweight inline SVG (data URI) to avoid external network dependency
-                 const placeholder = firstImage || (
-                   'data:image/svg+xml;utf8,' + encodeURIComponent(
-                     '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="600">\n' +
-                     '<rect width="600" height="600" fill="#eef2f7"/>\n' +
-                     '<text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-size="38" fill="#64748b" font-family="Arial, sans-serif">Imported</text>\n' +
-                     '</svg>'
-                   )
-                 );
+                // Configurable placeholder (Settings.mcg.autoCreatePlaceholderImage) or fallback inline SVG
+                const placeholderCfg = (mcg?.autoCreatePlaceholderImage || '').trim();
+                const placeholder = (placeholderCfg && /^(https?:\/\/|\/|data:image)/i.test(placeholderCfg))
+                  ? placeholderCfg
+                  : 'data:image/svg+xml;utf8,' + encodeURIComponent(
+                      '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="600">\n' +
+                      '<rect width="600" height="600" fill="#eef2f7"/>\n' +
+                      '<text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-size="38" fill="#64748b" font-family="Arial, sans-serif">Imported</text>\n' +
+                      '</svg>'
+                    );
                 const images = [ (imgCandidate && /^(https?:\/\/|\/)/i.test(imgCandidate) ? imgCandidate : placeholder) ];
                 const doc = new Product({
                   name,
