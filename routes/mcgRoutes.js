@@ -85,6 +85,7 @@ router.get('/config', adminAuth, async (req, res) => {
       autoPullEnabled: !!m.autoPullEnabled,
       pullEveryMinutes: typeof m.pullEveryMinutes === 'number' ? m.pullEveryMinutes : 15,
       autoCreateItemsEnabled: !!m.autoCreateItemsEnabled
+      , autoPullAllPages: !!m.autoPullAllPages
     });
   } catch (e) {
     res.status(500).json({ message: e?.message || 'mcg_config_read_failed' });
@@ -161,6 +162,7 @@ router.put('/config', adminAuth, async (req, res) => {
       if (Number.isFinite(m) && m >= 1 && m <= 720) s.mcg.pullEveryMinutes = Math.floor(m);
     }
     if (typeof inc.autoCreateItemsEnabled !== 'undefined') s.mcg.autoCreateItemsEnabled = !!inc.autoCreateItemsEnabled;
+    if (typeof inc.autoPullAllPages !== 'undefined') s.mcg.autoPullAllPages = !!inc.autoPullAllPages;
     if (typeof inc.autoCreatePlaceholderImage === 'string') s.mcg.autoCreatePlaceholderImage = inc.autoCreatePlaceholderImage.trim();
     try { s.markModified('mcg'); } catch {}
     await s.save();
