@@ -29,6 +29,19 @@ router.use((req, res, next) => {
 // POST /api/uploads/product-image
 router.post('/product-image', adminAuth, upload.single('file'), uploadProductImage);
 
+// GET helper (browsers hitting the URL directly with GET will otherwise 404 via global handler).
+// Respond with 405 Method Not Allowed and usage instructions.
+router.get('/product-image', (req, res) => {
+	try {
+		// CORS headers already set by router.use above; just return guidance
+		res.status(405).json({
+			message: 'Use POST multipart/form-data with field name "file" at this endpoint. Include Authorization if required.'
+		});
+	} catch (e) {
+		res.status(405).json({ message: 'Use POST multipart/form-data with field name "file".' });
+	}
+});
+
 // POST /api/uploads/announcement-icon  (stores in 'announcements/icons' folder)
 router.post('/announcement-icon', adminAuth, upload.single('file'), (req, res, next) => {
 	// Inject default folder for announcement icons
