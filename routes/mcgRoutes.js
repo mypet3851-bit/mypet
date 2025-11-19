@@ -626,6 +626,98 @@ router.post('/sync-items', adminAuth, async (req, res) => {
   }
 });
 
+// Backfill product names/descriptions for existing items from MCG
+// POST /api/mcg/backfill-names
+// Behavior:
+// - Reads the full items list from MCG (single call for Uplîcali, paged for legacy)
+// - For each local Product that has mcgItemId or mcgBarcode, if its current name is empty,
+//   equals its barcode, equals its mcgItemId, or is a long numeric-only token (likely EAN),
+//   updates name/description from the MCG item fields. Language is detected heuristically
+//   and stored into name_i18n/description_i18n maps as well (base name remains readable).
+router.post('/backfill-names', adminAuth, async (req, res) => {
+  try {
+    const s = await Settings.findOne();
+    if (!s?.mcg?.enabled) return res.status(412).json({ message: 'MCG integration disabled' });
+
+    const apiFlavor = String(s?.mcg?.apiFlavor || '').trim().toLowerCase();
+    const baseUrl = String(s?.mcg?.baseUrl || '').trim();
+    const isUpli = apiFlavor === 'uplicali' || /apis\.uplicali\.com/i.test(baseUrl) || /SuperMCG\/MCG_API/i.test(baseUrl);
+
+    // Pull items from MCG
+    const itemsById = new Map();
+    const itemsByBarcode = new Map();
+    const addItem = (it) => {
+      if (!it) return;
+      const id = ((it?.ItemID ?? it?.id ?? it?.itemId ?? it?.item_id ?? '') + '').trim();
+      const bc = ((it?.Barcode ?? it?.barcode ?? it?.item_code ?? '') + '').trim();
+      if (id) itemsById.set(id, it);
+      if (bc) itemsByBarcode.set(bc, it);
+    };
+
+    const effPageSize = 500;
+    if (isUpli) {
+      const data = await getItemsList({});
+      const list = Array.isArray(data?.items) ? data.items : (Array.isArray(data?.Items) ? data.Items : (Array.isArray(data) ? data : []));
+      for (const it of list) addItem(it);
+    } else {
+      let pageNum = 1;
+      while (true) {
+        const data = await getItemsList({ PageNumber: pageNum, PageSize: effPageSize });
+        const list = Array.isArray(data?.Items) ? data.Items : (Array.isArray(data) ? data : []);
+        if (!list.length) break;
+        for (const it of list) addItem(it);
+        if (list.length < effPageSize) break;
+        pageNum += 1;
+        if (pageNum > 10000) break; // absolute safety
+      }
+    }
+
+    // Fetch mapped products
+    const products = await Product.find({ $or: [
+      { mcgItemId: { $exists: true, $ne: '' } },
+      { mcgBarcode: { $exists: true, $ne: '' } }
+    ] }).select('name description mcgItemId mcgBarcode name_i18n description_i18n').lean();
+
+    const isNumericLike = (s) => /^\d{8,}$/.test(String(s||''));
+    let checked = 0; let updated = 0; let skipped = 0; let notFound = 0;
+    const bulk = [];
+    for (const p of products) {
+      checked++;
+      const id = String(p.mcgItemId || '').trim();
+      const bc = String(p.mcgBarcode || '').trim();
+      const it = (id && itemsById.get(id)) || (bc && itemsByBarcode.get(bc)) || null;
+      if (!it) { notFound++; continue; }
+
+      const srcName = (it?.Name ?? it?.name ?? it?.item_name ?? '').toString().trim();
+      const srcDesc = (it?.Description ?? it?.description ?? (it?.item_department ? `Department: ${it.item_department}` : '')).toString();
+      if (!srcName) { skipped++; continue; }
+
+      const curr = String(p.name || '').trim();
+      const shouldReplace = !curr || curr === id || curr === bc || isNumericLike(curr) || curr.toLowerCase() === 'mcg item';
+      if (!shouldReplace) { skipped++; continue; }
+
+      const lang = detectLangFromText(`${srcName} ${srcDesc}`);
+      const set = { name: srcName };
+      if (srcDesc) set.description = srcDesc;
+      if (lang && lang !== 'en') {
+        set[`name_i18n.${lang}`] = srcName;
+        if (srcDesc) set[`description_i18n.${lang}`] = srcDesc;
+      }
+      bulk.push({ updateOne: { filter: { _id: p._id }, update: { $set: set } } });
+      updated++;
+    }
+
+    if (bulk.length) {
+      try { await Product.bulkWrite(bulk, { ordered: false }); } catch {}
+    }
+
+    return res.json({ ok: true, checked, updated, skipped, notFound, itemsById: itemsById.size, itemsByBarcode: itemsByBarcode.size });
+  } catch (e) {
+    const status = e?.status || e?.response?.status || 500;
+    res.status(status).json({ message: e?.message || 'mcg_backfill_names_failed' });
+  }
+});
+
 // Sync a single existing product from MCG by mcgItemId or mcgBarcode
 router.post('/sync-product/:productId', adminAuth, async (req, res) => {
   try {
