@@ -155,6 +155,32 @@ async function oneRun() {
       }
     };
 
+    // Test hook: allow injecting mock items via env var to avoid real MCG calls
+    const mockEnv = process.env.MCG_MOCK_ITEMS;
+    if (mockEnv) {
+      try {
+        let items = [];
+        try {
+          items = JSON.parse(mockEnv);
+        } catch {
+          try {
+            const fs = await import('fs');
+            if (fs.default && fs.default.existsSync(mockEnv)) {
+              const raw = fs.default.readFileSync(mockEnv, 'utf8');
+              items = JSON.parse(raw);
+            }
+          } catch {}
+        }
+        if (Array.isArray(items)) {
+          await processItems(items);
+          try { console.log('[mcg][auto-pull] used MCG_MOCK_ITEMS, count=%d', items.length); } catch {}
+          _lastRunAt = Date.now();
+          _inFlight = false;
+          return;
+        }
+      } catch {}
+    }
+
     if (isUpli) {
       const data = await getItemsList({});
       const items = Array.isArray(data?.items || data?.data || data?.Items) ? (data?.items || data?.data || data?.Items) : (Array.isArray(data) ? data : []);
