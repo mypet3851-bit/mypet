@@ -107,15 +107,29 @@ async function oneRun() {
             // Optionally auto-create product record
             if (mcg.autoCreateItemsEnabled && defaultCategoryId) {
               try {
-                const rawName = (it?.Name || it?.name || it?.ItemName || it?.ItemDescription || barcode || mcgId || 'Imported Item') + '';
+                // Improved field mapping: prefer ItemName/Name; fall back to ItemDescription/Description when name is missing or numeric-like (EAN-style)
+                const numericLike = (s) => /^\d{8,}$/.test(String(s||''));
+                let rawName = (it?.ItemName ?? it?.Name ?? it?.name ?? it?.item_name ?? '') + '';
+                const descSourceFull = (it?.ItemDescription ?? it?.Description ?? it?.description ?? it?.LongDescription ?? '') + '';
+                if (!rawName || numericLike(rawName)) {
+                  rawName = descSourceFull || barcode || mcgId || 'Imported Item';
+                }
                 const name = rawName.trim().slice(0, 160) || 'Imported Item';
-                const descSource = (it?.Description || it?.description || it?.ItemDescription || it?.LongDescription || name) + '';
-                const description = descSource.trim().length ? descSource.trim() : name;
+                const descSource = (descSourceFull || name) + '';
+                const description = descSource.trim().length ? descSource.trim().slice(0, 5000) : name;
                 const priceRaw = Number(it?.item_final_price ?? it?.finalPrice ?? it?.FinalPrice ?? it?.Price ?? it?.price ?? it?.item_price ?? 0);
                 const taxMultiplier = Number(mcg?.taxMultiplier || 1.18);
                 const price = Number.isFinite(priceRaw) ? Math.ceil(priceRaw * (taxMultiplier > 0 ? taxMultiplier : 1)) : 0;
                 const imgCandidate = (it?.ImageUrl || it?.image_url || it?.ImageURL || it?.image || it?.Image || '') + '';
-                const placeholder = (mcg.autoCreatePlaceholderImage || '').trim() || 'https://via.placeholder.com/600x600.png?text=Imported';
+                 // Prefer provided image; otherwise use a lightweight inline SVG (data URI) to avoid external network dependency
+                 const placeholder = firstImage || (
+                   'data:image/svg+xml;utf8,' + encodeURIComponent(
+                     '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="600">\n' +
+                     '<rect width="600" height="600" fill="#eef2f7"/>\n' +
+                     '<text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-size="38" fill="#64748b" font-family="Arial, sans-serif">Imported</text>\n' +
+                     '</svg>'
+                   )
+                 );
                 const images = [ (imgCandidate && /^(https?:\/\/|\/)/i.test(imgCandidate) ? imgCandidate : placeholder) ];
                 const doc = new Product({
                   name,
