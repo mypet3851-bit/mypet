@@ -443,13 +443,21 @@ router.put('/', settingsWriteGuard, async (req, res) => {
 
     // Deep handling for known nested structures and secret preservation
     if (req.body && typeof req.body === 'object') {
-      // Cloudinary
+      // Cloudinary (preserve existing apiSecret when omitted in partial updates)
       if (req.body.cloudinary && typeof req.body.cloudinary === 'object') {
         settings.cloudinary = settings.cloudinary || {};
-        if (typeof req.body.cloudinary.cloudName === 'string') settings.cloudinary.cloudName = req.body.cloudinary.cloudName;
-        if (typeof req.body.cloudinary.apiKey === 'string') settings.cloudinary.apiKey = req.body.cloudinary.apiKey;
-        if (typeof req.body.cloudinary.apiSecret === 'string') {
-          settings.cloudinary.apiSecret = req.body.cloudinary.apiSecret === '***' ? prevCloudinarySecret : req.body.cloudinary.apiSecret;
+        const incoming = req.body.cloudinary;
+        if (typeof incoming.cloudName === 'string') settings.cloudinary.cloudName = incoming.cloudName;
+        if (typeof incoming.apiKey === 'string') settings.cloudinary.apiKey = incoming.apiKey;
+        if (Object.prototype.hasOwnProperty.call(incoming, 'apiSecret')) {
+          if (typeof incoming.apiSecret === 'string') {
+            settings.cloudinary.apiSecret = incoming.apiSecret === '***' ? prevCloudinarySecret : incoming.apiSecret;
+          } else if (incoming.apiSecret === null) {
+            settings.cloudinary.apiSecret = '';
+          }
+        } else if (typeof prevCloudinarySecret === 'string' && prevCloudinarySecret) {
+          // apiSecret not provided -> keep previous value instead of losing it due to Object.assign overwrite
+          settings.cloudinary.apiSecret = prevCloudinarySecret;
         }
         try { settings.markModified('cloudinary'); } catch {}
       }
