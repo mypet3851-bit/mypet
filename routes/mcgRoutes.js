@@ -83,7 +83,7 @@ router.get('/config', adminAuth, async (req, res) => {
       taxMultiplier: typeof m.taxMultiplier === 'number' ? m.taxMultiplier : 1.18,
       pushStockBackEnabled: !!m.pushStockBackEnabled,
       autoPullEnabled: !!m.autoPullEnabled,
-      pullEveryMinutes: typeof m.pullEveryMinutes === 'number' ? m.pullEveryMinutes : 15,
+      pullEveryMinutes: typeof m.pullEveryMinutes === 'number' ? m.pullEveryMinutes : 1,
       autoCreateItemsEnabled: !!m.autoCreateItemsEnabled
       , autoPullAllPages: !!m.autoPullAllPages
     });
@@ -184,7 +184,7 @@ router.put('/config', adminAuth, async (req, res) => {
       taxMultiplier: typeof s.mcg.taxMultiplier === 'number' ? s.mcg.taxMultiplier : 1.18,
       pushStockBackEnabled: !!s.mcg.pushStockBackEnabled,
       autoPullEnabled: !!s.mcg.autoPullEnabled,
-      pullEveryMinutes: typeof s.mcg.pullEveryMinutes === 'number' ? s.mcg.pullEveryMinutes : 15,
+      pullEveryMinutes: typeof s.mcg.pullEveryMinutes === 'number' ? s.mcg.pullEveryMinutes : 1,
       autoCreateItemsEnabled: !!s.mcg.autoCreateItemsEnabled,
       autoCreatePlaceholderImage: s.mcg.autoCreatePlaceholderImage || ''
     });
