@@ -402,7 +402,9 @@ settingsSchema.add({
     // Automatically create new Product documents for unseen MCG items during auto pull
     autoCreateItemsEnabled: { type: Boolean, default: true },
     // (Optional) placeholder image URL for auto-created items; when empty uses a generic placeholder service
-    autoCreatePlaceholderImage: { type: String, default: '' }
+    autoCreatePlaceholderImage: { type: String, default: '' },
+    // When true (legacy flavor), auto-pull loops through all pages instead of only first page
+    autoPullAllPages: { type: Boolean, default: false }
   }
 });
 

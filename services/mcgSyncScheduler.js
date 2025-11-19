@@ -160,10 +160,24 @@ async function oneRun() {
       const items = Array.isArray(data?.items || data?.data || data?.Items) ? (data?.items || data?.data || data?.Items) : (Array.isArray(data) ? data : []);
       await processItems(items);
     } else {
-      // Legacy: pull one page of 200 to reduce load; admin can run full sync endpoint for all pages
-      const data = await getItemsList({ PageNumber: 1, PageSize: 200 });
-      const items = Array.isArray(data?.Items) ? data.Items : (Array.isArray(data) ? data : []);
-      await processItems(items);
+      // Legacy flavor: optionally loop all pages when autoPullAllPages enabled; otherwise only first page (200 items)
+      const pageSize = 200;
+      if (mcg.autoPullAllPages) {
+        let page = 1;
+        while (true) {
+          const data = await getItemsList({ PageNumber: page, PageSize: pageSize });
+          const items = Array.isArray(data?.Items) ? data.Items : (Array.isArray(data) ? data : []);
+          if (!items.length) break;
+          await processItems(items);
+          if (items.length < pageSize) break; // last page
+          page++;
+          if (page > 100) break; // safety cap
+        }
+      } else {
+        const data = await getItemsList({ PageNumber: 1, PageSize: pageSize });
+        const items = Array.isArray(data?.Items) ? data.Items : (Array.isArray(data) ? data : []);
+        await processItems(items);
+      }
     }
 
   try { console.log('[mcg][auto-pull] processed=%d updated=%d createdInv=%d autoCreatedProducts=%d skipped=%d errors=%d', processed, updated, created, autoCreated, skippedNoMatch, errors); } catch {}
