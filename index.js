@@ -280,6 +280,20 @@ app.use(errorHandler);
 
 // 404 handler
 app.use((req, res) => {
+  try {
+    const origin = req.headers.origin;
+    if (origin) {
+      if (!res.getHeader('Access-Control-Allow-Origin')) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+      }
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      const vary = res.getHeader('Vary');
+      if (!vary) res.setHeader('Vary', 'Origin');
+      else if (!String(vary).includes('Origin')) res.setHeader('Vary', vary + ', Origin');
+    } else if (!res.getHeader('Access-Control-Allow-Origin')) {
+      res.setHeader('Access-Control-Allow-Origin', '*');
+    }
+  } catch {}
   res.status(404).json({ message: 'Route not found' });
 });
 

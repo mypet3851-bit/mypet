@@ -10,7 +10,9 @@ export const errorHandler = (err, req, res, next) => {
   // Mongoose validation error
   if (err.name === 'ValidationError') {
     statusCode = StatusCodes.BAD_REQUEST;
-    message = Object.values(err.errors).map(e => e.message).join(', ');
+    try {
+      message = Object.values(err.errors).map(e => e.message).join(', ');
+    } catch {}
   }
 
   // Mongoose duplicate key error
@@ -31,6 +33,33 @@ export const errorHandler = (err, req, res, next) => {
     message = 'Invalid ID format';
   }
 
+  // Ensure CORS headers on all error responses (browser otherwise blocks and shows generic CORS error)
+  try {
+    const origin = req.headers.origin;
+    if (origin) {
+      if (!res.getHeader('Access-Control-Allow-Origin')) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+      }
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      const vary = res.getHeader('Vary');
+      if (!vary) res.setHeader('Vary', 'Origin');
+      else if (!String(vary).includes('Origin')) res.setHeader('Vary', vary + ', Origin');
+    } else {
+      // Non-browser / health-check calls: allow any
+      if (!res.getHeader('Access-Control-Allow-Origin')) {
+        res.setHeader('Access-Control-Allow-Origin', '*');
+      }
+    }
+    // Common headers browsers may allow on error payloads
+    if (!res.getHeader('Access-Control-Allow-Headers')) {
+      res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+    }
+    if (!res.getHeader('Access-Control-Allow-Methods')) {
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    }
+  } catch {}
+
+  // Final JSON error response
   res.status(statusCode).json({
     success: false,
     message,
