@@ -48,7 +48,9 @@ router.use((err, req, res, next) => {
 });
 
 // POST /api/uploads/product-image
-router.post('/product-image', adminAuth, upload.single('file'), async (req, res, next) => {
+// Allow unauthenticated upload only when SKIP_DB=1 (local test mode) so we can verify CORS without JWT.
+const allowUnauth = process.env.SKIP_DB === '1';
+router.post('/product-image', allowUnauth ? upload.single('file') : [adminAuth, upload.single('file')], async (req, res, next) => {
 	// Extra diagnostics to Cloud Run logs for persistent CORS/400 troubleshooting
 	try {
 		console.log('[upload][product-image] incoming', {
