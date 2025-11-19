@@ -127,13 +127,14 @@ const defaultAllowedOrigins = [
   'https://mypet-778751110625.europe-west1.run.app'
 ];
 
-// Allow override via env (comma-separated list)
+// Allow override via env (comma-separated list). Merge instead of replace to always keep dev/local origins.
 const envOrigins = (process.env.CORS_ORIGINS || '')
   .split(',')
   .map(s => s.trim())
   .filter(Boolean);
 
-const allowedOrigins = envOrigins.length ? envOrigins : defaultAllowedOrigins;
+// Union defaults + env overrides without duplicates
+const allowedOrigins = [...new Set([...defaultAllowedOrigins, ...envOrigins])];
 
 const corsOptions = {
   origin: function(origin, callback) {
@@ -157,6 +158,8 @@ const corsOptions = {
     if (allowedOrigins.includes(origin) || isNetlify) {
       return callback(null, true);
     }
+    // Enhanced diagnostic: log rejected origin for visibility (will surface in Cloud Run logs)
+    console.warn('[cors][reject] origin=', origin, 'allowedOrigins=', allowedOrigins);
     return callback(new Error('Not allowed by CORS'));
   },
   methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
