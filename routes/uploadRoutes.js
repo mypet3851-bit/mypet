@@ -8,6 +8,7 @@ const router = express.Router();
 router.use((req, res, next) => {
 	try {
 		const origin = req.headers.origin;
+		// Echo origin if present; fallback * for non-credentialed requests (no auth header)
 		if (origin) {
 			if (!res.getHeader('Access-Control-Allow-Origin')) {
 				res.setHeader('Access-Control-Allow-Origin', origin);
@@ -16,18 +17,54 @@ router.use((req, res, next) => {
 			const vary = res.getHeader('Vary');
 			if (!vary) res.setHeader('Vary', 'Origin');
 			else if (!String(vary).includes('Origin')) res.setHeader('Vary', vary + ', Origin');
+		} else if (!res.getHeader('Access-Control-Allow-Origin')) {
+			res.setHeader('Access-Control-Allow-Origin', '*');
 		}
 		res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
 		res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+		// Expose error details (optional)
+		res.setHeader('Access-Control-Expose-Headers', 'X-App-Version');
 		if (req.method === 'OPTIONS') {
 			return res.sendStatus(204);
 		}
-	} catch {}
+	} catch (e) {
+		console.warn('[uploads][cors] failed to set headers', e?.message || e);
+	}
 	next();
 });
 
+// Multer error catcher to ensure CORS headers still returned
+router.use((err, req, res, next) => {
+	if (!err) return next();
+	try {
+		const origin = req.headers.origin;
+		if (origin && !res.getHeader('Access-Control-Allow-Origin')) {
+			res.setHeader('Access-Control-Allow-Origin', origin);
+			res.setHeader('Access-Control-Allow-Credentials', 'true');
+		}
+	} catch {}
+	console.error('[uploads] middleware error', err?.message || err);
+	res.status(400).json({ message: err?.message || 'Upload error' });
+});
+
 // POST /api/uploads/product-image
-router.post('/product-image', adminAuth, upload.single('file'), uploadProductImage);
+router.post('/product-image', adminAuth, upload.single('file'), async (req, res, next) => {
+	// Extra diagnostics to Cloud Run logs for persistent CORS/400 troubleshooting
+	try {
+		console.log('[upload][product-image] incoming', {
+			origin: req.headers.origin,
+			auth: !!req.headers.authorization,
+			contentType: req.headers['content-type'],
+			length: req.headers['content-length']
+		});
+	} catch {}
+	try {
+		await uploadProductImage(req, res);
+	} catch (e) {
+		console.error('[upload][product-image] handler error', e?.message || e);
+		next(e);
+	}
+});
 
 // GET helper (browsers hitting the URL directly with GET will otherwise 404 via global handler).
 // Respond with 405 Method Not Allowed and usage instructions.
