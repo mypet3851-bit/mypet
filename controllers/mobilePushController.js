@@ -1,5 +1,6 @@
 import MobilePushToken from '../models/MobilePushToken.js';
 import { sendExpoPush } from '../services/expoPushService.js';
+import { computeBadgesForTokens, computeUnreadBadgeForUser } from '../services/badgeService.js';
 import PushLog from '../models/PushLog.js';
 import PushOpen from '../models/PushOpen.js';
 import ScheduledPush from '../models/ScheduledPush.js';
@@ -42,11 +43,20 @@ export async function sendTestToMe(req, res) {
     const expoTokens = tokens.map(t => t.expoPushToken);
     if (!expoTokens.length) return res.status(404).json({ message: 'no_tokens' });
     const nid = 'nid_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    const { badge } = req.body || {};
+    let badges;
+    if (typeof badge !== 'number') {
+      // auto-compute per-user unread + 1 for each token
+      const docs = await MobilePushToken.find({ user: userId }).lean().select('expoPushToken user');
+      badges = await computeBadgesForTokens(docs);
+    }
     const result = await sendExpoPush({
       tokens: expoTokens,
       title: 'Hello from My Pet',
       body: 'This is a test push notification',
-      data: { type: 'test', at: Date.now(), nid }
+      data: { type: 'test', at: Date.now(), nid },
+      badge: typeof badge === 'number' ? badge : undefined,
+      badges
     });
     try { await PushLog.create({ title: 'Test to me', body: 'Test push', data: { type: 'test', nid }, audience: { type: 'user', userId: userId?.toString() }, tokensCount: expoTokens.length, nid, result, sentAt: new Date(), createdBy: userId }); } catch {}
     return res.json({ ok: true, result });
@@ -58,7 +68,7 @@ export async function sendTestToMe(req, res) {
 
 export async function broadcastToAdmins(req, res) {
   try {
-    const { title, body, data } = req.body || {};
+    const { title, body, data, badge } = req.body || {};
     if (!title || !body) return res.status(400).json({ message: 'title_and_body_required' });
     // Fetch tokens for users with admin role
     const q = await MobilePushToken.aggregate([
@@ -70,7 +80,12 @@ export async function broadcastToAdmins(req, res) {
     const tokens = q.map(d => d.expoPushToken);
     if (!tokens.length) return res.json({ ok: true, delivered: 0 });
     const nid = 'nid_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-    const result = await sendExpoPush({ tokens, title, body, data: { ...(data||{}), nid } });
+    let badges;
+    if (typeof badge !== 'number') {
+      const tokenDocs = await MobilePushToken.find({ user: { $in: q.map(d => d.u._id) } }).lean().select('expoPushToken user');
+      badges = await computeBadgesForTokens(tokenDocs);
+    }
+    const result = await sendExpoPush({ tokens, title, body, data: { ...(data||{}), nid }, badge: typeof badge === 'number' ? badge : undefined, badges });
     try { await PushLog.create({ title, body, data: { ...(data||{}), nid }, audience: { type: 'admins' }, tokensCount: tokens.length, nid, result, sentAt: new Date(), createdBy: req.user?._id }); } catch {}
     return res.json({ ok: true, delivered: tokens.length, result });
   } catch (e) {
@@ -81,13 +96,15 @@ export async function broadcastToAdmins(req, res) {
 
 export async function broadcastAll(req, res) {
   try {
-    const { title, body, data } = req.body || {};
+    const { title, body, data, badge } = req.body || {};
     if (!title || !body) return res.status(400).json({ message: 'title_and_body_required' });
-    const docs = await MobilePushToken.find({}).lean().select('expoPushToken');
+    const docs = await MobilePushToken.find({}).lean().select('expoPushToken user');
     const tokens = docs.map(d => d.expoPushToken);
     if (!tokens.length) return res.json({ ok: true, delivered: 0 });
     const nid = 'nid_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-    const result = await sendExpoPush({ tokens, title, body, data: { ...(data||{}), nid } });
+    let badges;
+    if (typeof badge !== 'number') badges = await computeBadgesForTokens(docs);
+    const result = await sendExpoPush({ tokens, title, body, data: { ...(data||{}), nid }, badge: typeof badge === 'number' ? badge : undefined, badges });
     try { await PushLog.create({ title, body, data: { ...(data||{}), nid }, audience: { type: 'all' }, tokensCount: tokens.length, nid, result, sentAt: new Date(), createdBy: req.user?._id }); } catch {}
     return res.json({ ok: true, delivered: tokens.length, result });
   } catch (e) {
@@ -98,7 +115,7 @@ export async function broadcastAll(req, res) {
 
 export async function sendToUser(req, res) {
   try {
-    const { title, body, data, userId, email } = req.body || {};
+    const { title, body, data, userId, email, badge } = req.body || {};
     if (!title || !body) return res.status(400).json({ message: 'title_and_body_required' });
     if (!userId && !email) return res.status(400).json({ message: 'userId_or_email_required' });
     const match = userId ? { user: userId } : {};
@@ -113,7 +130,12 @@ export async function sendToUser(req, res) {
       const tokens = q.map(d => d.expoPushToken);
       if (!tokens.length) return res.status(404).json({ message: 'no_tokens_for_user' });
       const nid = 'nid_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-      const result = await sendExpoPush({ tokens, title, body, data: { ...(data||{}), nid } });
+      let badges;
+      if (typeof badge !== 'number') {
+        const tokenDocs = await MobilePushToken.find({ expoPushToken: { $in: tokens } }).lean().select('expoPushToken user');
+        badges = await computeBadgesForTokens(tokenDocs);
+      }
+      const result = await sendExpoPush({ tokens, title, body, data: { ...(data||{}), nid }, badge: typeof badge === 'number' ? badge : undefined, badges });
       try { await PushLog.create({ title, body, data: { ...(data||{}), nid }, audience: { type: 'user', email }, tokensCount: tokens.length, nid, result, sentAt: new Date(), createdBy: req.user?._id }); } catch {}
       return res.json({ ok: true, delivered: tokens.length, result });
     } else {
@@ -121,7 +143,12 @@ export async function sendToUser(req, res) {
       const tokens = docs.map(d => d.expoPushToken);
       if (!tokens.length) return res.status(404).json({ message: 'no_tokens_for_user' });
       const nid = 'nid_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-      const result = await sendExpoPush({ tokens, title, body, data: { ...(data||{}), nid } });
+      let badges;
+      if (typeof badge !== 'number') {
+        const tokenDocs = await MobilePushToken.find({ expoPushToken: { $in: tokens } }).lean().select('expoPushToken user');
+        badges = await computeBadgesForTokens(tokenDocs);
+      }
+      const result = await sendExpoPush({ tokens, title, body, data: { ...(data||{}), nid }, badge: typeof badge === 'number' ? badge : undefined, badges });
       try { await PushLog.create({ title, body, data: { ...(data||{}), nid }, audience: { type: 'user', userId }, tokensCount: tokens.length, nid, result, sentAt: new Date(), createdBy: req.user?._id }); } catch {}
       return res.json({ ok: true, delivered: tokens.length, result });
     }
@@ -171,7 +198,12 @@ export async function recordOpen(req, res) {
     if (!nid) return res.status(400).json({ message: 'nid_required' });
     const userId = req.user?._id || null;
     await PushOpen.create({ nid, expoPushToken, user: userId || undefined, openedAt: new Date() });
-    return res.json({ ok: true });
+    // After recording open, compute updated unread count for user (exclude +1 increment)
+    let unread = 0;
+    try {
+      if (userId) unread = await computeUnreadBadgeForUser(userId.toString());
+    } catch {}
+    return res.json({ ok: true, unread });
   } catch (e) {
     console.error('[mobilePush][recordOpen] error', e);
     return res.status(500).json({ message: 'open_failed' });
@@ -209,12 +241,12 @@ export async function getStats(req, res) {
 
 export async function schedulePush(req, res) {
   try {
-    const { title, body, data, audience, scheduleAt } = req.body || {};
+    const { title, body, data, audience, scheduleAt, badge } = req.body || {};
     if (!title || !body) return res.status(400).json({ message: 'title_and_body_required' });
     if (!audience || !audience.type) return res.status(400).json({ message: 'audience_required' });
     const when = new Date(scheduleAt);
     if (isNaN(when.getTime())) return res.status(400).json({ message: 'invalid_scheduleAt' });
-    const doc = await ScheduledPush.create({ title, body, data, audience, scheduleAt: when, createdBy: req.user?._id });
+    const doc = await ScheduledPush.create({ title, body, data, badge: typeof badge === 'number' ? badge : undefined, audience, scheduleAt: when, createdBy: req.user?._id });
     return res.json({ ok: true, scheduled: doc });
   } catch (e) {
     console.error('[mobilePush][schedule] error', e);
@@ -259,6 +291,19 @@ export async function listHistory(req, res) {
     const pipeline = [];
     if (Object.keys(match).length) pipeline.push({ $match: match });
     if (q) {
+ 
+// Return current unread badge count for authenticated user (without +1 increment)
+export async function getMyBadge(req, res) {
+  try {
+    const userId = req.user?._id;
+    if (!userId) return res.status(401).json({ message: 'auth_required' });
+    const unread = await computeUnreadBadgeForUser(userId.toString());
+    return res.json({ ok: true, unread });
+  } catch (e) {
+    console.error('[mobilePush][getMyBadge] error', e);
+    return res.status(500).json({ message: 'badge_failed' });
+  }
+}
       const rx = new RegExp(String(q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
       pipeline.push({ $match: { $or: [ { title: rx }, { body: rx }, { 'audience.type': rx }, { nid: rx } ] } });
     }
