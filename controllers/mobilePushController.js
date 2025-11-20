@@ -295,19 +295,6 @@ export async function listHistory(req, res) {
     const pipeline = [];
     if (Object.keys(match).length) pipeline.push({ $match: match });
     if (q) {
- 
-// Return current unread badge count for authenticated user (without +1 increment)
-export async function getMyBadge(req, res) {
-  try {
-    const userId = req.user?._id;
-    if (!userId) return res.status(401).json({ message: 'auth_required' });
-    const unread = await computeUnreadBadgeForUser(userId.toString());
-    return res.json({ ok: true, unread });
-  } catch (e) {
-    console.error('[mobilePush][getMyBadge] error', e);
-    return res.status(500).json({ message: 'badge_failed' });
-  }
-}
       const rx = new RegExp(String(q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
       pipeline.push({ $match: { $or: [ { title: rx }, { body: rx }, { 'audience.type': rx }, { nid: rx } ] } });
     }
@@ -323,6 +310,19 @@ export async function getMyBadge(req, res) {
   } catch (e) {
     console.error('[mobilePush][history] error', e);
     return res.status(500).json({ message: 'history_failed' });
+  }
+}
+
+// Return current unread badge count for authenticated user (without +1 increment)
+export async function getMyBadge(req, res) {
+  try {
+    const userId = req.user?._id;
+    if (!userId) return res.status(401).json({ message: 'auth_required' });
+    const unread = await computeUnreadBadgeForUser(userId.toString());
+    return res.json({ ok: true, unread });
+  } catch (e) {
+    console.error('[mobilePush][getMyBadge] error', e);
+    return res.status(500).json({ message: 'badge_failed' });
   }
 }
 
