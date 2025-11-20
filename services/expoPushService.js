@@ -48,7 +48,7 @@ async function postExpo(messages) {
   return json;
 }
 
-export async function sendExpoPush({ tokens, title, body, data, sound = 'default', priority = 'high', badge, badges }) {
+export async function sendExpoPush({ tokens, title, body, data, sound = 'cat.wav', priority = 'high', badge, badges }) {
   const valid = tokens.filter(isExpoPushToken);
   const invalid = tokens.filter(t => !isExpoPushToken(t));
   if (invalid.length) {
