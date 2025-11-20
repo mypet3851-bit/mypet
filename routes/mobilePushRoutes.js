@@ -1,6 +1,6 @@
 import express from 'express';
 import { auth, adminAuth } from '../middleware/auth.js';
-import { registerToken, deregisterToken, sendTestToMe, broadcastToAdmins, broadcastAll, sendToUser, listTokens, recordOpen, getStats, schedulePush, listScheduled, cancelScheduled, listHistory, getAnalytics } from '../controllers/mobilePushController.js';
+import { registerToken, deregisterToken, sendTestToMe, broadcastToAdmins, broadcastAll, sendToUser, listTokens, recordOpen, getStats, schedulePush, listScheduled, cancelScheduled, listHistory, getAnalytics, getMyBadge } from '../controllers/mobilePushController.js';
 
 const router = express.Router();
 
@@ -25,6 +25,8 @@ router.get('/tokens', adminAuth, listTokens);
 
 // Track opens (auth optional)
 router.post('/open', auth, recordOpen);
+// Current unread badge count
+router.get('/badge', auth, getMyBadge);
 
 // Stats and scheduling (admin)
 router.get('/stats', adminAuth, getStats);

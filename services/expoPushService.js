@@ -35,7 +35,7 @@ async function postExpo(messages) {
   return json;
 }
 
-export async function sendExpoPush({ tokens, title, body, data, sound = 'default', priority = 'high' }) {
+export async function sendExpoPush({ tokens, title, body, data, sound = 'default', priority = 'high', badge, badges }) {
   const valid = tokens.filter(isExpoPushToken);
   const invalid = tokens.filter(t => !isExpoPushToken(t));
   if (invalid.length) {
@@ -43,14 +43,18 @@ export async function sendExpoPush({ tokens, title, body, data, sound = 'default
   }
   if (!valid.length) return { ok: true, receipts: [], warnings: ['no_valid_tokens'] };
 
-  const messages = valid.map(token => ({
-    to: token,
-    sound,
-    title,
-    body,
-    data,
-    priority
-  }));
+  const messages = valid.map(token => {
+    const perTokenBadge = badges && typeof badges.get === 'function' ? badges.get(token) : undefined;
+    return {
+      to: token,
+      sound,
+      title,
+      body,
+      data,
+      priority,
+      ...(typeof perTokenBadge === 'number' ? { badge: perTokenBadge } : (typeof badge === 'number' ? { badge } : {}))
+    };
+  });
 
   const chunks = chunkArray(messages, 99); // Expo recommends ~100 per request
   const receipts = [];
