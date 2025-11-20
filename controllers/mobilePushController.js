@@ -44,6 +44,7 @@ export async function sendTestToMe(req, res) {
     if (!expoTokens.length) return res.status(404).json({ message: 'no_tokens' });
     const nid = 'nid_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
     const { badge } = req.body || {};
+    const mkData = (d) => (Object.prototype.toString.call(d) === '[object Object]' ? { ...d, nid } : { value: d != null ? String(d) : '', nid });
     let badges;
     if (typeof badge !== 'number') {
       // auto-compute per-user unread + 1 for each token
@@ -54,7 +55,7 @@ export async function sendTestToMe(req, res) {
       tokens: expoTokens,
       title: 'Hello from My Pet',
       body: 'This is a test push notification',
-      data: { type: 'test', at: Date.now(), nid },
+      data: mkData({ type: 'test', at: Date.now() }),
       badge: typeof badge === 'number' ? badge : undefined,
       badges
     });
@@ -69,6 +70,7 @@ export async function sendTestToMe(req, res) {
 export async function broadcastToAdmins(req, res) {
   try {
     const { title, body, data, badge } = req.body || {};
+    const mkData = (d) => (Object.prototype.toString.call(d) === '[object Object]' ? { ...d, nid } : { value: d != null ? String(d) : '', nid });
     if (!title || !body) return res.status(400).json({ message: 'title_and_body_required' });
     // Fetch tokens for users with admin role
     const q = await MobilePushToken.aggregate([
@@ -85,7 +87,7 @@ export async function broadcastToAdmins(req, res) {
       const tokenDocs = await MobilePushToken.find({ user: { $in: q.map(d => d.u._id) } }).lean().select('expoPushToken user');
       badges = await computeBadgesForTokens(tokenDocs);
     }
-    const result = await sendExpoPush({ tokens, title, body, data: { ...(data||{}), nid }, badge: typeof badge === 'number' ? badge : undefined, badges });
+    const result = await sendExpoPush({ tokens, title, body, data: mkData(data||{}), badge: typeof badge === 'number' ? badge : undefined, badges });
     try { await PushLog.create({ title, body, data: { ...(data||{}), nid }, audience: { type: 'admins' }, tokensCount: tokens.length, nid, result, sentAt: new Date(), createdBy: req.user?._id }); } catch {}
     return res.json({ ok: true, delivered: tokens.length, result });
   } catch (e) {
@@ -97,6 +99,7 @@ export async function broadcastToAdmins(req, res) {
 export async function broadcastAll(req, res) {
   try {
     const { title, body, data, badge } = req.body || {};
+    const mkData = (d) => (Object.prototype.toString.call(d) === '[object Object]' ? { ...d, nid } : { value: d != null ? String(d) : '', nid });
     if (!title || !body) return res.status(400).json({ message: 'title_and_body_required' });
     const docs = await MobilePushToken.find({}).lean().select('expoPushToken user');
     const tokens = docs.map(d => d.expoPushToken);
@@ -104,7 +107,7 @@ export async function broadcastAll(req, res) {
     const nid = 'nid_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
     let badges;
     if (typeof badge !== 'number') badges = await computeBadgesForTokens(docs);
-    const result = await sendExpoPush({ tokens, title, body, data: { ...(data||{}), nid }, badge: typeof badge === 'number' ? badge : undefined, badges });
+    const result = await sendExpoPush({ tokens, title, body, data: mkData(data||{}), badge: typeof badge === 'number' ? badge : undefined, badges });
     try { await PushLog.create({ title, body, data: { ...(data||{}), nid }, audience: { type: 'all' }, tokensCount: tokens.length, nid, result, sentAt: new Date(), createdBy: req.user?._id }); } catch {}
     return res.json({ ok: true, delivered: tokens.length, result });
   } catch (e) {
@@ -118,6 +121,7 @@ export async function sendToUser(req, res) {
     const { title, body, data, userId, email, badge } = req.body || {};
     if (!title || !body) return res.status(400).json({ message: 'title_and_body_required' });
     if (!userId && !email) return res.status(400).json({ message: 'userId_or_email_required' });
+    const mkData = (d) => (Object.prototype.toString.call(d) === '[object Object]' ? { ...d, nid } : { value: d != null ? String(d) : '', nid });
     const match = userId ? { user: userId } : {};
     if (email) {
       // join users by email using aggregation to avoid circular import
@@ -135,7 +139,7 @@ export async function sendToUser(req, res) {
         const tokenDocs = await MobilePushToken.find({ expoPushToken: { $in: tokens } }).lean().select('expoPushToken user');
         badges = await computeBadgesForTokens(tokenDocs);
       }
-      const result = await sendExpoPush({ tokens, title, body, data: { ...(data||{}), nid }, badge: typeof badge === 'number' ? badge : undefined, badges });
+      const result = await sendExpoPush({ tokens, title, body, data: mkData(data||{}), badge: typeof badge === 'number' ? badge : undefined, badges });
       try { await PushLog.create({ title, body, data: { ...(data||{}), nid }, audience: { type: 'user', email }, tokensCount: tokens.length, nid, result, sentAt: new Date(), createdBy: req.user?._id }); } catch {}
       return res.json({ ok: true, delivered: tokens.length, result });
     } else {
@@ -148,7 +152,7 @@ export async function sendToUser(req, res) {
         const tokenDocs = await MobilePushToken.find({ expoPushToken: { $in: tokens } }).lean().select('expoPushToken user');
         badges = await computeBadgesForTokens(tokenDocs);
       }
-      const result = await sendExpoPush({ tokens, title, body, data: { ...(data||{}), nid }, badge: typeof badge === 'number' ? badge : undefined, badges });
+      const result = await sendExpoPush({ tokens, title, body, data: mkData(data||{}), badge: typeof badge === 'number' ? badge : undefined, badges });
       try { await PushLog.create({ title, body, data: { ...(data||{}), nid }, audience: { type: 'user', userId }, tokensCount: tokens.length, nid, result, sentAt: new Date(), createdBy: req.user?._id }); } catch {}
       return res.json({ ok: true, delivered: tokens.length, result });
     }

@@ -13,6 +13,19 @@ function isExpoPushToken(token) {
   return typeof token === 'string' && token.startsWith('ExponentPushToken[');
 }
 
+function jsonSafe(obj) {
+  try {
+    return JSON.parse(JSON.stringify(obj, (_k, v) => {
+      if (typeof v === 'bigint') return v.toString();
+      if (v instanceof Map) return Object.fromEntries(v);
+      if (v instanceof Set) return Array.from(v);
+      return v;
+    }));
+  } catch {
+    return {}; // fallback to empty
+  }
+}
+
 async function postExpo(messages) {
   const fetchImpl = globalThis.fetch || (await import('node-fetch').then(m => m.default).catch(() => null));
   if (!fetchImpl) throw new Error('No fetch available. Node 18+ or node-fetch required.');
@@ -50,7 +63,7 @@ export async function sendExpoPush({ tokens, title, body, data, sound = 'default
       sound,
       title,
       body,
-      data,
+      data: jsonSafe(data),
       priority,
       ...(typeof perTokenBadge === 'number' ? { badge: perTokenBadge } : (typeof badge === 'number' ? { badge } : {}))
     };
