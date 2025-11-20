@@ -341,6 +341,39 @@ router.put('/inventory', settingsWriteGuard, async (req, res) => {
   }
 });
 
+// Grooming availability settings (admin)
+router.get('/grooming', adminAuth, async (req, res) => {
+  try {
+    let settings = await Settings.findOne();
+    if (!settings) settings = await Settings.create({});
+    const grooming = settings.grooming || { useDateWhitelist: false, enabledDates: [], disabledDates: [], bookingWindowDays: 30 };
+    res.json(grooming);
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+});
+
+router.put('/grooming', settingsWriteGuard, async (req, res) => {
+  try {
+    let settings = await Settings.findOne().sort({ updatedAt: -1 });
+    if (!settings) settings = new Settings();
+    settings.grooming = settings.grooming || { useDateWhitelist: false, enabledDates: [], disabledDates: [], bookingWindowDays: 30 };
+    const inc = req.body || {};
+    if (typeof inc.useDateWhitelist !== 'undefined') settings.grooming.useDateWhitelist = !!inc.useDateWhitelist;
+    if (Array.isArray(inc.enabledDates)) settings.grooming.enabledDates = inc.enabledDates.map(String);
+    if (Array.isArray(inc.disabledDates)) settings.grooming.disabledDates = inc.disabledDates.map(String);
+    if (typeof inc.bookingWindowDays !== 'undefined') {
+      const n = Number(inc.bookingWindowDays);
+      settings.grooming.bookingWindowDays = Number.isFinite(n) && n > 0 ? n : settings.grooming.bookingWindowDays || 30;
+    }
+    try { settings.markModified('grooming'); } catch {}
+    await settings.save();
+    res.json(settings.grooming);
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+});
+
 // Lightweight version endpoint for polling (no secrets, minimal payload)
 router.get('/version', async (req, res) => {
   try {

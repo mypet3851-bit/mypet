@@ -1,5 +1,6 @@
 import Booking from '../models/Booking.js';
 import BookingAudit from '../models/BookingAudit.js';
+import Settings from '../models/Settings.js';
 
 // Static services list (could be moved to DB later)
 const SERVICES = [
@@ -23,9 +24,31 @@ const BASE_SLOTS = ['07:00','08:00','09:00','10:00','11:00','12:00','13:00','14:
 // Capacity per slot (can override via env BOOKING_SLOT_CAPACITY)
 const SLOT_CAPACITY = parseInt(process.env.BOOKING_SLOT_CAPACITY || '4', 10);
 
+// Compute available dates considering admin-configured settings
+async function computeAvailableDates(days = 14) {
+  try {
+    const settings = await Settings.findOne().select('grooming');
+    const grooming = settings?.grooming || {};
+    // Base window
+    const windowDays = typeof grooming.bookingWindowDays === 'number' && grooming.bookingWindowDays > 0 ? grooming.bookingWindowDays : days;
+    const baseDates = generateDates(windowDays);
+    if (grooming.useDateWhitelist && Array.isArray(grooming.enabledDates) && grooming.enabledDates.length) {
+      const set = new Set(baseDates);
+      // Return only enabled dates that fall within the generated window, keep order
+      return grooming.enabledDates.filter(d => set.has(d)).sort();
+    }
+    // Otherwise, exclude disabledDates from the base range
+    const disabled = new Set((grooming.disabledDates || []).map(String));
+    return baseDates.filter(d => !disabled.has(d));
+  } catch (e) {
+    // On error fallback to default consecutive range
+    return generateDates(days);
+  }
+}
+
 export async function getAvailability(req, res) {
   try {
-    const dates = generateDates(14);
+    const dates = await computeAvailableDates(14);
     // Fetch existing bookings to compute remaining capacity (exclude cancelled)
     const existing = await Booking.find({ date: { $in: dates }, status: { $ne: 'cancelled' } }).select('date time').lean();
     // Build count map
@@ -58,7 +81,7 @@ export async function createBooking(req, res) {
       return res.status(400).json({ message: 'Missing required fields' });
     }
     // Basic validation: ensure date is in availability range
-    const dates = generateDates(30);
+    const dates = await computeAvailableDates(30);
     if (!dates.includes(date)) {
       return res.status(400).json({ message: 'Date out of range' });
     }
@@ -266,7 +289,7 @@ export async function rescheduleBooking(req, res) {
       return res.status(400).json({ message: 'Cannot reschedule a completed or cancelled booking' });
     }
     // Validate new date/time in availability range
-    const dates = generateDates(30);
+    const dates = await computeAvailableDates(30);
     if (!dates.includes(newDate)) return res.status(400).json({ message: 'Date out of range' });
     if (!BASE_SLOTS.includes(newTime)) return res.status(400).json({ message: 'Invalid time slot' });
     // Capacity check (exclude cancelled) for target slot excluding current booking if same slot
