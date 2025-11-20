@@ -9,8 +9,10 @@ export async function protectOptional(req, res, next) {
       const token = auth.substring(7);
       try {
         const decoded = jwt.verify(token, process.env.JWT_SECRET || 'changeme');
-        if (decoded?.id) {
-          const user = await User.findById(decoded.id).select('_id role');
+        // Tokens are signed with { userId }, not { id }
+        const uid = decoded?.userId || decoded?.id;
+        if (uid) {
+          const user = await User.findById(uid).select('_id role');
           if (user) req.user = user;
         }
       } catch {}
