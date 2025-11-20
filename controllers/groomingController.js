@@ -248,3 +248,50 @@ export async function getMyBookings(req, res) {
     res.status(500).json({ message: 'Failed to load user bookings', error: e?.message || e });
   }
 }
+
+// User or admin: reschedule booking (change date/time) if capacity allows
+export async function rescheduleBooking(req, res) {
+  try {
+    const { id } = req.params;
+    const { date: newDate, time: newTime } = req.body || {};
+    if (!id || !newDate || !newTime) return res.status(400).json({ message: 'Missing id, date or time' });
+    const booking = await Booking.findById(id);
+    if (!booking) return res.status(404).json({ message: 'Booking not found' });
+    // Permission: admin or owner
+    const isAdmin = req.user?.role === 'admin';
+    const isOwner = req.user && booking.user && String(booking.user) === String(req.user._id);
+    if (!isAdmin && !isOwner) return res.status(403).json({ message: 'Not authorized to reschedule this booking' });
+    // Prevent reschedule if cancelled or completed
+    if (['cancelled','completed'].includes(booking.status)) {
+      return res.status(400).json({ message: 'Cannot reschedule a completed or cancelled booking' });
+    }
+    // Validate new date/time in availability range
+    const dates = generateDates(30);
+    if (!dates.includes(newDate)) return res.status(400).json({ message: 'Date out of range' });
+    if (!BASE_SLOTS.includes(newTime)) return res.status(400).json({ message: 'Invalid time slot' });
+    // Capacity check (exclude cancelled) for target slot excluding current booking if same slot
+    const existingCount = await Booking.countDocuments({ date: newDate, time: newTime, status: { $ne: 'cancelled' }, _id: { $ne: booking._id } });
+    if (existingCount >= SLOT_CAPACITY) {
+      return res.status(409).json({ message: 'Target slot full', capacity: SLOT_CAPACITY, remaining: 0 });
+    }
+    const beforeDate = booking.date;
+    const beforeTime = booking.time;
+    booking.date = newDate;
+    booking.time = newTime;
+    await booking.save();
+    try {
+      await BookingAudit.create({
+        booking: booking._id,
+        action: 'reschedule',
+        by: req.user?._id || undefined,
+        statusBefore: booking.status,
+        statusAfter: booking.status,
+        meta: { from: { date: beforeDate, time: beforeTime }, to: { date: newDate, time: newTime } }
+      });
+    } catch {}
+    const remainingAfter = Math.max(SLOT_CAPACITY - (existingCount + 1), 0);
+    res.json({ booking, capacity: SLOT_CAPACITY, remaining: remainingAfter });
+  } catch (e) {
+    res.status(500).json({ message: 'Failed to reschedule booking', error: e?.message || e });
+  }
+}
