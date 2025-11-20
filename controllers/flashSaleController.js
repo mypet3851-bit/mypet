@@ -1,6 +1,8 @@
 import FlashSale from '../models/FlashSale.js';
 import Product from '../models/Product.js';
 import { getStoreCurrency } from '../services/storeCurrencyService.js';
+import { autoNotifyFlashSale } from '../services/flashSaleNotify.js';
+import ScheduledPush from '../models/ScheduledPush.js';
 import { deepseekTranslate, isDeepseekConfigured } from '../services/translate/deepseek.js';
 
 // Helper: compute flash price from percent with basic guards
@@ -86,6 +88,27 @@ export const create = async (req, res) => {
       payload.items = items;
     }
     const sale = await FlashSale.create(payload);
+    // Auto push notify: if active now -> send immediately; if starts in future -> schedule at startDate
+    try {
+      const now = new Date();
+      if (sale.active && new Date(sale.startDate) <= now && new Date(sale.endDate) > now) {
+        await autoNotifyFlashSale(sale, req.user?._id);
+      } else if (sale.active && new Date(sale.startDate) > now) {
+        // Schedule push at startDate
+        const title = String((sale.name || 'Flash Sale') + ' ⚡⚡').toUpperCase().slice(0,80);
+        const body = sale.pricingMode === 'percent' && sale.discountPercent
+          ? `İndirim başlıyor! %{${Number(sale.discountPercent).toFixed(0)}} fırsatlar seni bekliyor 🛒✨`
+          : 'Büyük indirimler başlıyor! 🛒✨';
+        await ScheduledPush.create({
+          title,
+          body,
+          data: { type: 'flash-sale', saleId: String(sale._id), deepLink: `/flash-sale/${sale._id}` },
+          audience: { type: 'all' },
+          scheduleAt: new Date(sale.startDate),
+          createdBy: req.user?._id
+        });
+      }
+    } catch {}
     res.status(201).json(sale);
   } catch (e) {
     res.status(400).json({ message: e.message || 'Failed to create' });
