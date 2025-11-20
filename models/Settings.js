@@ -355,6 +355,20 @@ settingsSchema.add({
   }
 });
 
+// Grooming / Booking availability configuration (admin-managed)
+settingsSchema.add({
+  grooming: {
+    // When true, only `enabledDates` are treated as bookable (whitelist).
+    useDateWhitelist: { type: Boolean, default: false },
+    // Explicit list of dates (YYYY-MM-DD) that are allowed when `useDateWhitelist` is true
+    enabledDates: { type: [String], default: [] },
+    // Explicit list of dates (YYYY-MM-DD) that are blocked when `useDateWhitelist` is false
+    disabledDates: { type: [String], default: [] },
+    // How many days ahead to expose by default when generating availability (fallback)
+    bookingWindowDays: { type: Number, default: 30 }
+  }
+});
+
 // Rivhit ERP integration configuration
 settingsSchema.add({
   rivhit: {
