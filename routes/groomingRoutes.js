@@ -1,6 +1,6 @@
 import express from 'express';
-import { getAvailability, createBooking, listBookings, updateBookingStatus, getBookingById, cancelBooking, getBookingAudit } from '../controllers/groomingController.js';
-import { adminAuth } from '../middleware/auth.js';
+import { getAvailability, createBooking, listBookings, updateBookingStatus, getBookingById, cancelBooking, getBookingAudit, getMyBookings } from '../controllers/groomingController.js';
+import { adminAuth, auth } from '../middleware/auth.js';
 import { protectOptional } from '../middleware/authOptional.js';
 
 const router = express.Router();
@@ -8,6 +8,8 @@ const router = express.Router();
 // Optional auth: allow logged-in user association, but not required
 router.get('/availability', getAvailability);
 router.post('/book', protectOptional, createBooking);
+// Authenticated user bookings
+router.get('/my-bookings', auth, getMyBookings);
 // Admin management endpoints
 router.get('/bookings', adminAuth, listBookings);
 router.get('/bookings/:id', adminAuth, getBookingById);

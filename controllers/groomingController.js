@@ -233,3 +233,18 @@ export async function getBookingAudit(req, res) {
     res.status(500).json({ message: 'Failed to load audit', error: e?.message || e });
   }
 }
+
+// Authenticated user: list own bookings with optional status/date filters
+export async function getMyBookings(req, res) {
+  try {
+    if (!req.user) return res.status(401).json({ message: 'Authentication required' });
+    const { status, date } = req.query;
+    const q = { user: req.user._id };
+    if (status && typeof status === 'string') q.status = status;
+    if (date && typeof date === 'string') q.date = date;
+    const bookings = await Booking.find(q).sort({ date: 1, time: 1 });
+    res.json({ bookings, count: bookings.length });
+  } catch (e) {
+    res.status(500).json({ message: 'Failed to load user bookings', error: e?.message || e });
+  }
+}
