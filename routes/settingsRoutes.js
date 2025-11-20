@@ -341,6 +341,53 @@ router.put('/inventory', settingsWriteGuard, async (req, res) => {
   }
 });
 
+// Grooming availability settings: GET (admin only)
+router.get('/grooming', adminAuth, async (req, res) => {
+  try {
+    let settings = await Settings.findOne();
+    if (!settings) settings = await Settings.create({});
+    const g = settings.grooming || { useDateWhitelist: false, enabledDates: [], disabledDates: [], bookingWindowDays: 30 };
+    // Normalize arrays and values
+    const norm = {
+      useDateWhitelist: !!g.useDateWhitelist,
+      enabledDates: Array.isArray(g.enabledDates) ? g.enabledDates.map(String) : [],
+      disabledDates: Array.isArray(g.disabledDates) ? g.disabledDates.map(String) : [],
+      bookingWindowDays: Number(g.bookingWindowDays) || 30
+    };
+    res.json(norm);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Grooming availability settings: PUT (guarded like general settings)
+router.put('/grooming', settingsWriteGuard, async (req, res) => {
+  try {
+    let settings = await Settings.findOne().sort({ updatedAt: -1 });
+    if (!settings) settings = new Settings();
+    const inc = req.body || {};
+    const toDateList = (v) => {
+      if (!Array.isArray(v)) return [];
+      return v
+        .map(x => (x == null ? '' : String(x).trim()))
+        .filter(Boolean)
+        .filter(s => /^\d{4}-\d{2}-\d{2}$/.test(s));
+    };
+    const next = {
+      useDateWhitelist: !!inc.useDateWhitelist,
+      enabledDates: toDateList(inc.enabledDates),
+      disabledDates: toDateList(inc.disabledDates),
+      bookingWindowDays: Number(inc.bookingWindowDays) > 0 ? Number(inc.bookingWindowDays) : (settings.grooming?.bookingWindowDays || 30)
+    };
+    settings.grooming = next;
+    try { settings.markModified('grooming'); } catch {}
+    await settings.save();
+    res.json(next);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
 // Grooming availability settings (admin)
 router.get('/grooming', adminAuth, async (req, res) => {
   try {
