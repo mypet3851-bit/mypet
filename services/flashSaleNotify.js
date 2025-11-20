@@ -10,7 +10,7 @@ function formatTitleBody(sale) {
   if (sale?.pricingMode === 'percent' && sale?.discountPercent) {
     body = `İndirim başladı! %{${Number(sale.discountPercent).toFixed(0)}} fırsatlar seni bekliyor 🛒✨`;
   } else {
-    body = 'Büyük indirimler başladı! Şimdi favorilerini seç! 🛒✨';
+    body = 'Big discounts have started! Choose your favorites now! 🛒✨';
   }
   return { title, body };
 }
