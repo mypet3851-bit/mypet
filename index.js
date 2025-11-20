@@ -76,6 +76,7 @@ import mcgRoutes from './routes/mcgRoutes.js';
 import zcreditRoutes from './routes/zcreditRoutes.js';
 import zcreditGatewayRoutes from './routes/zcreditGatewayRoutes.js';
 import mobilePushRoutes from './routes/mobilePushRoutes.js';
+import groomingRoutes from './routes/groomingRoutes.js';
 // Lazy import function to warm DeepSeek config from DB
 import { loadDeepseekConfigFromDb } from './services/translate/deepseek.js';
 import { startPushScheduler } from './services/pushScheduler.js';
@@ -269,6 +270,7 @@ app.use('/api/mcg', mcgRoutes);
 app.use('/api/zcredit', zcreditRoutes);
 app.use('/api/zcredit-gw', zcreditGatewayRoutes);
 app.use('/api/cancellation-requests', cancellationRequestRoutes);
+app.use('/api/grooming', groomingRoutes);
 
 // Health Check Route
 app.get('/health', (req, res) => {
@@ -509,34 +511,7 @@ const startServer = async () => {
     console.error('Database connection failed after retries:', e.message);
   }
   if (!conn) {
-    // Previous behavior: abort startup entirely, causing Cloud Run to return 503 and browsers to misinterpret as CORS failure.
-    // New behavior: start server in degraded mode (no DB-backed features) so that static assets, uploads (local fallback),
-    // health checks and preflight CORS requests still succeed. Admin / data routes will respond 503.
-    console.error('[startup][degraded] Database connection failed; starting in degraded mode without MongoDB.');
-    app.use((req, res, next) => {
-      // Short-circuit routes that require DB (heuristic: most /api paths except uploads, auth login attempt will fail)
-      // Allow health checks and uploads so developer can still troubleshoot CORS / deployment.
-      if (req.path.startsWith('/api/') && !req.path.startsWith('/api/uploads') && req.path !== '/health') {
-        try {
-          const origin = req.headers.origin;
-          if (origin && !res.getHeader('Access-Control-Allow-Origin')) {
-            res.setHeader('Access-Control-Allow-Origin', origin);
-            res.setHeader('Access-Control-Allow-Credentials', 'true');
-            const vary = res.getHeader('Vary');
-            if (!vary) res.setHeader('Vary', 'Origin');
-            else if (!String(vary).includes('Origin')) res.setHeader('Vary', vary + ', Origin');
-          } else if (!res.getHeader('Access-Control-Allow-Origin')) {
-            res.setHeader('Access-Control-Allow-Origin', '*');
-          }
-        } catch {}
-        return res.status(503).json({ message: 'Service in degraded mode (database unavailable)' });
-      }
-      next();
-    });
-    server.listen(PORT, () => {
-      console.warn(`[startup][degraded] Server running (no DB) on port ${PORT}. Limited functionality.`);
-      console.log(`WebSocket server running on ws://localhost:${PORT}/ws`);
-    });
+    console.error('Database connection failed; server not started. Set SKIP_DB=1 to bypass during development.');
     return;
   }
 
