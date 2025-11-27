@@ -1066,8 +1066,8 @@ export const updateProduct = async (req, res) => {
 
     // Handle optional brand update
     if (incomingBrand !== undefined) {
-      if (incomingBrand === null || incomingBrand === '' ) {
-        updateDataSanitized.brand = undefined; // unset
+      if (incomingBrand === null || incomingBrand === '') {
+        updateDataSanitized.brand = null; // explicitly clear brand reference
       } else {
         const bVal = incomingBrand;
         const isObjectId = typeof bVal === 'string' && /^[a-fA-F0-9]{24}$/.test(bVal);

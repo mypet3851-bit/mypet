@@ -43,7 +43,7 @@ export async function sendTestToMe(req, res) {
     const expoTokens = tokens.map(t => t.expoPushToken);
     if (!expoTokens.length) return res.status(404).json({ message: 'no_tokens' });
     const nid = 'nid_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-    const { badge } = req.body || {};
+    const { badge, sound, channelId } = req.body || {};
     const mkData = (d) => (Object.prototype.toString.call(d) === '[object Object]' ? { ...d, nid } : { value: d != null ? String(d) : '', nid });
     let badges;
     if (typeof badge !== 'number') {
@@ -57,7 +57,9 @@ export async function sendTestToMe(req, res) {
       body: 'This is a test push notification',
       data: mkData({ type: 'test', at: Date.now() }),
       badge: typeof badge === 'number' ? badge : undefined,
-      badges
+      badges,
+      sound: sound || undefined,
+      channelId: channelId || undefined
     });
     try { await PushLog.create({ title: 'Test to me', body: 'Test push', data: { type: 'test', nid }, audience: { type: 'user', userId: userId?.toString() }, tokensCount: expoTokens.length, nid, result, sentAt: new Date(), createdBy: userId }); } catch {}
     return res.json({ ok: true, result });
@@ -69,7 +71,7 @@ export async function sendTestToMe(req, res) {
 
 export async function broadcastToAdmins(req, res) {
   try {
-    const { title, body, data, badge } = req.body || {};
+    const { title, body, data, badge, sound, channelId } = req.body || {};
     const mkData = (d) => (Object.prototype.toString.call(d) === '[object Object]' ? { ...d, nid } : { value: d != null ? String(d) : '', nid });
     if (!title || !body) return res.status(400).json({ message: 'title_and_body_required' });
     // Fetch tokens for users with admin role
@@ -87,8 +89,8 @@ export async function broadcastToAdmins(req, res) {
       const tokenDocs = await MobilePushToken.find({ user: { $in: q.map(d => d.u._id) } }).lean().select('expoPushToken user');
       badges = await computeBadgesForTokens(tokenDocs);
     }
-    const result = await sendExpoPush({ tokens, title, body, data: mkData(data||{}), badge: typeof badge === 'number' ? badge : undefined, badges });
-    try { await PushLog.create({ title, body, data: { ...(data||{}), nid }, audience: { type: 'admins' }, tokensCount: tokens.length, nid, result, sentAt: new Date(), createdBy: req.user?._id }); } catch {}
+    const result = await sendExpoPush({ tokens, title, body, data: mkData(data||{}), badge: typeof badge === 'number' ? badge : undefined, badges, sound: sound || undefined, channelId: channelId || undefined });
+    try { await PushLog.create({ title, body, data: { ...(data||{}), nid }, audience: { type: 'admins' }, tokensCount: tokens.length, nid, result, sentAt: new Date(), createdBy: req.user?._id, ...(sound? { sound }: {}) , ...(channelId? { channelId }: {}) }); } catch {}
     return res.json({ ok: true, delivered: tokens.length, result });
   } catch (e) {
     console.error('[mobilePush][broadcastAdmins] error', e);
@@ -98,7 +100,7 @@ export async function broadcastToAdmins(req, res) {
 
 export async function broadcastAll(req, res) {
   try {
-    const { title, body, data, badge } = req.body || {};
+    const { title, body, data, badge, sound, channelId } = req.body || {};
     const mkData = (d) => (Object.prototype.toString.call(d) === '[object Object]' ? { ...d, nid } : { value: d != null ? String(d) : '', nid });
     if (!title || !body) return res.status(400).json({ message: 'title_and_body_required' });
     const docs = await MobilePushToken.find({}).lean().select('expoPushToken user');
@@ -107,8 +109,8 @@ export async function broadcastAll(req, res) {
     const nid = 'nid_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
     let badges;
     if (typeof badge !== 'number') badges = await computeBadgesForTokens(docs);
-    const result = await sendExpoPush({ tokens, title, body, data: mkData(data||{}), badge: typeof badge === 'number' ? badge : undefined, badges });
-    try { await PushLog.create({ title, body, data: { ...(data||{}), nid }, audience: { type: 'all' }, tokensCount: tokens.length, nid, result, sentAt: new Date(), createdBy: req.user?._id }); } catch {}
+    const result = await sendExpoPush({ tokens, title, body, data: mkData(data||{}), badge: typeof badge === 'number' ? badge : undefined, badges, sound: sound || undefined, channelId: channelId || undefined });
+    try { await PushLog.create({ title, body, data: { ...(data||{}), nid }, audience: { type: 'all' }, tokensCount: tokens.length, nid, result, sentAt: new Date(), createdBy: req.user?._id, ...(sound? { sound }: {}) , ...(channelId? { channelId }: {}) }); } catch {}
     return res.json({ ok: true, delivered: tokens.length, result });
   } catch (e) {
     console.error('[mobilePush][broadcastAll] error', e);
@@ -118,7 +120,7 @@ export async function broadcastAll(req, res) {
 
 export async function sendToUser(req, res) {
   try {
-    const { title, body, data, userId, email, badge } = req.body || {};
+    const { title, body, data, userId, email, badge, sound, channelId } = req.body || {};
     if (!title || !body) return res.status(400).json({ message: 'title_and_body_required' });
     if (!userId && !email) return res.status(400).json({ message: 'userId_or_email_required' });
     const mkData = (d) => (Object.prototype.toString.call(d) === '[object Object]' ? { ...d, nid } : { value: d != null ? String(d) : '', nid });
@@ -139,8 +141,8 @@ export async function sendToUser(req, res) {
         const tokenDocs = await MobilePushToken.find({ expoPushToken: { $in: tokens } }).lean().select('expoPushToken user');
         badges = await computeBadgesForTokens(tokenDocs);
       }
-      const result = await sendExpoPush({ tokens, title, body, data: mkData(data||{}), badge: typeof badge === 'number' ? badge : undefined, badges });
-      try { await PushLog.create({ title, body, data: { ...(data||{}), nid }, audience: { type: 'user', email }, tokensCount: tokens.length, nid, result, sentAt: new Date(), createdBy: req.user?._id }); } catch {}
+      const result = await sendExpoPush({ tokens, title, body, data: mkData(data||{}), badge: typeof badge === 'number' ? badge : undefined, badges, sound: sound || undefined, channelId: channelId || undefined });
+      try { await PushLog.create({ title, body, data: { ...(data||{}), nid }, audience: { type: 'user', email }, tokensCount: tokens.length, nid, result, sentAt: new Date(), createdBy: req.user?._id, ...(sound? { sound }: {}) , ...(channelId? { channelId }: {}) }); } catch {}
       return res.json({ ok: true, delivered: tokens.length, result });
     } else {
       const docs = await MobilePushToken.find(match).lean().select('expoPushToken');
@@ -152,8 +154,8 @@ export async function sendToUser(req, res) {
         const tokenDocs = await MobilePushToken.find({ expoPushToken: { $in: tokens } }).lean().select('expoPushToken user');
         badges = await computeBadgesForTokens(tokenDocs);
       }
-      const result = await sendExpoPush({ tokens, title, body, data: mkData(data||{}), badge: typeof badge === 'number' ? badge : undefined, badges });
-      try { await PushLog.create({ title, body, data: { ...(data||{}), nid }, audience: { type: 'user', userId }, tokensCount: tokens.length, nid, result, sentAt: new Date(), createdBy: req.user?._id }); } catch {}
+      const result = await sendExpoPush({ tokens, title, body, data: mkData(data||{}), badge: typeof badge === 'number' ? badge : undefined, badges, sound: sound || undefined, channelId: channelId || undefined });
+      try { await PushLog.create({ title, body, data: { ...(data||{}), nid }, audience: { type: 'user', userId }, tokensCount: tokens.length, nid, result, sentAt: new Date(), createdBy: req.user?._id, ...(sound? { sound }: {}) , ...(channelId? { channelId }: {}) }); } catch {}
       return res.json({ ok: true, delivered: tokens.length, result });
     }
   } catch (e) {
@@ -245,12 +247,12 @@ export async function getStats(req, res) {
 
 export async function schedulePush(req, res) {
   try {
-    const { title, body, data, audience, scheduleAt, badge } = req.body || {};
+    const { title, body, data, audience, scheduleAt, badge, sound, channelId } = req.body || {};
     if (!title || !body) return res.status(400).json({ message: 'title_and_body_required' });
     if (!audience || !audience.type) return res.status(400).json({ message: 'audience_required' });
     const when = new Date(scheduleAt);
     if (isNaN(when.getTime())) return res.status(400).json({ message: 'invalid_scheduleAt' });
-    const doc = await ScheduledPush.create({ title, body, data, badge: typeof badge === 'number' ? badge : undefined, audience, scheduleAt: when, createdBy: req.user?._id });
+    const doc = await ScheduledPush.create({ title, body, data, badge: typeof badge === 'number' ? badge : undefined, sound: sound || undefined, audience: channelId ? { ...audience, channelId } : audience, scheduleAt: when, createdBy: req.user?._id });
     return res.json({ ok: true, scheduled: doc });
   } catch (e) {
     console.error('[mobilePush][schedule] error', e);
