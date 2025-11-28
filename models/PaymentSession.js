@@ -39,6 +39,10 @@ const PaymentSessionSchema = new mongoose.Schema({
     code: { type: String },
     discount: { type: Number }
   },
+  giftCard: {
+    code: { type: String },
+    amount: { type: Number }
+  },
   currency: { type: String, required: true },
   shippingFee: { type: Number, default: 0 },
   totalWithShipping: { type: Number },

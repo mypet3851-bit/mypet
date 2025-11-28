@@ -5,6 +5,7 @@ const scheduledPushSchema = new mongoose.Schema({
   body: { type: String, required: true },
   data: {},
   badge: { type: Number }, // optional iOS badge to set
+  sound: { type: String }, // optional custom sound name (iOS) or used for channel mapping
   audience: { type: Object, required: true }, // { type: 'all'|'admins'|'user', userId?, email? }
   scheduleAt: { type: Date, required: true, index: true },
   status: { type: String, enum: ['scheduled', 'sent', 'cancelled', 'failed'], default: 'scheduled', index: true },
