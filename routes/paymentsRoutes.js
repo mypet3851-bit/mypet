@@ -515,22 +515,32 @@ router.post('/zcredit/create-session-from-cart', async (req, res) => {
     });
 
     const sessionIdString = String(ps._id);
+    const clientOverrides = (body && typeof body.overrides === 'object' && body.overrides) ? { ...body.overrides } : {};
+    const overrideSuccessUrl = sanitizeAbsoluteUrl(clientOverrides.RedirectURL || clientOverrides.redirectUrl);
+    const overrideCancelUrl = sanitizeAbsoluteUrl(clientOverrides.CancelUrl || clientOverrides.cancelUrl);
+    const overrideFailureRedirect = sanitizeAbsoluteUrl(clientOverrides.FailRedirectURL || clientOverrides.failureRedirectUrl);
+    const overrideCallbackUrl = sanitizeAbsoluteUrl(clientOverrides.CallbackUrl || clientOverrides.callbackUrl);
+    const overrideFailureCallbackUrl = sanitizeAbsoluteUrl(clientOverrides.FailureCallBackUrl || clientOverrides.failureCallBackUrl);
+
     const origin = deriveOrigin(req) || sanitizeAbsoluteUrl(process.env.PUBLIC_WEB_URL || '') || '';
-    if (!origin) {
+    const frontendBase = origin ? origin.replace(/\/$/, '') : '';
+    const applyPlaceholder = (val) => (typeof val === 'string' ? val.replace('{sessionId}', sessionIdString) : val);
+    const successOverride = sanitizeAbsoluteUrl(body?.successUrl) || overrideSuccessUrl;
+    const cancelOverride = sanitizeAbsoluteUrl(body?.cancelUrl) || overrideCancelUrl;
+    const failureRedirectOverride = sanitizeAbsoluteUrl(body?.failureRedirectUrl) || overrideFailureRedirect;
+    const resolvedSuccessBase = successOverride || frontendBase;
+    if (!resolvedSuccessBase) {
       return res.status(400).json({ message: 'zcredit_session_failed', detail: 'missing_public_url' });
     }
-    const frontendBase = origin.replace(/\/$/, '');
-    const applyPlaceholder = (val) => (typeof val === 'string' ? val.replace('{sessionId}', sessionIdString) : val);
-    const successOverride = sanitizeAbsoluteUrl(body?.successUrl);
-    const cancelOverride = sanitizeAbsoluteUrl(body?.cancelUrl);
-    const failureRedirectOverride = sanitizeAbsoluteUrl(body?.failureRedirectUrl);
-    const successUrl = applyPlaceholder(successOverride || `${frontendBase}/payment/return?sessionId=${sessionIdString}&gateway=zcredit`);
+    const successUrl = applyPlaceholder(successOverride || `${resolvedSuccessBase}/payment/return?sessionId=${sessionIdString}&gateway=zcredit`);
     const cancelUrl = applyPlaceholder(cancelOverride);
-    const failureRedirectUrl = applyPlaceholder(failureRedirectOverride || `${frontendBase}/payment/return?sessionId=${sessionIdString}&gateway=zcredit&status=failed`);
+    const failureRedirectUrl = applyPlaceholder(failureRedirectOverride || `${resolvedSuccessBase}/payment/return?sessionId=${sessionIdString}&gateway=zcredit&status=failed`);
 
     const apiBase = deriveApiBase(req);
-    const callbackUrl = applyPlaceholder(sanitizeAbsoluteUrl(body?.callbackUrl) || (apiBase ? `${apiBase}/api/zcredit/callback/success` : undefined));
-    const failureCallbackUrl = applyPlaceholder(sanitizeAbsoluteUrl(body?.failureCallbackUrl) || (apiBase ? `${apiBase}/api/zcredit/callback/failure` : undefined));
+    const resolvedCallbackBase = overrideCallbackUrl || sanitizeAbsoluteUrl(body?.callbackUrl) || (apiBase ? `${apiBase}/api/zcredit/callback/success` : undefined);
+    const resolvedFailureCallbackBase = overrideFailureCallbackUrl || sanitizeAbsoluteUrl(body?.failureCallbackUrl) || (apiBase ? `${apiBase}/api/zcredit/callback/failure` : undefined);
+    const callbackUrl = applyPlaceholder(resolvedCallbackBase);
+    const failureCallbackUrl = applyPlaceholder(resolvedFailureCallbackBase);
 
     const customerPayload = {
       Name: `${customerInfo.firstName || ''} ${customerInfo.lastName || ''}`.trim() || undefined,
