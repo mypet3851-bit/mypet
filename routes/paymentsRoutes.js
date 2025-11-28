@@ -8,6 +8,7 @@ import PaymentSession from '../models/PaymentSession.js';
 import { adminAuth } from '../middleware/auth.js';
 import { inventoryService } from '../services/inventoryService.js';
 import { loadSettings, requestICreditPaymentUrl, buildICreditRequest, buildICreditCandidates, diagnoseICreditConnectivity, pingICredit } from '../services/icreditService.js';
+import { createSession as createZCreditSession } from '../services/zcreditService.js';
 
 const router = express.Router();
 
@@ -176,6 +177,25 @@ function deriveOrigin(req) {
   const proto = (h['x-forwarded-proto'] || '').split(',')[0] || 'http';
   if (host) return `${proto}://${host}`;
   return process.env.FRONTEND_BASE_URL || '';
+}
+
+function deriveApiBase(req) {
+  if (process.env.PUBLIC_API_URL) {
+    return process.env.PUBLIC_API_URL.replace(/\/$/, '');
+  }
+  const h = req.headers || {};
+  const host = h['x-forwarded-host'] || h.host || '';
+  if (!host) return '';
+  const proto = (h['x-forwarded-proto'] || '').split(',')[0] || req.protocol || 'https';
+  return `${proto}://${host}`.replace(/\/$/, '');
+}
+
+function sanitizeAbsoluteUrl(url) {
+  if (typeof url !== 'string') return undefined;
+  const trimmed = url.trim();
+  if (!trimmed) return undefined;
+  if (!/^https?:\/\//i.test(trimmed)) return undefined;
+  return trimmed;
 }
 
 // Best-effort client IPv4 extractor (for gateways that require an IPAddress field)
@@ -406,8 +426,173 @@ router.post('/icredit/create-session-from-cart', async (req, res) => {
   }
 });
 
-// Confirm a paid session (idempotent): create the Order now and return summary
-router.post('/icredit/confirm', async (req, res) => {
+router.post('/zcredit/create-session-from-cart', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const { items, shippingAddress, customerInfo, currency, shippingFee, coupon } = body;
+    if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ message: 'items required' });
+    if (!shippingAddress?.street || !shippingAddress?.city || !shippingAddress?.country) return res.status(400).json({ message: 'invalid_shipping' });
+    if (!customerInfo?.email || !customerInfo?.mobile) return res.status(400).json({ message: 'invalid_customer' });
+    if (!currency) return res.status(400).json({ message: 'currency required' });
+
+    let sessionGiftCard = undefined;
+    try {
+      const rawGift = body?.giftCard;
+      if (rawGift && rawGift.code) {
+        const code = String(rawGift.code).trim();
+        const amt = Number(rawGift.amount);
+        if (code && Number.isFinite(amt) && amt > 0) {
+          sessionGiftCard = { code, amount: amt };
+        }
+      }
+    } catch {}
+
+    const productIds = Array.from(new Set(items.map((it) => String(it.product))));
+    const products = await Product.find({ _id: { $in: productIds } }).select('name price images');
+    const productMap = new Map(products.map((doc) => [String(doc._id), doc]));
+
+    let subtotal = 0;
+    const normalizedItems = [];
+    for (const item of items) {
+      const productId = String(item.product);
+      const product = productMap.get(productId);
+      if (!product) return res.status(404).json({ message: `Product not found: ${productId}` });
+      const quantity = Number(item.quantity) || 0;
+      if (quantity <= 0) return res.status(400).json({ message: 'invalid_quantity' });
+      const unitPrice = Number(product.price);
+      if (!Number.isFinite(unitPrice) || unitPrice < 0) return res.status(400).json({ message: `Invalid price for ${product._id}` });
+      subtotal += unitPrice * quantity;
+      normalizedItems.push({
+        product: product._id,
+        quantity,
+        size: item.size,
+        color: (typeof item.color === 'string' ? item.color : (item.color?.name || item.color?.code || undefined)),
+        variantId: item.variantId,
+        sku: item.sku,
+        variants: Array.isArray(item.variants)
+          ? item.variants.map((v) => ({
+              attributeId: v.attributeId || v.attribute || undefined,
+              attributeName: v.attributeName || v.name || undefined,
+              valueId: v.valueId || v.value || undefined,
+              valueName: v.valueName || v.valueLabel || v.label || undefined
+            }))
+          : undefined
+      });
+    }
+
+    const couponDiscountValue = coupon && coupon.code ? Math.max(0, Number(coupon.discount) || 0) : 0;
+    const subtotalAfterCoupon = Math.max(0, subtotal - couponDiscountValue);
+    const giftApplied = sessionGiftCard ? Math.min(sessionGiftCard.amount, subtotalAfterCoupon) : 0;
+    const normalizedShippingFee = Math.max(0, Number(shippingFee) || 0);
+    const totalDue = Math.max(0, subtotalAfterCoupon - giftApplied) + normalizedShippingFee;
+    if (!(totalDue > 0)) {
+      return res.status(400).json({ message: 'zcredit_session_failed', detail: 'total_must_be_positive' });
+    }
+
+    const reference = `ZC-${Date.now()}`;
+    const ps = await PaymentSession.create({
+      gateway: 'zcredit',
+      status: 'created',
+      reference,
+      items: normalizedItems,
+      shippingAddress: {
+        street: shippingAddress.street,
+        city: shippingAddress.city,
+        country: shippingAddress.country
+      },
+      customerInfo: {
+        firstName: customerInfo.firstName,
+        lastName: customerInfo.lastName,
+        email: customerInfo.email,
+        mobile: customerInfo.mobile,
+        secondaryMobile: customerInfo.secondaryMobile
+      },
+      coupon: coupon && coupon.code ? { code: coupon.code, discount: couponDiscountValue } : undefined,
+      giftCard: sessionGiftCard,
+      currency,
+      shippingFee: normalizedShippingFee,
+      totalWithShipping: totalDue
+    });
+
+    const sessionIdString = String(ps._id);
+    const origin = deriveOrigin(req) || sanitizeAbsoluteUrl(process.env.PUBLIC_WEB_URL || '') || '';
+    if (!origin) {
+      return res.status(400).json({ message: 'zcredit_session_failed', detail: 'missing_public_url' });
+    }
+    const frontendBase = origin.replace(/\/$/, '');
+    const applyPlaceholder = (val) => (typeof val === 'string' ? val.replace('{sessionId}', sessionIdString) : val);
+    const successOverride = sanitizeAbsoluteUrl(body?.successUrl);
+    const cancelOverride = sanitizeAbsoluteUrl(body?.cancelUrl);
+    const failureRedirectOverride = sanitizeAbsoluteUrl(body?.failureRedirectUrl);
+    const successUrl = applyPlaceholder(successOverride || `${frontendBase}/payment/return?sessionId=${sessionIdString}&gateway=zcredit`);
+    const cancelUrl = applyPlaceholder(cancelOverride);
+    const failureRedirectUrl = applyPlaceholder(failureRedirectOverride || `${frontendBase}/payment/return?sessionId=${sessionIdString}&gateway=zcredit&status=failed`);
+
+    const apiBase = deriveApiBase(req);
+    const callbackUrl = applyPlaceholder(sanitizeAbsoluteUrl(body?.callbackUrl) || (apiBase ? `${apiBase}/api/zcredit/callback/success` : undefined));
+    const failureCallbackUrl = applyPlaceholder(sanitizeAbsoluteUrl(body?.failureCallbackUrl) || (apiBase ? `${apiBase}/api/zcredit/callback/failure` : undefined));
+
+    const customerPayload = {
+      Name: `${customerInfo.firstName || ''} ${customerInfo.lastName || ''}`.trim() || undefined,
+      Email: customerInfo.email,
+      Phone: customerInfo.mobile
+    };
+
+    const cartItemsPayload = [{
+      Amount: +totalDue.toFixed(2),
+      Currency: currency,
+      Name: body?.cartLabel || 'Order Total',
+      Description: 'Full order total (including shipping/discounts)',
+      Quantity: 1,
+      IsTaxFree: false,
+      AdjustAmount: false
+    }];
+
+    const numberOfFailures = typeof body?.numberOfFailures === 'number' ? Math.min(Math.max(1, body.numberOfFailures), 5) : 3;
+    const zcreditPayload = {
+      Local: body?.local || body?.locale || 'He',
+      UniqueId: reference,
+      SuccessUrl: successUrl,
+      ...(cancelUrl ? { CancelUrl: cancelUrl } : {}),
+      CallbackUrl: callbackUrl,
+      FailureCallBackUrl: failureCallbackUrl,
+      FailureRedirectUrl: failureRedirectUrl || '',
+      NumberOfFailures: numberOfFailures,
+      PaymentType: body?.paymentType || 'regular',
+      CreateInvoice: body?.createInvoice ?? false,
+      AdditionalText: body?.additionalText || '',
+      ShowCart: body?.showCart ?? true,
+      ThemeColor: body?.themeColor || '005ebb',
+      BitButtonEnabled: body?.bitButtonEnabled ?? true,
+      ApplePayButtonEnabled: body?.applePayButtonEnabled ?? true,
+      GooglePayButtonEnabled: body?.googlePayButtonEnabled ?? true,
+      Installments: body?.installments,
+      Customer: customerPayload,
+      CartItems: cartItemsPayload,
+      FocusType: body?.focusType || 'None',
+      CardsIcons: body?.cardsIcons,
+      IssuerWhiteList: body?.issuerWhiteList,
+      BrandWhiteList: body?.brandWhiteList,
+      UseLightMode: body?.useLightMode ?? false,
+      UseCustomCSS: body?.useCustomCSS ?? false,
+      BackgroundColor: body?.backgroundColor || 'FFFFFF',
+      ShowTotalSumInPayButton: body?.showTotalSumInPayButton ?? true,
+      ForceCaptcha: body?.forceCaptcha ?? false
+    };
+
+    const response = await createZCreditSession(zcreditPayload);
+    const sessionUrl = response?.RedirectUrl || response?.redirectUrl || response?.Url;
+    if (!sessionUrl) {
+      return res.status(400).json({ message: 'zcredit_session_failed', detail: 'missing_redirect_url' });
+    }
+    return res.json({ ok: true, url: sessionUrl, sessionId: sessionIdString, providerSessionId: response?.SessionId || response?.SessionID });
+  } catch (e) {
+    try { console.error('[payments][zcredit][create-session-from-cart] error', e?.message || e); } catch {}
+    return res.status(400).json({ message: 'zcredit_session_failed', detail: e?.message || String(e) });
+  }
+});
+
+const createConfirmHandler = (expectedGateway) => async (req, res) => {
   let redeemedGiftCardDoc = null;
   let redeemedGiftCardAmount = 0;
   let pendingOrderId = null;
@@ -416,12 +601,17 @@ router.post('/icredit/confirm', async (req, res) => {
     if (!sessionId) return res.status(400).json({ message: 'sessionId required' });
     const ps = await PaymentSession.findById(sessionId);
     if (!ps) return res.status(404).json({ message: 'session_not_found' });
+    if (expectedGateway && ps.gateway && ps.gateway !== expectedGateway) {
+      return res.status(400).json({ message: 'gateway_mismatch' });
+    }
     if (ps.orderId) {
       const existing = await Order.findById(ps.orderId);
       if (existing) {
         return res.json({ ok: true, order: { _id: existing._id, orderNumber: existing.orderNumber, shippingFee: existing.shippingFee || existing.deliveryFee || 0 } });
       }
     }
+
+    const gatewayTag = expectedGateway || ps.gateway || 'hosted';
 
     // Load product catalog prices and compute totals
     let totalAmount = 0;
@@ -455,11 +645,9 @@ router.post('/icredit/confirm', async (req, res) => {
       totalAmount = Math.max(0, totalAmount - couponInfo.discount);
     }
 
-    // Trust client-provided shipping fee if configured to allow (default true in server)
     let shippingFee = Number(ps.shippingFee) || 0;
     if (!isFinite(shippingFee) || shippingFee < 0) shippingFee = 0;
 
-    // Reserve/decrement inventory on order creation (post-payment)
     try {
       const reservationItems = orderItems.map(it => ({
         product: it.product,
@@ -468,7 +656,7 @@ router.post('/icredit/confirm', async (req, res) => {
       }));
       await inventoryService.reserveItems(reservationItems, null, null);
     } catch (invErr) {
-      console.warn('[payments][icredit][confirm] inventory reserve failed', invErr?.message || invErr);
+      console.warn(`[payments][${gatewayTag}][confirm] inventory reserve failed`, invErr?.message || invErr);
     }
 
     pendingOrderId = new mongoose.Types.ObjectId();
@@ -487,7 +675,6 @@ router.post('/icredit/confirm', async (req, res) => {
       };
     }
 
-    // Create the order now
     const order = await Order.create({
       _id: pendingOrderId,
       items: orderItems,
@@ -515,10 +702,14 @@ router.post('/icredit/confirm', async (req, res) => {
     if (redeemedGiftCardDoc && pendingOrderId && redeemedGiftCardAmount > 0) {
       await rollbackGiftCardRedemption(redeemedGiftCardDoc, pendingOrderId, redeemedGiftCardAmount);
     }
-    try { console.error('[payments][icredit][confirm] error', e?.message || e); } catch {}
+    const tag = expectedGateway || 'hosted';
+    try { console.error(`[payments][${tag}][confirm] error`, e?.message || e); } catch {}
     return res.status(400).json({ message: 'confirm_failed', detail: e?.message || String(e) });
   }
-});
+};
+
+router.post('/icredit/confirm', createConfirmHandler('icredit'));
+router.post('/zcredit/confirm', createConfirmHandler('zcredit'));
 
 async function redeemGiftCardForSession(payload, orderId) {
   const code = String(payload?.code || '').trim();
