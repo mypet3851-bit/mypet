@@ -1,9 +1,10 @@
 import mongoose from 'mongoose';
 
 const PaymentSessionSchema = new mongoose.Schema({
-  gateway: { type: String, enum: ['icredit'], required: true, default: 'icredit' },
+  gateway: { type: String, enum: ['icredit', 'zcredit'], required: true, default: 'icredit' },
   status: { type: String, enum: ['created', 'approved', 'failed', 'confirmed'], default: 'created', index: true },
   reference: { type: String, index: true },
+  orderNumber: { type: String, index: true },
   // Cart snapshot to reconstruct the order at confirmation time
   items: [
     {
@@ -39,9 +40,14 @@ const PaymentSessionSchema = new mongoose.Schema({
     code: { type: String },
     discount: { type: Number }
   },
+  giftCard: {
+    code: { type: String },
+    amount: { type: Number }
+  },
   currency: { type: String, required: true },
   shippingFee: { type: Number, default: 0 },
   totalWithShipping: { type: Number },
+  cardChargeAmount: { type: Number },
 
   // For linking results
   orderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Order' },
