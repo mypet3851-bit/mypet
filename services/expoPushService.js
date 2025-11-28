@@ -48,7 +48,9 @@ async function postExpo(messages) {
   return json;
 }
 
-export async function sendExpoPush({ tokens, title, body, data, sound = 'cat.wav', priority = 'high', badge, badges }) {
+// channelId is used by Android to select the notification channel configured in the app.
+// iOS uses the `sound` payload field directly (e.g., 'cat.wav').
+export async function sendExpoPush({ tokens, title, body, data, sound = 'cat.wav', priority = 'high', badge, badges, channelId }) {
   const valid = tokens.filter(isExpoPushToken);
   const invalid = tokens.filter(t => !isExpoPushToken(t));
   if (invalid.length) {
@@ -58,13 +60,16 @@ export async function sendExpoPush({ tokens, title, body, data, sound = 'cat.wav
 
   const messages = valid.map(token => {
     const perTokenBadge = badges && typeof badges.get === 'function' ? badges.get(token) : undefined;
+    // Silent channel: omit sound field so platform uses no audible alert (Android channel config will also be silent)
+    const finalSound = channelId === 'silent' ? undefined : sound;
     return {
       to: token,
-      sound,
+      sound: finalSound,
       title,
       body,
       data: jsonSafe(data),
       priority,
+      ...(channelId ? { channelId } : {}),
       ...(typeof perTokenBadge === 'number' ? { badge: perTokenBadge } : (typeof badge === 'number' ? { badge } : {}))
     };
   });
