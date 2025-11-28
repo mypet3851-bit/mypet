@@ -320,6 +320,27 @@ export const createSessionFromCartHandler = asyncHandler(async (req, res) => {
   });
 
   const { success, cancel, callback, failureCallback } = buildSessionUrlSet(req, session._id);
+  const isHttp = (u) => typeof u === 'string' && /^https?:\/\//i.test(u);
+  const appendSessionParams = (baseUrl) => {
+    if (!baseUrl) return baseUrl;
+    try {
+      const url = new URL(baseUrl);
+      url.searchParams.set('session', session._id.toString());
+      url.searchParams.set('order', orderNumber);
+      return url.toString();
+    } catch {
+      return baseUrl;
+    }
+  };
+  const requestedSuccess = typeof body.successUrl === 'string' ? body.successUrl.trim() : '';
+  const requestedCancel = typeof body.cancelUrl === 'string' ? body.cancelUrl.trim() : '';
+  const requestedCallback = typeof body.callbackUrl === 'string' ? body.callbackUrl.trim() : '';
+  const requestedFailureCallback = typeof body.failureCallbackUrl === 'string' ? body.failureCallbackUrl.trim() : '';
+
+  const finalSuccessUrl = isHttp(requestedSuccess) ? appendSessionParams(requestedSuccess) : success;
+  const finalCancelUrl = isHttp(requestedCancel) ? requestedCancel : cancel;
+  const finalCallbackUrl = isHttp(requestedCallback) ? requestedCallback : callback;
+  const finalFailureCallbackUrl = isHttp(requestedFailureCallback) ? requestedFailureCallback : failureCallback;
   const requestedFailures = typeof body.numberOfFailures === 'number' ? body.numberOfFailures : 3;
   const effectiveFailures = Math.min(Math.max(1, requestedFailures), 5);
   const customerPayload = {
@@ -331,10 +352,10 @@ export const createSessionFromCartHandler = asyncHandler(async (req, res) => {
   const payload = {
     Local: body?.local || 'He',
     UniqueId: orderNumber,
-    SuccessUrl: success || undefined,
-    ...(cancel ? { CancelUrl: cancel } : {}),
-    CallbackUrl: callback || '',
-    FailureCallBackUrl: failureCallback || '',
+    SuccessUrl: finalSuccessUrl || undefined,
+    ...(finalCancelUrl ? { CancelUrl: finalCancelUrl } : {}),
+    CallbackUrl: finalCallbackUrl || '',
+    FailureCallBackUrl: finalFailureCallbackUrl || '',
     NumberOfFailures: effectiveFailures,
     PaymentType: body?.paymentType || 'regular',
     ShowCart: false,
