@@ -121,15 +121,6 @@ const orderSchema = new mongoose.Schema({
   },
   paymentReference: { type: String },
   paymentDetails: { type: mongoose.Schema.Types.Mixed },
-  coupon: {
-    code: { type: String },
-    discount: { type: Number, default: 0 }
-  },
-  giftCard: {
-    code: { type: String },
-    amountApplied: { type: Number, default: 0 },
-    remainingBalance: { type: Number }
-  },
   status: {
     type: String,
     enum: ['pending', 'processing', 'shipped', 'delivered', 'cancelled'],
