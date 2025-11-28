@@ -33,7 +33,7 @@ export const getAllReviews = async (req, res) => {
 // Add review
 export const addReview = async (req, res) => {
   try {
-    const { rating, comment, photos = [] } = req.body;
+    const { rating, comment, photos = [], fit, quality } = req.body;
     const product = await Product.findById(req.params.id);
     
     if (!product) {
@@ -60,6 +60,8 @@ export const addReview = async (req, res) => {
       rating,
       comment,
       photos,
+      ...(typeof fit === 'number' ? { fit } : {}),
+      ...(typeof quality === 'number' ? { quality } : {}),
       verified: await hasUserPurchasedProduct(req.user._id, product._id),
       createdAt: new Date()
     };
@@ -182,7 +184,7 @@ export const verifyReview = async (req, res) => {
 // Update review
 export const updateReview = async (req, res) => {
   try {
-    const { rating, comment, existingPhotos = [] } = req.body;
+    const { rating, comment, existingPhotos = [], fit, quality } = req.body;
     const product = await Product.findById(req.params.id);
     
     if (!product) {
@@ -209,6 +211,8 @@ export const updateReview = async (req, res) => {
     review.rating = rating;
     review.comment = comment;
     review.updatedAt = new Date();
+    if (typeof fit === 'number') review.fit = fit;
+    if (typeof quality === 'number') review.quality = quality;
     
     // Handle photos
     let photos = [];
@@ -287,6 +291,37 @@ export const deleteReview = async (req, res) => {
   } catch (error) {
     console.error('Error deleting review:', error);
     res.status(400).json({ message: error.message });
+  }
+};
+
+// Check eligibility to write a review for a specific product (used by mobile app)
+// Returns: { purchased: boolean, alreadyReviewed: boolean, canReview: boolean }
+export const getReviewEligibility = async (req, res) => {
+  try {
+    const product = await Product.findById(req.params.id).select('_id reviews');
+    if (!product) {
+      return res.status(404).json({ message: 'Product not found' });
+    }
+
+    const userId = req.user?._id;
+    if (!userId) {
+      // Should not happen when protected by auth, but keep safe fallback
+      return res.status(401).json({ message: 'Unauthorized' });
+    }
+
+    const alreadyReviewed = Array.isArray(product.reviews)
+      ? product.reviews.some(r => String(r.user) === String(userId))
+      : false;
+
+    const purchased = await hasUserPurchasedProduct(userId, product._id);
+
+    // Current business rule: allow any logged-in user to review once; mark as verified if purchased
+    const canReview = !alreadyReviewed;
+
+    return res.json({ purchased, alreadyReviewed, canReview });
+  } catch (error) {
+    console.error('Error checking review eligibility:', error);
+    return res.status(500).json({ message: 'Failed to check eligibility' });
   }
 };
 

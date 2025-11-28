@@ -338,7 +338,7 @@ export const createSessionFromCartHandler = asyncHandler(async (req, res) => {
   const requestedFailureCallback = typeof body.failureCallbackUrl === 'string' ? body.failureCallbackUrl.trim() : '';
 
   const finalSuccessUrl = isHttp(requestedSuccess) ? appendSessionParams(requestedSuccess) : success;
-  const finalCancelUrl = isHttp(requestedCancel) ? requestedCancel : cancel;
+  const finalCancelUrl = isHttp(requestedCancel) ? appendSessionParams(requestedCancel) : cancel;
   const finalCallbackUrl = isHttp(requestedCallback) ? requestedCallback : callback;
   const finalFailureCallbackUrl = isHttp(requestedFailureCallback) ? requestedFailureCallback : failureCallback;
   const requestedFailures = typeof body.numberOfFailures === 'number' ? body.numberOfFailures : 3;

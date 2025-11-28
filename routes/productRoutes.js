@@ -26,7 +26,8 @@ import {
   markReviewHelpful,
   reportReview,
   verifyReview,
-  deleteReview
+  deleteReview,
+  getReviewEligibility
 } from '../controllers/reviewController.js';
 import { updateProductImages, generateProductVariants, updateVariant, bulkUpdateVariants, getAttributeValueImages, setAttributeValueImages, deleteVariant, translateProductFields, batchTranslateProducts, syncQuantityFromRivhit, getProductI18n, setProductI18n } from '../controllers/productController.js';
 
@@ -82,6 +83,7 @@ router.delete('/:id', adminAuth, deleteProduct);
 
 // Review routes
 router.get('/reviews/all', adminAuth, getAllReviews);
+router.get('/:id/reviews/eligibility', auth, getReviewEligibility);
 router.post('/:id/reviews', auth, addReview);
 router.patch('/:id/reviews/:reviewId', auth, updateReview);
 router.post('/:id/reviews/:reviewId/helpful', auth, markReviewHelpful);
