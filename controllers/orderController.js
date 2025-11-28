@@ -94,18 +94,6 @@ export const createOrder = async (req, res) => {
     }
   const { items, shippingAddress, paymentMethod, customerInfo } = req.body;
 
-    const blockCardDrafts = String(process.env.ALLOW_CARD_ORDER_DRAFTS || 'false').toLowerCase() !== 'true';
-    if (blockCardDrafts && paymentMethod === 'card') {
-      return res.status(409).json({
-        message: 'Card payments must be created after the provider confirms payment. Start a payment session instead of calling /orders directly.',
-        code: 'CARD_PAYMENT_REQUIRES_SESSION'
-      });
-    }
-
-    const couponInfo = (req.body?.coupon && req.body.coupon.code)
-      ? { code: String(req.body.coupon.code).trim(), discount: Math.max(0, Number(req.body.coupon.discount) || 0) }
-      : undefined;
-
     // If the request includes a Bearer token, attempt to associate the order with the authenticated user
     try {
       const authHeader = req.header('Authorization');
@@ -439,7 +427,6 @@ export const createOrder = async (req, res) => {
         city: shippingAddress.city,
         weight: 0
       },
-      coupon: couponInfo,
       // For online payments (card/paypal), mark as pending until provider capture completes
       paymentStatus: paymentMethod === 'cod' ? 'pending' : 'pending'
     });
