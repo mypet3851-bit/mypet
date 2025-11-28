@@ -1,9 +1,7 @@
 import express from 'express';
-import mongoose from 'mongoose';
 import Order from '../models/Order.js';
 import Product from '../models/Product.js';
 import Settings from '../models/Settings.js';
-import GiftCard from '../models/GiftCard.js';
 import PaymentSession from '../models/PaymentSession.js';
 import { adminAuth } from '../middleware/auth.js';
 import { inventoryService } from '../services/inventoryService.js';
@@ -265,18 +263,6 @@ router.post('/icredit/create-session-from-cart', async (req, res) => {
     if (!customerInfo?.email || !customerInfo?.mobile) return res.status(400).json({ message: 'invalid_customer' });
     if (!currency) return res.status(400).json({ message: 'currency required' });
 
-    let sessionGiftCard = undefined;
-    try {
-      const rawGift = body?.giftCard;
-      if (rawGift && rawGift.code) {
-        const code = String(rawGift.code).trim();
-        const amt = Number(rawGift.amount);
-        if (code && Number.isFinite(amt) && amt > 0) {
-          sessionGiftCard = { code, amount: amt };
-        }
-      }
-    } catch {}
-
     // Persist a temporary session to tie the gateway redirect back to the cart snapshot
     const ps = await PaymentSession.create({
       gateway: 'icredit',
@@ -309,7 +295,6 @@ router.post('/icredit/create-session-from-cart', async (req, res) => {
         secondaryMobile: customerInfo.secondaryMobile
       },
       coupon: coupon && coupon.code ? { code: coupon.code, discount: Number(coupon.discount) || 0 } : undefined,
-      giftCard: sessionGiftCard,
       currency,
       shippingFee: Number(shippingFee) || 0,
       totalWithShipping: Number(body?.totalWithShipping) || undefined
@@ -408,9 +393,6 @@ router.post('/icredit/create-session-from-cart', async (req, res) => {
 
 // Confirm a paid session (idempotent): create the Order now and return summary
 router.post('/icredit/confirm', async (req, res) => {
-  let redeemedGiftCardDoc = null;
-  let redeemedGiftCardAmount = 0;
-  let pendingOrderId = null;
   try {
     const sessionId = String(req.body?.sessionId || '').trim();
     if (!sessionId) return res.status(400).json({ message: 'sessionId required' });
@@ -448,13 +430,6 @@ router.post('/icredit/confirm', async (req, res) => {
       });
     }
 
-    const couponInfo = (ps.coupon && ps.coupon.code)
-      ? { code: ps.coupon.code, discount: Math.max(0, Number(ps.coupon.discount) || 0) }
-      : undefined;
-    if (couponInfo && couponInfo.discount > 0) {
-      totalAmount = Math.max(0, totalAmount - couponInfo.discount);
-    }
-
     // Trust client-provided shipping fee if configured to allow (default true in server)
     let shippingFee = Number(ps.shippingFee) || 0;
     if (!isFinite(shippingFee) || shippingFee < 0) shippingFee = 0;
@@ -471,25 +446,8 @@ router.post('/icredit/confirm', async (req, res) => {
       console.warn('[payments][icredit][confirm] inventory reserve failed', invErr?.message || invErr);
     }
 
-    pendingOrderId = new mongoose.Types.ObjectId();
-    let giftCardSnapshot = undefined;
-    if (ps.giftCard?.code && Number(ps.giftCard?.amount) > 0) {
-      const redemption = await redeemGiftCardForSession({
-        code: ps.giftCard.code,
-        amount: Number(ps.giftCard.amount)
-      }, pendingOrderId);
-      redeemedGiftCardDoc = redemption.doc;
-      redeemedGiftCardAmount = redemption.amountApplied;
-      giftCardSnapshot = {
-        code: redemption.doc.code,
-        amountApplied: redemption.amountApplied,
-        remainingBalance: redemption.remainingBalance
-      };
-    }
-
     // Create the order now
     const order = await Order.create({
-      _id: pendingOrderId,
       items: orderItems,
       totalAmount,
       currency: ps.currency,
@@ -501,9 +459,7 @@ router.post('/icredit/confirm', async (req, res) => {
       orderNumber: `ORD${Date.now()}`,
       shippingFee,
       deliveryFee: shippingFee,
-      paymentStatus: 'completed',
-      coupon: couponInfo,
-      giftCard: giftCardSnapshot
+      paymentStatus: 'completed'
     });
 
     ps.status = 'confirmed';
@@ -512,53 +468,10 @@ router.post('/icredit/confirm', async (req, res) => {
 
     return res.json({ ok: true, order: { _id: order._id, orderNumber: order.orderNumber, shippingFee: order.shippingFee || order.deliveryFee || 0 } });
   } catch (e) {
-    if (redeemedGiftCardDoc && pendingOrderId && redeemedGiftCardAmount > 0) {
-      await rollbackGiftCardRedemption(redeemedGiftCardDoc, pendingOrderId, redeemedGiftCardAmount);
-    }
     try { console.error('[payments][icredit][confirm] error', e?.message || e); } catch {}
     return res.status(400).json({ message: 'confirm_failed', detail: e?.message || String(e) });
   }
 });
-
-async function redeemGiftCardForSession(payload, orderId) {
-  const code = String(payload?.code || '').trim();
-  const amount = Number(payload?.amount);
-  if (!code || !Number.isFinite(amount) || amount <= 0) {
-    throw new Error('invalid_gift_card_payload');
-  }
-  const giftCard = await GiftCard.findOne({ code });
-  if (!giftCard) throw new Error('gift_card_not_found');
-  const now = new Date();
-  if (giftCard.expiryDate && giftCard.expiryDate < now) {
-    throw new Error('gift_card_expired');
-  }
-  if (giftCard.status === 'cancelled') {
-    throw new Error('gift_card_cancelled');
-  }
-  if (giftCard.currentBalance < amount) {
-    throw new Error('gift_card_insufficient');
-  }
-  giftCard.currentBalance -= amount;
-  giftCard.lastUsed = new Date();
-  giftCard.redemptions.push({ order: orderId, amount });
-  await giftCard.save();
-  return { doc: giftCard, amountApplied: amount, remainingBalance: giftCard.currentBalance };
-}
-
-async function rollbackGiftCardRedemption(doc, orderId, amount) {
-  try {
-    doc.currentBalance += amount;
-    if (Array.isArray(doc.redemptions)) {
-      doc.redemptions = doc.redemptions.filter((entry) => {
-        if (!entry?.order) return true;
-        return String(entry.order) !== String(orderId);
-      });
-    }
-    await doc.save();
-  } catch (err) {
-    try { console.error('[payments][icredit][confirm] gift card rollback failed', err?.message || err); } catch {}
-  }
-}
 
 // Admin diagnostics: inspect runtime IP resolution and relevant env flags
 router.get('/icredit/debug-runtime', adminAuth, (req, res) => {
