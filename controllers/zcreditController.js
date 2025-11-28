@@ -1,14 +1,111 @@
 import asyncHandler from 'express-async-handler';
+import Order from '../models/Order.js';
+import Product from '../models/Product.js';
+import PaymentSession from '../models/PaymentSession.js';
+import { finalizePaymentSessionToOrder } from '../services/paymentSessionService.js';
 import { createSession, getSessionStatus, resendNotification } from '../services/zcreditService.js';
 
+function deriveOrigin(req) {
+  const headers = req?.headers || {};
+  if (headers.origin) return headers.origin.replace(/\/$/, '');
+  if (headers.referer) {
+    try {
+      const url = new URL(headers.referer);
+      return `${url.protocol}//${url.host}`;
+    } catch {}
+  }
+  const host = headers['x-forwarded-host'] || headers.host;
+  if (!host) return '';
+  const proto = (headers['x-forwarded-proto'] || '').split(',')[0] || (req?.protocol || 'https');
+  return `${proto}://${host}`.replace(/\/$/, '');
+}
+
 function buildDefaultUrls(req) {
-  const publicBase = process.env.PUBLIC_WEB_URL || '';
-  const apiBase = process.env.PUBLIC_API_URL || publicBase || '';
+  const requestOrigin = deriveOrigin(req) || '';
+  const publicBase = (process.env.PUBLIC_WEB_URL || requestOrigin || '').replace(/\/$/, '');
+  const apiBase = (process.env.PUBLIC_API_URL || publicBase || '').replace(/\/$/, '');
   const defaultSuccess = publicBase ? `${publicBase}/checkout/success` : '';
   const defaultCancel = publicBase ? `${publicBase}/checkout/cancel` : '';
   const defaultSuccessCb = apiBase ? `${apiBase}/api/zcredit/callback/success` : '';
   const defaultFailureCb = apiBase ? `${apiBase}/api/zcredit/callback/failure` : '';
-  return { defaultSuccess, defaultCancel, defaultSuccessCb, defaultFailureCb };
+  return { defaultSuccess, defaultCancel, defaultSuccessCb, defaultFailureCb, publicBase, apiBase };
+}
+
+function sanitizeCheckoutItems(items) {
+  if (!Array.isArray(items)) return [];
+  return items.map((it) => ({
+    product: it.product,
+    quantity: Number(it.quantity) || 0,
+    size: it.size,
+    color: typeof it.color === 'string' ? it.color : (it.color?.name || it.color?.code || undefined),
+    variantId: it.variantId,
+    sku: it.sku,
+    variants: Array.isArray(it.variants)
+      ? it.variants.map((v) => ({
+        attributeId: v.attributeId || v.attribute || undefined,
+        attributeName: v.attributeName || v.name || undefined,
+        valueId: v.valueId || v.value || undefined,
+        valueName: v.valueName || v.valueLabel || v.label || undefined
+      }))
+      : undefined
+  }));
+}
+
+function parseGiftCardPayload(raw) {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const code = String(raw.code || '').trim();
+  const amount = Number(raw.amount);
+  if (!code || !Number.isFinite(amount) || amount <= 0) return undefined;
+  return { code, amount };
+}
+
+async function calculatePricingSummary(items, currency) {
+  const summary = { subtotal: 0 };
+  for (const item of items) {
+    const qty = Number(item.quantity) || 0;
+    if (qty <= 0) {
+      throw new Error('invalid_quantity');
+    }
+    const product = await Product.findById(item.product);
+    if (!product) {
+      throw new Error(`Product not found: ${item.product}`);
+    }
+    const price = Number(product.price);
+    if (!Number.isFinite(price) || price <= 0) {
+      throw new Error(`Invalid price for product ${product._id}`);
+    }
+    summary.subtotal += price * qty;
+  }
+  summary.currency = currency;
+  return summary;
+}
+
+function buildSessionUrlSet(req, sessionId) {
+  const { publicBase, apiBase } = buildDefaultUrls(req);
+  const success = publicBase ? `${publicBase}/payment/return?session=${sessionId}` : '';
+  const cancel = publicBase ? `${publicBase}/cart` : '';
+  const callback = apiBase ? `${apiBase}/api/zcredit/callback/success` : '';
+  const failureCallback = apiBase ? `${apiBase}/api/zcredit/callback/failure` : '';
+  return { success, cancel, callback, failureCallback };
+}
+
+function buildPaymentDetailsFromCallback(body) {
+  return {
+    gateway: 'zcredit',
+    zcredit: {
+      SessionId: body?.SessionId,
+      ReferenceNumber: body?.ReferenceNumber,
+      ApprovalNumber: body?.ApprovalNumber,
+      Token: body?.Token,
+      VoucherNumber: body?.VoucherNumber,
+      InvoiceRecieptDocumentNumber: body?.InvoiceRecieptDocumentNumber,
+      InvoiceRecieptNumber: body?.InvoiceRecieptNumber,
+      CardNum: body?.CardNum,
+      ExpDate_MMYY: body?.ExpDate_MMYY,
+      PaymentMethod: body?.PaymentMethod,
+      Raw: body
+    }
+  };
 }
 
 export const createSessionHandler = asyncHandler(async (req, res) => {
@@ -160,6 +257,128 @@ export const createSessionHandler = asyncHandler(async (req, res) => {
   res.json(data);
 });
 
+export const createSessionFromCartHandler = asyncHandler(async (req, res) => {
+  const body = req.body || {};
+  const { items, shippingAddress, customerInfo } = body;
+  if (!Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({ message: 'items required' });
+  }
+  if (!shippingAddress?.street || !shippingAddress?.city || !shippingAddress?.country) {
+    return res.status(400).json({ message: 'invalid_shipping' });
+  }
+  if (!customerInfo?.email || !customerInfo?.mobile) {
+    return res.status(400).json({ message: 'invalid_customer' });
+  }
+
+  const currency = String(body.currency || process.env.STORE_CURRENCY || 'ILS');
+  const normalizedItems = sanitizeCheckoutItems(items);
+  const summary = await calculatePricingSummary(normalizedItems, currency);
+  const couponInfo = body?.coupon?.code
+    ? { code: String(body.coupon.code).trim(), discount: Math.max(0, Number(body.coupon.discount) || 0) }
+    : undefined;
+  const giftCardInfo = parseGiftCardPayload(body?.giftCard);
+
+  let itemsTotal = summary.subtotal;
+  if (couponInfo?.discount) {
+    itemsTotal = Math.max(0, itemsTotal - couponInfo.discount);
+  }
+
+  const rawShippingFee = Number(body.shippingFee);
+  const shippingFee = Number.isFinite(rawShippingFee) && rawShippingFee >= 0 ? rawShippingFee : 0;
+  const totalWithShipping = itemsTotal + shippingFee;
+  const giftDeduction = giftCardInfo?.amount || 0;
+  const cardChargeAmount = Math.max(0, totalWithShipping - giftDeduction);
+  if (!(cardChargeAmount > 0)) {
+    return res.status(400).json({ message: 'card_charge_must_be_positive' });
+  }
+
+  const orderNumber = body?.orderNumber?.trim?.() ? String(body.orderNumber).trim() : `ORD${Date.now()}`;
+  const session = await PaymentSession.create({
+    gateway: 'zcredit',
+    status: 'created',
+    reference: `ZC-${Date.now()}`,
+    orderNumber,
+    items: normalizedItems,
+    shippingAddress: {
+      street: shippingAddress.street,
+      city: shippingAddress.city,
+      country: shippingAddress.country
+    },
+    customerInfo: {
+      firstName: customerInfo.firstName,
+      lastName: customerInfo.lastName,
+      email: customerInfo.email,
+      mobile: customerInfo.mobile,
+      secondaryMobile: customerInfo.secondaryMobile
+    },
+    coupon: couponInfo,
+    giftCard: giftCardInfo,
+    currency,
+    shippingFee,
+    totalWithShipping,
+    cardChargeAmount
+  });
+
+  const { success, cancel, callback, failureCallback } = buildSessionUrlSet(req, session._id);
+  const requestedFailures = typeof body.numberOfFailures === 'number' ? body.numberOfFailures : 3;
+  const effectiveFailures = Math.min(Math.max(1, requestedFailures), 5);
+  const customerPayload = {
+    Name: `${customerInfo.firstName || ''} ${customerInfo.lastName || ''}`.trim(),
+    Email: customerInfo.email,
+    Phone: customerInfo.mobile
+  };
+
+  const payload = {
+    Local: body?.local || 'He',
+    UniqueId: orderNumber,
+    SuccessUrl: success || undefined,
+    ...(cancel ? { CancelUrl: cancel } : {}),
+    CallbackUrl: callback || '',
+    FailureCallBackUrl: failureCallback || '',
+    NumberOfFailures: effectiveFailures,
+    PaymentType: body?.paymentType || 'regular',
+    ShowCart: false,
+    Installments: body?.installments || undefined,
+    Customer: customerPayload,
+    CartItems: [{
+      Amount: +cardChargeAmount.toFixed(2),
+      Currency: currency,
+      Name: 'Order Total',
+      Description: 'Checkout total after discounts',
+      Quantity: 1,
+      IsTaxFree: false,
+      AdjustAmount: false
+    }]
+  };
+
+  try {
+    const data = await createSession(payload);
+    const sessionUrl = data?.Data?.SessionUrl || data?.SessionUrl || data?.Data?.sessionUrl || data?.sessionUrl;
+    const providerSessionId = data?.Data?.SessionId || data?.SessionId;
+    session.paymentDetails = {
+      gateway: 'zcredit',
+      zcredit: {
+        SessionId: providerSessionId,
+        SessionUrl: sessionUrl,
+        CardChargeAmount: cardChargeAmount
+      }
+    };
+    session.reference = orderNumber;
+    await session.save();
+    return res.json({
+      ok: true,
+      sessionUrl,
+      sessionId: session._id,
+      orderNumber,
+      cardChargeAmount,
+      totalWithShipping
+    });
+  } catch (e) {
+    try { console.error('[zcredit][session-from-cart] failed', e?.message || e); } catch {}
+    return res.status(400).json({ message: 'session_failed', detail: e?.message || String(e) });
+  }
+});
+
 export const getStatusHandler = asyncHandler(async (req, res) => {
   const { sessionId } = req.body || {};
   if (!sessionId) {
@@ -170,6 +389,72 @@ export const getStatusHandler = asyncHandler(async (req, res) => {
   res.json(data);
 });
 
+export const confirmSessionHandler = asyncHandler(async (req, res) => {
+  const sessionId = String(req.body?.sessionId || '').trim();
+  if (!sessionId) {
+    return res.status(400).json({ message: 'sessionId required' });
+  }
+  const session = await PaymentSession.findById(sessionId);
+  if (!session) {
+    return res.status(404).json({ message: 'session_not_found' });
+  }
+  if (session.gateway !== 'zcredit') {
+    return res.status(400).json({ message: 'invalid_gateway' });
+  }
+
+  if (session.orderId) {
+    const existing = await Order.findById(session.orderId);
+    if (existing) {
+      return res.json({ ok: true, order: { _id: existing._id, orderNumber: existing.orderNumber, paymentStatus: existing.paymentStatus } });
+    }
+  }
+
+  const providerSessionId = session.paymentDetails?.zcredit?.SessionId || String(req.body?.gatewaySessionId || '').trim();
+  if (!providerSessionId) {
+    return res.status(400).json({ message: 'gateway_session_missing' });
+  }
+
+  let statusPayload;
+  try {
+    statusPayload = await getSessionStatus(providerSessionId);
+  } catch (err) {
+    return res.status(400).json({ message: 'status_lookup_failed', detail: err?.message || String(err) });
+  }
+
+  if (!statusPayload?.TransactionSuccess) {
+    return res.status(409).json({ message: 'transaction_not_successful', detail: statusPayload?.ReturnMessage || 'pending' });
+  }
+
+  let callbackJson = null;
+  try {
+    if (statusPayload?.CallBackJSON) {
+      callbackJson = JSON.parse(statusPayload.CallBackJSON);
+    }
+  } catch {}
+
+  const paymentDetails = {
+    gateway: 'zcredit',
+    zcredit: {
+      SessionId: providerSessionId,
+      Status: statusPayload,
+      Callback: callbackJson
+    }
+  };
+
+  const { order } = await finalizePaymentSessionToOrder(session, {
+    paymentMethod: 'card',
+    paymentStatus: 'completed',
+    paymentDetails
+  });
+
+  try {
+    const { realTimeEventService } = await import('../services/realTimeEventService.js');
+    realTimeEventService.emitOrderUpdate(order);
+  } catch {}
+
+  return res.json({ ok: true, order: { _id: order._id, orderNumber: order.orderNumber, paymentStatus: order.paymentStatus } });
+});
+
 export const resendNotificationHandler = asyncHandler(async (req, res) => {
   const { sessionId } = req.body || {};
   if (!sessionId) {
@@ -178,6 +463,40 @@ export const resendNotificationHandler = asyncHandler(async (req, res) => {
   }
   const data = await resendNotification(sessionId);
   res.json(data);
+});
+
+export const getSessionOrderHandler = asyncHandler(async (req, res) => {
+  const sessionId = String(req.params?.sessionId || '').trim();
+  if (!sessionId) {
+    return res.status(400).json({ message: 'sessionId required' });
+  }
+  const session = await PaymentSession.findById(sessionId);
+  if (!session) {
+    return res.status(404).json({ message: 'session_not_found' });
+  }
+  let orderPayload = null;
+  if (session.orderId) {
+    const order = await Order.findById(session.orderId);
+    if (order) {
+      orderPayload = {
+        _id: order._id,
+        orderNumber: order.orderNumber,
+        paymentStatus: order.paymentStatus,
+        status: order.status
+      };
+    }
+  }
+  return res.json({
+    ok: true,
+    session: {
+      id: session._id,
+      gateway: session.gateway,
+      status: session.status,
+      orderNumber: session.orderNumber,
+      cardChargeAmount: session.cardChargeAmount
+    },
+    order: orderPayload
+  });
 });
 
 export const successCallbackHandler = asyncHandler(async (req, res) => {
@@ -191,38 +510,32 @@ export const successCallbackHandler = asyncHandler(async (req, res) => {
   }
 
   try {
-    const { default: Order } = await import('../models/Order.js');
     const uid = req.body?.UniqueID || req.body?.UniqueId || req.body?.uniqueId || '';
     if (!uid) {
       return res.json({ ok: true, warning: 'UniqueID missing in callback; order reconciliation skipped' });
     }
-    const order = await Order.findOne({ orderNumber: uid });
-    if (!order) {
-      return res.json({ ok: true, warning: `Order not found by orderNumber=${uid}` });
-    }
+    let order = await Order.findOne({ orderNumber: uid });
+    const paymentDetails = buildPaymentDetailsFromCallback(req.body);
 
-    // Update order payment fields
-    order.paymentMethod = order.paymentMethod || 'card';
-    order.paymentStatus = 'completed';
-    order.paymentReference = req.body?.ReferenceNumber || order.paymentReference;
-    const prevDetails = (order.paymentDetails && typeof order.paymentDetails === 'object') ? order.paymentDetails : {};
-    order.paymentDetails = {
-      ...prevDetails,
-      gateway: 'zcredit',
-      zcredit: {
-        SessionId: req.body?.SessionId,
-        ReferenceNumber: req.body?.ReferenceNumber,
-        ApprovalNumber: req.body?.ApprovalNumber,
-        Token: req.body?.Token,
-        VoucherNumber: req.body?.VoucherNumber,
-        InvoiceRecieptDocumentNumber: req.body?.InvoiceRecieptDocumentNumber,
-        InvoiceRecieptNumber: req.body?.InvoiceRecieptNumber,
-        CardNum: req.body?.CardNum,
-        ExpDate_MMYY: req.body?.ExpDate_MMYY,
-        PaymentMethod: req.body?.PaymentMethod
+    if (!order) {
+      const session = await PaymentSession.findOne({ orderNumber: uid, gateway: 'zcredit' });
+      if (session) {
+        const { order: created } = await finalizePaymentSessionToOrder(session, {
+          paymentMethod: 'card',
+          paymentStatus: 'completed',
+          paymentDetails
+        });
+        order = created;
+      } else {
+        return res.json({ ok: true, warning: `Order not found by orderNumber=${uid}` });
       }
-    };
-    await order.save();
+    } else {
+      order.paymentMethod = order.paymentMethod || 'card';
+      order.paymentStatus = 'completed';
+      order.paymentReference = req.body?.ReferenceNumber || order.paymentReference;
+      order.paymentDetails = paymentDetails;
+      await order.save();
+    }
 
     try {
       const { realTimeEventService } = await import('../services/realTimeEventService.js');
@@ -247,19 +560,30 @@ export const failureCallbackHandler = asyncHandler(async (req, res) => {
   }
 
   try {
-    const { default: Order } = await import('../models/Order.js');
     const uid = req.body?.UniqueID || req.body?.UniqueId || req.body?.uniqueId || '';
     if (!uid) {
       return res.json({ ok: true, warning: 'UniqueID missing in failure callback; order reconciliation skipped' });
     }
     const order = await Order.findOne({ orderNumber: uid });
     if (!order) {
+      const session = await PaymentSession.findOne({ orderNumber: uid, gateway: 'zcredit' });
+      if (session) {
+        session.status = 'failed';
+        session.paymentDetails = {
+          ...(session.paymentDetails || {}),
+          gateway: 'zcredit',
+          zcreditFailure: {
+            ReturnCode: req.body?.ReturnCode,
+            ReturnMessage: req.body?.ReturnMessage
+          }
+        };
+        await session.save();
+        return res.json({ ok: true, warning: `Order not yet created for orderNumber=${uid}` });
+      }
       return res.json({ ok: true, warning: `Order not found by orderNumber=${uid}` });
     }
     order.paymentStatus = 'failed';
-    const prevDetails = (order.paymentDetails && typeof order.paymentDetails === 'object') ? order.paymentDetails : {};
     order.paymentDetails = {
-      ...prevDetails,
       gateway: 'zcredit',
       zcreditFailure: {
         ReturnCode: req.body?.ReturnCode,
@@ -280,7 +604,10 @@ export const failureCallbackHandler = asyncHandler(async (req, res) => {
 
 export default {
   createSessionHandler,
+  createSessionFromCartHandler,
   getStatusHandler,
+  getSessionOrderHandler,
+  confirmSessionHandler,
   resendNotificationHandler,
   successCallbackHandler,
   failureCallbackHandler

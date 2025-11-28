@@ -1,7 +1,10 @@
 import express from 'express';
 import {
   createSessionHandler,
+  createSessionFromCartHandler,
   getStatusHandler,
+  getSessionOrderHandler,
+  confirmSessionHandler,
   resendNotificationHandler,
   successCallbackHandler,
   failureCallbackHandler
@@ -12,8 +15,17 @@ const router = express.Router();
 // Create WebCheckout session
 router.post('/session', createSessionHandler);
 
+// Create session directly from checkout payload (no order pre-create)
+router.post('/session-from-cart', createSessionFromCartHandler);
+
 // Get session status
 router.post('/status', getStatusHandler);
+
+// Confirm a session and create the order after successful payment
+router.post('/session/confirm', confirmSessionHandler);
+
+// Fetch session + order linkage (used by return page polling)
+router.get('/session/:sessionId/order', getSessionOrderHandler);
 
 // Resend callback notification
 router.post('/resend', resendNotificationHandler);
