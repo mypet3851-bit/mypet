@@ -190,6 +190,20 @@ export const applyToOrder = async (req, res) => {
 
     await giftCard.save();
 
+    try {
+      if (req.body?.orderId) {
+        await Order.findByIdAndUpdate(req.body.orderId, {
+          giftCard: {
+            code,
+            amountApplied: amount,
+            remainingBalance: giftCard.currentBalance
+          }
+        });
+      }
+    } catch (updateErr) {
+      console.warn('Failed to update order with gift card info:', updateErr?.message || updateErr);
+    }
+
     res.json({
       amountApplied: amount,
       remainingBalance: giftCard.currentBalance
@@ -246,6 +260,17 @@ export const applyToOrderGuest = async (req, res) => {
     giftCard.lastUsed = new Date();
     giftCard.redemptions.push({ order: order._id, amount });
     await giftCard.save();
+
+    try {
+      order.giftCard = {
+        code,
+        amountApplied: amount,
+        remainingBalance: giftCard.currentBalance
+      };
+      await order.save();
+    } catch (updateErr) {
+      console.warn('Failed to update order gift card snapshot (guest apply):', updateErr?.message || updateErr);
+    }
 
     res.json({ amountApplied: amount, remainingBalance: giftCard.currentBalance });
   } catch (error) {
