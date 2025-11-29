@@ -106,6 +106,7 @@ import InventoryHistory from '../models/InventoryHistory.js';
 import Category from '../models/Category.js';
 import Brand from '../models/Brand.js';
 import Warehouse from '../models/Warehouse.js';
+import Settings from '../models/Settings.js';
 import { validateProductData } from '../utils/validation.js';
 import { handleProductImages } from '../utils/imageHandler.js';
 import cloudinary from '../services/cloudinaryClient.js';
@@ -114,6 +115,7 @@ import { inventoryService } from '../services/inventoryService.js';
 import { realTimeEventService } from '../services/realTimeEventService.js';
 import { deepseekTranslate, deepseekTranslateBatch, isDeepseekConfigured } from '../services/translate/deepseek.js';
 import { getItemQuantity as rivhitGetQty, testConnectivity as rivhitTest } from '../services/rivhitService.js';
+import { setItemsList } from '../services/mcgService.js';
 // Currency conversion disabled for product storage/display; prices are stored and served as-is in store currency
 
 // Get all products
@@ -2328,16 +2330,73 @@ export const getProductI18n = async (req, res) => {
 
 // Admin: Set i18n maps (merge) for a product
 // body: { name?: { [lang]: string }, description?: { [lang]: string } }
+const getMapValue = (map, key) => {
+  if (!map) return undefined;
+  if (typeof map.get === 'function') return map.get(key);
+  return map[key];
+};
+
+async function pushMcgHebrewName(productDoc, hebrewName) {
+  const cleanName = typeof hebrewName === 'string' ? hebrewName.trim() : '';
+  if (!cleanName) return;
+  const payload = [];
+  const seen = new Set();
+  const addItem = (kind, value) => {
+    const normalized = (value ?? '').toString().trim();
+    if (!normalized) return;
+    const key = `${kind}:${normalized}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    payload.push(kind === 'id' ? { item_id: normalized, item_name: cleanName } : { item_code: normalized, item_name: cleanName });
+  };
+
+  addItem('id', productDoc?.mcgItemId);
+  addItem('code', productDoc?.mcgBarcode);
+  if (Array.isArray(productDoc?.variants)) {
+    for (const variant of productDoc.variants) {
+      addItem('code', variant?.barcode);
+    }
+  }
+
+  if (!payload.length) return;
+
+  let group;
+  try {
+    const settings = await Settings.findOne().select('mcg.group').lean();
+    const raw = settings?.mcg?.group;
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed)) group = parsed;
+  } catch {}
+
+  try {
+    await setItemsList(payload, group);
+    try {
+      console.log('[mcg][i18n] pushed he name for product %s (items=%d)', String(productDoc?._id || ''), payload.length);
+    } catch {}
+  } catch (err) {
+    try {
+      console.warn('[mcg][i18n] failed to push he name for product %s: %s', String(productDoc?._id || ''), err?.message || err);
+    } catch {}
+  }
+}
+
 export const setProductI18n = async (req, res) => {
   try {
     const { id } = req.params;
     const { name, description } = req.body || {};
-    // First ensure document exists (return 404 instead of silent upsert)
-    const exists = await Product.exists({ _id: id });
-    if (!exists) return res.status(404).json({ message: 'Product not found' });
+    const product = await Product.findById(id).select('name_i18n description_i18n mcgItemId mcgBarcode variants.barcode');
+    if (!product) return res.status(404).json({ message: 'Product not found' });
 
-    // Build atomic $set / $unset operations using dot-paths to avoid
-    // Mongoose Map quirks across versions (iterability, change tracking).
+    const prevHeRaw = getMapValue(product.name_i18n, 'he');
+    const prevHe = typeof prevHeRaw === 'string' ? prevHeRaw.trim() : '';
+    let nextHeProvided = false;
+    let nextHeValue = '';
+    if (name && typeof name === 'object' && Object.prototype.hasOwnProperty.call(name, 'he')) {
+      nextHeProvided = true;
+      nextHeValue = typeof name.he === 'string' ? name.he.trim() : '';
+    }
+    const shouldPushHeName = nextHeProvided && !!nextHeValue && nextHeValue !== prevHe;
+
     const $set = {};
     const $unset = {};
 
@@ -2356,16 +2415,20 @@ export const setProductI18n = async (req, res) => {
       }
     }
 
-    // No-op guard
     if (!Object.keys($set).length && !Object.keys($unset).length) {
       return res.json({ ok: true, changed: false });
     }
 
-  const update = {};
+    const update = {};
     if (Object.keys($set).length) update.$set = $set;
     if (Object.keys($unset).length) update.$unset = $unset;
 
     await Product.updateOne({ _id: id }, update, { runValidators: false }).exec();
+
+    if (shouldPushHeName) {
+      await pushMcgHebrewName(product, nextHeValue);
+    }
+
     return res.json({ ok: true, changed: true });
   } catch (e) {
     console.error('setProductI18n error', e);
