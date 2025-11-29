@@ -1278,13 +1278,46 @@ export const updateProduct = async (req, res) => {
       }
     } catch (e) { /* silent */ }
 
+    // When admin manually edits product-level stock for a simple product (no variants),
+    // ensure the default inventory row reflects the new absolute quantity. Without this
+    // adjustment, the later recomputeProductStock() call will overwrite the manual value
+    // with the sum of existing inventory rows (often the previous quantity), making it
+    // appear that the change was ignored.
+    try {
+      if (updateDataSanitized.stock !== undefined) {
+        const hasVariants = Array.isArray(product?.variants) && product.variants.length > 0;
+        if (!hasVariants) {
+          const desired = Math.max(0, Number(updateDataSanitized.stock) || 0);
+          // Load or create a Main Warehouse and upsert a single canonical default row.
+          let warehouses = await Warehouse.find({});
+          if (!warehouses || warehouses.length === 0) {
+            const created = await Warehouse.findOneAndUpdate(
+              { name: 'Main Warehouse' },
+              { $setOnInsert: { name: 'Main Warehouse' } },
+              { upsert: true, new: true }
+            );
+            warehouses = created ? [created] : [];
+          }
+          if (warehouses && warehouses.length) {
+            const main = warehouses.find(w => String(w.name).toLowerCase() === 'main warehouse') || warehouses[0];
+            await Inventory.findOneAndUpdate(
+              { product: product._id, size: 'Default', color: 'Default', warehouse: main._id },
+              { $set: { quantity: desired, location: main.name, lowStockThreshold: 5 } },
+              { upsert: true, new: true, setDefaultsOnInsert: true }
+            );
+          }
+        }
+      }
+    } catch (e) { try { console.warn('[products][update] failed to sync default inventory row for stock edit:', e?.message || e); } catch {} }
+
     // Trigger MCG stock push when product-level stock or inventory-affecting color/size data changed
     try {
       const productBeforeStock = Number(productBefore?.stock);
       const productAfterStock = Number(product?.stock);
       const stockChanged = Number.isFinite(productBeforeStock) && Number.isFinite(productAfterStock) && productBeforeStock !== productAfterStock;
       const inventoryStructureChanged = incomingColors !== undefined || Array.isArray(sizes);
-      if (stockChanged || inventoryStructureChanged) {
+      const manualStockProvided = updateDataSanitized.stock !== undefined; // explicit field present in update payload
+      if (stockChanged || inventoryStructureChanged || manualStockProvided) {
         // Recompute product stock totals to ensure consistency, then push to MCG
         try { await inventoryService.recomputeProductStock(product._id); } catch {}
         try { await inventoryService.pushMcgForEntireProduct(product._id); } catch {}
