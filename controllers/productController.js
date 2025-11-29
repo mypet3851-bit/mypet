@@ -2407,7 +2407,7 @@ async function pushMcgHebrewName(productDoc, hebrewName) {
 export const setProductI18n = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, description } = req.body || {};
+    const { name, description, applyDefaultName } = req.body || {};
     const product = await Product.findById(id).select('name_i18n description_i18n mcgItemId mcgBarcode variants.barcode');
     if (!product) return res.status(404).json({ message: 'Product not found' });
 
@@ -2423,12 +2423,19 @@ export const setProductI18n = async (req, res) => {
 
     const $set = {};
     const $unset = {};
+    const baseFieldSet = {};
 
     if (name && typeof name === 'object') {
       for (const [lang, raw] of Object.entries(name)) {
         const v = typeof raw === 'string' ? raw.trim() : '';
         const path = `name_i18n.${lang}`;
         if (v) { $set[path] = v; } else { $unset[path] = ''; }
+      }
+      if (applyDefaultName && Object.prototype.hasOwnProperty.call(name, 'en')) {
+        const enValue = typeof name.en === 'string' ? name.en.trim() : '';
+        if (enValue) {
+          baseFieldSet.name = enValue;
+        }
       }
     }
     if (description && typeof description === 'object') {
@@ -2439,12 +2446,14 @@ export const setProductI18n = async (req, res) => {
       }
     }
 
-    if (!Object.keys($set).length && !Object.keys($unset).length) {
+    if (!Object.keys($set).length && !Object.keys($unset).length && !Object.keys(baseFieldSet).length) {
       return res.json({ ok: true, changed: false });
     }
 
     const update = {};
-    if (Object.keys($set).length) update.$set = $set;
+    if (Object.keys($set).length || Object.keys(baseFieldSet).length) {
+      update.$set = { ...baseFieldSet, ...$set };
+    }
     if (Object.keys($unset).length) update.$unset = $unset;
 
     await Product.updateOne({ _id: id }, update, { runValidators: false }).exec();
