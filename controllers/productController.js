@@ -2244,6 +2244,13 @@ export const translateProductFields = async (req, res) => {
     const product = await Product.findById(id);
     if (!product) return res.status(404).json({ message: 'Product not found' });
 
+    const prevHeRaw = product?.name_i18n
+      ? (typeof product.name_i18n.get === 'function' ? product.name_i18n.get('he') : product.name_i18n.he)
+      : '';
+    const prevHeName = typeof prevHeRaw === 'string' ? prevHeRaw.trim() : '';
+    let nextHeName = '';
+    let shouldPushHeName = false;
+
     const updates = {};
     for (const field of targets) {
       const src = product[field];
@@ -2253,6 +2260,15 @@ export const translateProductFields = async (req, res) => {
         const mapField = field + '_i18n';
         if (!updates[mapField]) updates[mapField] = new Map(product[mapField] || []);
         updates[mapField].set(to, translated);
+        if (field === 'name' && to === 'he') {
+          const trimmed = typeof translated === 'string' ? translated.trim() : '';
+          if (trimmed) {
+            nextHeName = trimmed;
+            if (trimmed !== prevHeName) {
+              shouldPushHeName = true;
+            }
+          }
+        }
       } catch (e) {
         return res.status(502).json({ message: `Translation failed for ${field}`, error: e?.message || 'translate_failed' });
       }
@@ -2262,6 +2278,14 @@ export const translateProductFields = async (req, res) => {
       product[k] = v;
     });
     await product.save();
+
+    if (shouldPushHeName) {
+      try {
+        await pushMcgHebrewName(product, nextHeName);
+      } catch (pushErr) {
+        try { console.warn('[mcg][translate] failed to push he name', pushErr?.message || pushErr); } catch {}
+      }
+    }
     res.json({ message: 'Translated', product });
   } catch (e) {
     console.error('translateProductFields error', e);
