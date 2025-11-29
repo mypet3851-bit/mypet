@@ -131,15 +131,50 @@ async function resolveCategoryAndDescendants(categoryParam) {
   return { ids: descendants.map(d => d._id.toString()), notFound: false };
 }
 
+const escapeRegex = (value = '') => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 async function buildProductQuery(params) {
   const { search, category, categories, brand, isNew, isFeatured, onSale, includeInactive, colors, sizes, size, color, minPrice, maxPrice, primaryOnly, strictCategory, tag, tags } = params;
   let query = {};
 
-  if (search) {
-    query.$or = [
-      { name: { $regex: search, $options: 'i' } },
-      { description: { $regex: search, $options: 'i' } }
+  const trimmedSearch = typeof search === 'string' ? search.trim() : '';
+  if (trimmedSearch) {
+    const safePattern = escapeRegex(trimmedSearch);
+    const searchRegex = new RegExp(safePattern, 'i');
+    const orClauses = [
+      { name: searchRegex },
+      { description: searchRegex },
+      { mcgBarcode: searchRegex },
+      { mcgItemId: searchRegex },
+      { sku: searchRegex },
+      { 'variants.sku': searchRegex },
+      { 'variants.barcode': searchRegex }
     ];
+
+    if (/^[a-fA-F0-9]{24}$/.test(trimmedSearch)) {
+      orClauses.push({ _id: trimmedSearch });
+    }
+
+    try {
+      const [matchingCategories, matchingBrands] = await Promise.all([
+        Category.find({ $or: [ { name: searchRegex }, { slug: searchRegex } ] }).select('_id'),
+        Brand.find({ $or: [ { name: searchRegex }, { slug: searchRegex } ] }).select('_id')
+      ]);
+
+      if (matchingCategories.length) {
+        const categoryIds = matchingCategories.map((doc) => doc._id);
+        orClauses.push({ category: { $in: categoryIds } });
+        orClauses.push({ categories: { $in: categoryIds } });
+      }
+      if (matchingBrands.length) {
+        const brandIds = matchingBrands.map((doc) => doc._id);
+        orClauses.push({ brand: { $in: brandIds } });
+      }
+    } catch (err) {
+      console.warn('[buildProductQuery] search lookup failed:', err?.message || err);
+    }
+
+    query.$or = orClauses;
   }
 
   if (category) {
