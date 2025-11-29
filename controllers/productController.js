@@ -2279,14 +2279,14 @@ export const translateProductFields = async (req, res) => {
     });
     await product.save();
 
+    let mcgPush = null;
     if (shouldPushHeName) {
-      try {
-        await pushMcgHebrewName(product, nextHeName);
-      } catch (pushErr) {
-        try { console.warn('[mcg][translate] failed to push he name', pushErr?.message || pushErr); } catch {}
+      mcgPush = await pushMcgHebrewName(product, nextHeName);
+      if (mcgPush?.success === false) {
+        try { console.warn('[mcg][translate] push result', mcgPush); } catch {}
       }
     }
-    res.json({ message: 'Translated', product });
+    res.json({ message: 'Translated', product, mcgPush });
   } catch (e) {
     console.error('translateProductFields error', e);
     res.status(500).json({ message: 'Failed to translate product' });
@@ -2362,7 +2362,8 @@ const getMapValue = (map, key) => {
 
 async function pushMcgHebrewName(productDoc, hebrewName) {
   const cleanName = typeof hebrewName === 'string' ? hebrewName.trim() : '';
-  if (!cleanName) return;
+  if (!cleanName) return { attempted: false, reason: 'empty_name' };
+
   const payload = [];
   const seen = new Set();
   const addItem = (kind, value) => {
@@ -2371,7 +2372,8 @@ async function pushMcgHebrewName(productDoc, hebrewName) {
     const key = `${kind}:${normalized}`;
     if (seen.has(key)) return;
     seen.add(key);
-    payload.push(kind === 'id' ? { item_id: normalized, item_name: cleanName } : { item_code: normalized, item_name: cleanName });
+    const base = kind === 'id' ? { item_id: normalized } : { item_code: normalized };
+    payload.push({ ...base, item_name: cleanName });
   };
 
   addItem('id', productDoc?.mcgItemId);
@@ -2382,7 +2384,12 @@ async function pushMcgHebrewName(productDoc, hebrewName) {
     }
   }
 
-  if (!payload.length) return;
+  if (!payload.length) {
+    try {
+      console.warn('[mcg][i18n] skip push: no mcgItemId/mcgBarcode on product %s', String(productDoc?._id || ''));
+    } catch {}
+    return { attempted: false, reason: 'no_identifiers' };
+  }
 
   let group;
   try {
@@ -2393,14 +2400,23 @@ async function pushMcgHebrewName(productDoc, hebrewName) {
   } catch {}
 
   try {
-    await setItemsList(payload, group);
+    const res = await setItemsList(payload, group);
+    const rejected = res && typeof res === 'object' && res.ok === false;
+    if (rejected) {
+      try {
+        console.warn('[mcg][i18n] push rejected for product %s: %j', String(productDoc?._id || ''), res);
+      } catch {}
+      return { attempted: true, success: false, reason: res.reason || 'mcg_rejected', detail: res };
+    }
     try {
       console.log('[mcg][i18n] pushed he name for product %s (items=%d)', String(productDoc?._id || ''), payload.length);
     } catch {}
+    return { attempted: true, success: true, detail: res || null };
   } catch (err) {
     try {
       console.warn('[mcg][i18n] failed to push he name for product %s: %s', String(productDoc?._id || ''), err?.message || err);
     } catch {}
+    return { attempted: true, success: false, reason: err?.message || 'mcg_push_failed' };
   }
 }
 
@@ -2458,11 +2474,12 @@ export const setProductI18n = async (req, res) => {
 
     await Product.updateOne({ _id: id }, update, { runValidators: false }).exec();
 
+    let mcgPush = null;
     if (shouldPushHeName) {
-      await pushMcgHebrewName(product, nextHeValue);
+      mcgPush = await pushMcgHebrewName(product, nextHeValue);
     }
 
-    return res.json({ ok: true, changed: true });
+    return res.json({ ok: true, changed: true, mcgPush });
   } catch (e) {
     console.error('setProductI18n error', e);
     res.status(500).json({ message: 'Failed to save i18n maps' });
