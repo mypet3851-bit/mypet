@@ -391,6 +391,8 @@ router.post('/sync-items', adminAuth, async (req, res) => {
   let incomingTotal = 0;
   // Maintain seen set across the whole run to avoid duplicates across pages (by mcgItemId only)
   const seenIds = new Set();
+    // Track name updates for existing products whose MCG name changed
+    const updatedNames = [];
 
     // Determine category
     let categoryId = null;
@@ -414,7 +416,7 @@ router.post('/sync-items', adminAuth, async (req, res) => {
 
       const existing = await Product.find({ $or: [
         uniqueIds.length ? { mcgItemId: { $in: uniqueIds } } : null
-      ].filter(Boolean) }).select('mcgItemId isActive _id');
+      ].filter(Boolean) }).select('mcgItemId isActive _id name');
       const existId = new Set(existing.filter(p => p.isActive !== false).map(p => (p.mcgItemId || '').toString()));
       const existById = new Map(existing.map(p => [ (p.mcgItemId || '').toString(), p ]));
 
@@ -426,7 +428,27 @@ router.post('/sync-items', adminAuth, async (req, res) => {
         if (!mcgId && !barcode) { skippedByMissingKey++; continue; }
   // Duplicate rule (updated): dedupe ONLY by mcgItemId. Barcode duplicates are allowed by request.
   const isDupById = mcgId && (existId.has(mcgId) || seenIds.has(mcgId));
-  if (isDupById) { skippedAsDuplicate++; continue; }
+  if (isDupById) {
+    // Attempt name resync for existing active product
+    try {
+      const pDoc = existById.get(mcgId);
+      if (pDoc && pDoc.isActive !== false) {
+        const numericLike = (s) => /^\d{8,}$/.test(String(s||''));
+        let remoteName = (it?.ItemName ?? it?.Name ?? it?.name ?? it?.item_name ?? it?.ItemDescription ?? it?.Description ?? '') + '';
+        remoteName = remoteName.trim();
+        const descTemp = (it?.ItemDescription ?? it?.Description ?? it?.description ?? '') + '';
+        if (!remoteName || numericLike(remoteName)) remoteName = descTemp.trim() || remoteName;
+        if (remoteName && remoteName !== pDoc.name && remoteName.toLowerCase() !== String(pDoc.name||'').toLowerCase()) {
+          if (!dry) {
+            await Product.updateOne({ _id: pDoc._id }, { $set: { name: remoteName } });
+            updatedNames.push({ mcgItemId: mcgId, before: pDoc.name, after: remoteName });
+          } else {
+            updatedNames.push({ mcgItemId: mcgId, before: pDoc.name, after: remoteName, dryRun: true });
+          }
+        }
+      }
+    } catch {}
+    skippedAsDuplicate++; continue; }
   // Prefer human-friendly names: ItemName/Name; fall back to ItemDescription/Description when name looks numeric.
   const numericLike = (s) => /^\d{8,}$/.test(String(s||''));
   let name = (it?.ItemName ?? it?.Name ?? it?.name ?? it?.item_name ?? it?.ItemDescription ?? it?.Description ?? '') + '';
@@ -541,7 +563,8 @@ router.post('/sync-items', adminAuth, async (req, res) => {
         toInsert: createdAll.length,
         skippedByMissingKey,
         skippedAsDuplicate,
-        sampleNew: createdAll.slice(0, 3).map(x => ({ name: x.name, mcgItemId: x.mcgItemId, mcgBarcode: x.mcgBarcode }))
+        sampleNew: createdAll.slice(0, 3).map(x => ({ name: x.name, mcgItemId: x.mcgItemId, mcgBarcode: x.mcgBarcode })),
+        updatedNames
       });
     }
 
@@ -625,7 +648,8 @@ router.post('/sync-items', adminAuth, async (req, res) => {
       skipped: Math.max(0, incomingTotal - createdAll.length - reactivatedAll.length),
       skippedByMissingKey,
       skippedAsDuplicate,
-      sampleNew: createdAll.slice(0, 3).map(x => ({ name: x.name, mcgItemId: x.mcgItemId, mcgBarcode: x.mcgBarcode }))
+      sampleNew: createdAll.slice(0, 3).map(x => ({ name: x.name, mcgItemId: x.mcgItemId, mcgBarcode: x.mcgBarcode })),
+      updatedNames
     });
   } catch (e) {
     const status = e?.status || e?.response?.status || 400;
