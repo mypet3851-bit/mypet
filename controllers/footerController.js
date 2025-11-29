@@ -2,6 +2,30 @@ import FooterSettings from '../models/FooterSettings.js';
 import FooterLink from '../models/FooterLink.js';
 import { deepseekTranslate, isDeepseekConfigured } from '../services/translate/deepseek.js';
 
+const mapToPlainObject = (mapLike) => {
+  if (!mapLike) return undefined;
+  if (mapLike instanceof Map) {
+    return Object.fromEntries(mapLike.entries());
+  }
+  if (typeof mapLike === 'object') {
+    return Object.fromEntries(Object.entries(mapLike));
+  }
+  return undefined;
+};
+
+const sanitizeLocalizationPayload = (value) => {
+  if (!value || typeof value !== 'object') return undefined;
+  const result = {};
+  for (const [lang, text] of Object.entries(value)) {
+    if (typeof text !== 'string') continue;
+    const trimmed = text.trim();
+    if (trimmed) {
+      result[lang] = trimmed;
+    }
+  }
+  return Object.keys(result).length ? result : {};
+};
+
 // Get footer settings
 export const getFooterSettings = async (req, res) => {
   try {
@@ -11,7 +35,7 @@ export const getFooterSettings = async (req, res) => {
     if (!settings) {
       settings = await FooterSettings.create({});
     }
-    const obj = settings.toObject();
+    const obj = settings.toObject({ depopulate: true, minimize: false });
     if (reqLang) {
       // description
       try {
@@ -55,6 +79,16 @@ export const getFooterSettings = async (req, res) => {
       // Persist newsletter maps if any were added
       try { settings.newsletter = nl; await settings.save().catch(() => {}); } catch {}
     }
+    // Ensure map fields are returned as plain objects for admin UI consumption
+    obj.description_i18n = mapToPlainObject(settings.description_i18n) || undefined;
+    if (obj.newsletter) {
+      ['title', 'subtitle', 'placeholder', 'buttonText'].forEach((key) => {
+        const mapKey = `${key}_i18n`;
+        if (settings.newsletter?.[mapKey]) {
+          obj.newsletter[mapKey] = mapToPlainObject(settings.newsletter[mapKey]);
+        }
+      });
+    }
     res.json(obj);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -69,7 +103,13 @@ export const updateFooterSettings = async (req, res) => {
       settings = new FooterSettings();
     }
 
-    Object.assign(settings, req.body);
+    const payload = { ...req.body };
+    if (Object.prototype.hasOwnProperty.call(req.body, 'description_i18n')) {
+      const sanitized = sanitizeLocalizationPayload(req.body.description_i18n);
+      payload.description_i18n = sanitized && Object.keys(sanitized).length ? sanitized : undefined;
+    }
+
+    Object.assign(settings, payload);
     await settings.save();
     
     // Broadcast real-time update for footer settings (non-fatal if broadcaster unavailable)
