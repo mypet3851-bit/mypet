@@ -1278,6 +1278,19 @@ export const updateProduct = async (req, res) => {
       }
     } catch (e) { /* silent */ }
 
+    // Trigger MCG stock push when product-level stock or inventory-affecting color/size data changed
+    try {
+      const productBeforeStock = Number(productBefore?.stock);
+      const productAfterStock = Number(product?.stock);
+      const stockChanged = Number.isFinite(productBeforeStock) && Number.isFinite(productAfterStock) && productBeforeStock !== productAfterStock;
+      const inventoryStructureChanged = incomingColors !== undefined || Array.isArray(sizes);
+      if (stockChanged || inventoryStructureChanged) {
+        // Recompute product stock totals to ensure consistency, then push to MCG
+        try { await inventoryService.recomputeProductStock(product._id); } catch {}
+        try { await inventoryService.pushMcgForEntireProduct(product._id); } catch {}
+      }
+    } catch (e) { try { console.warn('[products][update] mcg push skipped:', e?.message || e); } catch {} }
+
   product = await product.populate(['category','categories','brand','attributes.attribute','attributes.values']);
   res.json(product);
   } catch (error) {

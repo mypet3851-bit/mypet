@@ -835,6 +835,28 @@ class InventoryService {
       try { console.warn('[mcg][push-back] batch absolute failed:', e?.message || e); } catch {}
     }
   }
+
+  // Public: Push current absolute stock for all SKUs of a product to MCG (if enabled)
+  async pushMcgForEntireProduct(productId) {
+    try {
+      if (!productId) return;
+      // Collect all inventory rows for this product (variant or size/color based)
+      const rows = await Inventory.find({ product: productId }).select('variantId size color').lean();
+      const skus = rows.map(r => ({
+        product: productId,
+        variantId: r.variantId,
+        size: r.size,
+        color: r.color
+      }));
+      // If no inventory rows exist, still push a default SKU so external system can be zeroed
+      if (!skus.length) {
+        skus.push({ product: productId, size: 'Default', color: 'Default' });
+      }
+      await this.#pushMcgForSkus(skus);
+    } catch (e) {
+      try { console.warn('[inventory][mcg] push whole product failed:', e?.message || e); } catch {}
+    }
+  }
 }
 
 export const inventoryService = new InventoryService();
