@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import Category from '../models/Category.js';
 import Product from '../models/Product.js';
 import { deepseekTranslate, deepseekTranslateBatch, isDeepseekConfigured } from '../services/translate/deepseek.js';
@@ -19,6 +20,24 @@ function localizeCategoryInPlace(cat, lang) {
   const desc = cat?.description_i18n?.[lang] ?? cat?.description_i18n?.get?.(lang);
   if (nm) cat.name = nm;
   if (desc) cat.description = desc;
+}
+
+// Helper: resolve category either by Mongo ObjectId or slug/path token
+async function findCategoryByIdentifier(identifier) {
+  const token = typeof identifier === 'string' ? identifier.trim() : '';
+  if (!token) return null;
+
+  let category = null;
+  if (mongoose.Types.ObjectId.isValid(token)) {
+    category = await Category.findById(token);
+  }
+
+  if (!category) {
+    const normalized = token.toLowerCase();
+    // slug is lowercase; path is derived from slug segments so also lowercase
+    category = await Category.findOne({ $or: [ { slug: normalized }, { path: normalized } ] });
+  }
+  return category;
 }
 
 // Helper: batch translate and persist missing category name/description for a target lang
@@ -145,7 +164,7 @@ export const getCategory = async (req, res) => {
   try {
   const reqLang = normalizeLang(req.query.lang);
   const allowAuto = isDeepseekConfigured() && String(req.query.autoTranslate || 'false').toLowerCase() === 'true';
-    const category = await Category.findById(req.params.id);
+    const category = await findCategoryByIdentifier(req.params.id);
     if (!category) {
       return res.status(404).json({ message: 'Category not found' });
     }
