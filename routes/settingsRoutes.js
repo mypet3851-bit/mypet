@@ -512,6 +512,7 @@ router.put('/', settingsWriteGuard, async (req, res) => {
     // Update settings
     // Preserve existing secrets when UI sends masked values like '***'
     const prevCloudinarySecret = settings?.cloudinary?.apiSecret;
+    const prevCloudinaryKey = settings?.cloudinary?.apiKey;
     const prevPaypalSecret = settings?.payments?.paypal?.secret;
     // Preserve existing visibility so partial updates do not wipe other flags
     const prevVisibility = (settings?.payments?.visibility && typeof settings.payments.visibility === 'object')
@@ -528,7 +529,16 @@ router.put('/', settingsWriteGuard, async (req, res) => {
         settings.cloudinary = settings.cloudinary || {};
         const incoming = req.body.cloudinary;
         if (typeof incoming.cloudName === 'string') settings.cloudinary.cloudName = incoming.cloudName;
-        if (typeof incoming.apiKey === 'string') settings.cloudinary.apiKey = incoming.apiKey;
+        if (Object.prototype.hasOwnProperty.call(incoming, 'apiKey')) {
+          if (typeof incoming.apiKey === 'string') {
+            settings.cloudinary.apiKey = incoming.apiKey === '***' ? prevCloudinaryKey : incoming.apiKey;
+          } else if (incoming.apiKey === null) {
+            settings.cloudinary.apiKey = '';
+          }
+        } else if (typeof prevCloudinaryKey === 'string' && prevCloudinaryKey) {
+          // apiKey not provided -> keep previous value instead of losing it
+          settings.cloudinary.apiKey = prevCloudinaryKey;
+        }
         if (Object.prototype.hasOwnProperty.call(incoming, 'apiSecret')) {
           if (typeof incoming.apiSecret === 'string') {
             settings.cloudinary.apiSecret = incoming.apiSecret === '***' ? prevCloudinarySecret : incoming.apiSecret;
