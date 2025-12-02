@@ -534,14 +534,31 @@ export const getProductFilters = async (req, res) => {
 
   const baseQuery = await buildProductQuery(req.query);
 
-    // Build cache key (category + selected filters subset) - avoid including transient params like random query order
+    // Build cache key using every query param that can affect the resulting facet set.
+    const toKey = (value, fallback = '-') => {
+      if (value == null || value === '') return fallback;
+      if (Array.isArray(value)) return value.join(',');
+      return String(value);
+    };
     const cacheKeyParts = [
       'pf',
-      req.query.category || 'all',
-      req.query.colors || '-',
-      req.query.sizes || '-',
-      req.query.minPrice || '-',
-      req.query.maxPrice || '-'
+      toKey(req.query.category, 'all'),
+      toKey(req.query.categories),
+      toKey(req.query.brand),
+      toKey(req.query.brandSlug),
+      toKey(req.query.brandName),
+      toKey(req.query.search),
+      toKey(req.query.colors),
+      toKey(req.query.sizes),
+      toKey(req.query.minPrice),
+      toKey(req.query.maxPrice),
+      toKey(req.query.onSale),
+      toKey(req.query.isNew),
+      toKey(req.query.includeInactive),
+      toKey(req.query.tag),
+      toKey(req.query.tags),
+      toKey(req.query.primaryOnly),
+      toKey(req.query.strictCategory)
     ];
     const cacheKey = cacheKeyParts.join('|');
     const cached = cacheGet(cacheKey);
