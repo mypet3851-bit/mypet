@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import Product from '../models/Product.js';
 // Get stock levels for a product or a specific generated variant.
 // Supported path patterns:
@@ -120,6 +121,24 @@ import { setItemsList } from '../services/mcgService.js';
 
 // Get all products
 // Shared query builder so both product listing and facet endpoints derive sizes/colors from actual filtered product set
+const toObjectId = (value) => {
+  if (!value) return null;
+  if (value instanceof mongoose.Types.ObjectId) return value;
+  if (typeof value === 'string' && mongoose.Types.ObjectId.isValid(value)) {
+    try {
+      return new mongoose.Types.ObjectId(value);
+    } catch {}
+  }
+  return null;
+};
+
+const castObjectIdArray = (values) => {
+  if (!Array.isArray(values)) return [];
+  return values
+    .map((val) => toObjectId(val))
+    .filter((val) => Boolean(val));
+};
+
 async function resolveCategoryAndDescendants(categoryParam) {
   if (!categoryParam) return null;
   let catDoc = null;
@@ -185,10 +204,13 @@ async function buildProductQuery(params) {
       // Force empty query
       query.$and = [...(query.$and || []), { _id: { $in: [] } }];
     } else if (resolved?.ids && resolved.ids.length) {
-      if (primaryOnly === 'true' || strictCategory === 'true') {
-        query.$and = [...(query.$and || []), { category: { $in: resolved.ids } }];
+      const resolvedIds = castObjectIdArray(resolved.ids);
+      if (!resolvedIds.length) {
+        query.$and = [...(query.$and || []), { _id: { $in: [] } }];
+      } else if (primaryOnly === 'true' || strictCategory === 'true') {
+        query.$and = [...(query.$and || []), { category: { $in: resolvedIds } }];
       } else {
-        query.$and = [...(query.$and || []), { $or: [ { category: { $in: resolved.ids } }, { categories: { $in: resolved.ids } } ] }];
+        query.$and = [...(query.$and || []), { $or: [ { category: { $in: resolvedIds } }, { categories: { $in: resolvedIds } } ] }];
       }
     }
   }
@@ -206,8 +228,11 @@ async function buildProductQuery(params) {
         }
       }
       const ids = Array.from(allIds);
-      if (ids.length) {
-        query.$and = [ ...(query.$and || []), { $or: [ { category: { $in: ids } }, { categories: { $in: ids } } ] } ];
+      const resolvedIds = castObjectIdArray(ids);
+      if (resolvedIds.length) {
+        query.$and = [ ...(query.$and || []), { $or: [ { category: { $in: resolvedIds } }, { categories: { $in: resolvedIds } } ] } ];
+      } else if (ids.length) {
+        query.$and = [...(query.$and || []), { _id: { $in: [] } }];
       }
     }
   }
@@ -238,7 +263,14 @@ async function buildProductQuery(params) {
   if (tagList.length) query.tags = { $in: tagList };
 
   if (!includeInactive || includeInactive === 'false') query.isActive = { $ne: false };
-  if (brand) query.brand = brand;
+  if (brand) {
+    const brandId = toObjectId(brand);
+    if (brandId) {
+      query.brand = brandId;
+    } else {
+      query.$and = [...(query.$and || []), { _id: { $in: [] } }];
+    }
+  }
   return query;
 }
 
