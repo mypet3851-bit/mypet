@@ -549,13 +549,25 @@ export const getProductFilters = async (req, res) => {
       return res.json({ ...cached, _cached: true, _ms: Date.now() - start });
     }
 
-    // Pull min & max price fast (lean pipeline)
+    // Pull min & max price considering variant price overrides as well
     const priceAgg = await Product.aggregate([
       { $match: baseQuery },
-      { $group: { _id: null, minPrice: { $min: '$price' }, maxPrice: { $max: '$price' } } }
+      { $project: {
+          p: '$price',
+          vMin: { $min: '$variants.price' },
+          vMax: { $max: '$variants.price' }
+        }
+      },
+      { $project: {
+          effMin: { $min: [ '$p', '$vMin' ] },
+          effMax: { $max: [ '$p', '$vMax' ] }
+        }
+      },
+      { $group: { _id: null, minPrice: { $min: '$effMin' }, maxPrice: { $max: '$effMax' }, cnt: { $sum: 1 } } }
     ]).allowDiskUse(false);
     const minPrice = priceAgg[0]?.minPrice ?? 0;
     const maxPrice = priceAgg[0]?.maxPrice ?? 0;
+    const matchCount = priceAgg[0]?.cnt ?? 0;
 
     // Compute brand counts based on current filters EXCLUDING any brand filter
     const brandFacetParams = { ...req.query };
@@ -608,7 +620,9 @@ export const getProductFilters = async (req, res) => {
 
     // Adaptive price buckets
     let priceBuckets = [];
-    if (minPrice !== null && maxPrice !== null && maxPrice > minPrice) {
+    if (matchCount === 0) {
+      priceBuckets = [];
+    } else if (minPrice !== null && maxPrice !== null && maxPrice > minPrice) {
       const span = maxPrice - minPrice;
       const step = span / 5;
       let start = minPrice;
@@ -617,7 +631,7 @@ export const getProductFilters = async (req, res) => {
         priceBuckets.push({ min: Number(start.toFixed(2)), max: Number(end.toFixed(2)) });
         start = end;
       }
-    } else if (minPrice === maxPrice) {
+    } else if (minPrice === maxPrice && matchCount > 0) {
       priceBuckets = [{ min: minPrice, max: maxPrice }];
     }
     // Collapse duplicate buckets (same min & max)
