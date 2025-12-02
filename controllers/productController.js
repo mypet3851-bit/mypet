@@ -557,6 +557,20 @@ export const getProductFilters = async (req, res) => {
     const minPrice = priceAgg[0]?.minPrice ?? 0;
     const maxPrice = priceAgg[0]?.maxPrice ?? 0;
 
+    // Compute brand counts based on current filters EXCLUDING any brand filter
+    const brandFacetParams = { ...req.query };
+    delete brandFacetParams.brand;
+    delete brandFacetParams.brandSlug;
+    const brandFacetQuery = await buildProductQuery(brandFacetParams);
+    const brandAgg = await Product.aggregate([
+      { $match: brandFacetQuery },
+      { $group: { _id: '$brand', count: { $sum: 1 } } }
+    ]).allowDiskUse(false);
+    const brandCounts = {};
+    for (const b of brandAgg) {
+      if (b?._id) brandCounts[String(b._id)] = b.count || 0;
+    }
+
     // Distinct sets (returns primitives)
     const [primaryCats, secondaryCats, sizeNames, colorNames] = await Promise.all([
       Product.distinct('category', baseQuery),
@@ -618,6 +632,7 @@ export const getProductFilters = async (req, res) => {
       colors,
       colorObjects: dedupColorObjects,
       categories: categoryDocs.map(c => ({ id: c._id, name: c.name, slug: c.slug })),
+      brandCounts,
       _ms: Date.now() - start
     };
     // Cache for short TTL (e.g., 30s) to balance freshness vs speed
