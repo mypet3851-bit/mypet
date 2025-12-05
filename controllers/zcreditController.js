@@ -272,7 +272,14 @@ export const createSessionFromCartHandler = asyncHandler(async (req, res) => {
 
   const currency = String(body.currency || process.env.STORE_CURRENCY || 'ILS');
   const normalizedItems = sanitizeCheckoutItems(items);
-  const summary = await calculatePricingSummary(normalizedItems, currency);
+  let summary;
+  try {
+    summary = await calculatePricingSummary(normalizedItems, currency);
+  } catch (err) {
+    try { console.error('[zcredit][session-from-cart] pricing validation failed', err?.message || err); } catch {}
+    const detail = err?.message || 'pricing_failed';
+    return res.status(400).json({ message: 'pricing_failed', detail });
+  }
   const couponInfo = body?.coupon?.code
     ? { code: String(body.coupon.code).trim(), discount: Math.max(0, Number(body.coupon.discount) || 0) }
     : undefined;
