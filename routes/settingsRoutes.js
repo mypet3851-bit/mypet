@@ -26,6 +26,47 @@ function toAbsolute(req, url) {
   }
 }
 
+// Normalize multilingual city rows used for checkout city table
+const normalizeCityRow = (entry) => {
+  const trim = (val) => typeof val === 'string' ? val.trim() : '';
+  if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+    const ar = trim(entry.ar);
+    const en = trim(entry.en);
+    const he = trim(entry.he);
+    if (ar || en || he) {
+      return { ar, en, he };
+    }
+    const fallback = trim(entry.label || entry.name || entry.city || entry.value);
+    if (fallback) {
+      return { ar: fallback, en: '', he: '' };
+    }
+    return null;
+  }
+  const str = trim(entry);
+  if (!str) return null;
+  return { ar: str, en: '', he: '' };
+};
+
+const canonicalCityValue = (row) => (row?.ar || row?.en || row?.he || '').trim();
+
+const buildCityTable = (checkoutForm) => {
+  if (!checkoutForm) return [];
+  const raw = Array.isArray(checkoutForm.cityTable) && checkoutForm.cityTable.length
+    ? checkoutForm.cityTable
+    : (Array.isArray(checkoutForm.cities) ? checkoutForm.cities : []);
+  const seen = new Set();
+  const rows = [];
+  raw.forEach(entry => {
+    const normalized = normalizeCityRow(entry);
+    if (!normalized) return;
+    const key = `${normalized.ar}|${normalized.en}|${normalized.he}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    rows.push(normalized);
+  });
+  return rows;
+};
+
 // Configure multer for uploads (project-level /uploads)
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1715,6 +1756,10 @@ router.get('/checkout', async (req, res) => {
     let settings = await Settings.findOne();
     if (!settings) settings = await Settings.create({});
     const cf = settings.checkoutForm || {};
+    const cityTable = buildCityTable(cf);
+    const cityList = cityTable.length
+      ? cityTable.map(canonicalCityValue).filter(Boolean)
+      : (Array.isArray(cf.cities) ? cf.cities.filter(c => typeof c === 'string' && c.trim()).map(c => c.trim()) : []);
     res.json({
       showEmail: !!cf.showEmail,
       showLastName: !!cf.showLastName,
@@ -1722,7 +1767,8 @@ router.get('/checkout', async (req, res) => {
       showSecondaryMobile: !!cf.showSecondaryMobile,
       showCountry: !!cf.showCountry,
       allowOtherCity: !!cf.allowOtherCity,
-      cities: Array.isArray(cf.cities) ? cf.cities : []
+      cities: cityList,
+      cityTable
     });
   } catch (e) {
     res.status(500).json({ message: e.message });
@@ -1732,7 +1778,7 @@ router.get('/checkout', async (req, res) => {
 // Update checkout form (guarded; can be relaxed via env)
 router.put('/checkout', settingsWriteGuard, async (req, res) => {
   try {
-    const { showEmail, showLastName, showSecondaryMobile, showCountry, cities, allowOtherCity, allowGuestCheckout } = req.body || {};
+    const { showEmail, showLastName, showSecondaryMobile, showCountry, cities, allowOtherCity, allowGuestCheckout, cityTable } = req.body || {};
     let settings = await Settings.findOne();
     if (!settings) settings = new Settings();
     settings.checkoutForm = settings.checkoutForm || {};
@@ -1742,7 +1788,19 @@ router.put('/checkout', settingsWriteGuard, async (req, res) => {
     if (typeof showCountry === 'boolean') settings.checkoutForm.showCountry = showCountry;
   if (typeof allowGuestCheckout === 'boolean') settings.checkoutForm.allowGuestCheckout = allowGuestCheckout;
     if (typeof allowOtherCity === 'boolean') settings.checkoutForm.allowOtherCity = allowOtherCity;
-    if (Array.isArray(cities)) settings.checkoutForm.cities = cities.filter(c => typeof c === 'string' && c.trim().length).map(c => c.trim());
+    if (Array.isArray(cityTable)) {
+      const normalized = cityTable
+        .map(entry => normalizeCityRow(entry))
+        .filter(Boolean);
+      settings.checkoutForm.cityTable = normalized;
+      settings.checkoutForm.cities = normalized.map(canonicalCityValue).filter(Boolean);
+    } else if (Array.isArray(cities)) {
+      const clean = cities.filter(c => typeof c === 'string' && c.trim().length).map(c => c.trim());
+      settings.checkoutForm.cities = clean;
+      if (!Array.isArray(settings.checkoutForm.cityTable) || !settings.checkoutForm.cityTable.length) {
+        settings.checkoutForm.cityTable = clean.map(label => ({ ar: label, en: '', he: '' }));
+      }
+    }
     settings.markModified('checkoutForm');
     await settings.save();
     res.json({ ok: true });

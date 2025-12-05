@@ -110,6 +110,9 @@ const productSchema = new mongoose.Schema({
       type: String,
       required: true
     },
+    // Optional additional metrics captured by mobile app
+    fit: { type: Number, min: 1, max: 5 },
+    quality: { type: Number, min: 1, max: 5 },
     photos: [{
       type: String
     }],
@@ -117,18 +120,26 @@ const productSchema = new mongoose.Schema({
       type: Number,
       default: 0
     },
+    // Track which users marked this review as helpful (to prevent duplicates)
+    helpfulBy: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
     reported: {
       type: Boolean,
       default: false
     },
+    // Track which users reported this review and optional reason
+    reportedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+    reportReason: { type: String },
     verified: {
       type: Boolean,
       default: false
     },
+    verifiedAt: { type: Date },
+    verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     createdAt: {
       type: Date,
       default: Date.now
-    }
+    },
+    updatedAt: { type: Date }
   }],
   stock: {
     type: Number,

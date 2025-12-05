@@ -483,6 +483,12 @@ settingsSchema.add({
     // Future toggles (currently not rendered in UI):
     showSecondaryMobile: { type: Boolean, default: false },
     showCountry: { type: Boolean, default: false },
+    // Structured multilingual city labels (editable from admin UI)
+    cityTable: [{
+      ar: { type: String, default: '' },
+      en: { type: String, default: '' },
+      he: { type: String, default: '' }
+    }],
     // Cities list for dropdown
     cities: {
       type: [String],
@@ -1052,6 +1058,39 @@ settingsSchema.statics.createDefaultSettings = async function() {
         }
       } catch (e) {
         console.warn('CheckoutForm cities migration skipped:', e.message);
+      }
+
+      // Ensure multilingual city table exists (backfills from existing cities list)
+      try {
+        const hasTable = Array.isArray(settings.checkoutForm?.cityTable) && settings.checkoutForm.cityTable.length > 0;
+        const willSetTable = Array.isArray(updateData.checkoutForm?.cityTable) && updateData.checkoutForm.cityTable.length > 0;
+        if (!hasTable && !willSetTable) {
+          const sourceCities = Array.isArray(updateData.checkoutForm?.cities) && updateData.checkoutForm.cities.length
+            ? updateData.checkoutForm.cities
+            : (Array.isArray(settings.checkoutForm?.cities) ? settings.checkoutForm.cities : []);
+          if (sourceCities.length) {
+            const normalizeEntry = (entry) => {
+              if (entry && typeof entry === 'object') {
+                return {
+                  ar: typeof entry.ar === 'string' ? entry.ar : '',
+                  en: typeof entry.en === 'string' ? entry.en : '',
+                  he: typeof entry.he === 'string' ? entry.he : ''
+                };
+              }
+              const value = typeof entry === 'string' ? entry : '';
+              return { ar: value, en: '', he: '' };
+            };
+            if (!updateData.checkoutForm) {
+              updateData.checkoutForm = { ...(settings.checkoutForm || {}) };
+            }
+            updateData.checkoutForm.cityTable = sourceCities
+              .map(normalizeEntry)
+              .filter(row => (row.ar || row.en || row.he));
+            needsUpdate = true;
+          }
+        }
+      } catch (e) {
+        console.warn('CheckoutForm cityTable hydration skipped:', e.message);
       }
       
       if (needsUpdate) {
