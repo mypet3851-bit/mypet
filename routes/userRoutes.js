@@ -83,6 +83,42 @@ router.delete('/account', auth, async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
+    // Anonymize or remove personal data from related records before removing the user
+    try {
+      // Orders: detach user and scrub PII in customerInfo and shippingAddress
+      const scrubbedCustomerInfo = {
+        firstName: 'Deleted',
+        lastName: 'User',
+        email: null,
+        mobile: null,
+      };
+      const scrubbedShipping = {
+        street: null,
+        city: null,
+        state: null,
+        postalCode: null,
+        country: null,
+      };
+      await Order.updateMany(
+        { $or: [ { user: user._id }, { 'customerInfo.email': user.email } ] },
+        { $set: { user: null, customerInfo: scrubbedCustomerInfo, shippingAddress: scrubbedShipping } }
+      );
+    } catch (e) {
+      console.warn('Order anonymization failed:', e?.message || e);
+    }
+
+    try {
+      // Product reviews: remove reviews authored by this user
+      const Product = (await import('../models/Product.js')).default;
+      await Product.updateMany(
+        { 'reviews.user': user._id },
+        { $pull: { reviews: { user: user._id } } }
+      );
+    } catch (e) {
+      console.warn('Review cleanup failed:', e?.message || e);
+    }
+
+    // Finally remove the user document
     await user.remove();
     res.json({ message: 'Account deleted successfully' });
   } catch (error) {
