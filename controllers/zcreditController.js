@@ -2,7 +2,7 @@ import asyncHandler from 'express-async-handler';
 import Order from '../models/Order.js';
 import Product from '../models/Product.js';
 import PaymentSession from '../models/PaymentSession.js';
-import { finalizePaymentSessionToOrder } from '../services/paymentSessionService.js';
+import { finalizePaymentSessionToOrder, createPaymentSessionDocument } from '../services/paymentSessionService.js';
 import { createSession, getSessionStatus, resendNotification } from '../services/zcreditService.js';
 
 function deriveOrigin(req) {
@@ -300,7 +300,7 @@ export const createSessionFromCartHandler = asyncHandler(async (req, res) => {
   }
 
   const orderNumber = body?.orderNumber?.trim?.() ? String(body.orderNumber).trim() : `ORD${Date.now()}`;
-  const session = await PaymentSession.create({
+  const session = await createPaymentSessionDocument({
     gateway: 'zcredit',
     status: 'created',
     reference: `ZC-${Date.now()}`,

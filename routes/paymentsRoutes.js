@@ -6,7 +6,7 @@ import Settings from '../models/Settings.js';
 import PaymentSession from '../models/PaymentSession.js';
 import { adminAuth } from '../middleware/auth.js';
 import { loadSettings, requestICreditPaymentUrl, buildICreditRequest, buildICreditCandidates, diagnoseICreditConnectivity, pingICredit } from '../services/icreditService.js';
-import { finalizePaymentSessionToOrder } from '../services/paymentSessionService.js';
+import { finalizePaymentSessionToOrder, createPaymentSessionDocument } from '../services/paymentSessionService.js';
 
 const router = express.Router();
 
@@ -277,7 +277,7 @@ router.post('/icredit/create-session-from-cart', async (req, res) => {
     } catch {}
 
     // Persist a temporary session to tie the gateway redirect back to the cart snapshot
-    const ps = await PaymentSession.create({
+    const ps = await createPaymentSessionDocument({
       gateway: 'icredit',
       status: 'created',
       reference: `PS-${Date.now()}`,
