@@ -81,6 +81,7 @@ import groomingRoutes from './routes/groomingRoutes.js';
 import { loadDeepseekConfigFromDb } from './services/translate/deepseek.js';
 import { startPushScheduler } from './services/pushScheduler.js';
 import { startMcgSyncScheduler } from './services/mcgSyncScheduler.js';
+import { startPaymentSessionJanitor } from './services/paymentSessionJanitor.js';
 
 // Path Setup
 const __filename = fileURLToPath(import.meta.url);
@@ -537,6 +538,14 @@ const startServer = async () => {
     console.warn('[startup][indexes] Inventory index sync skipped/failed:', idxErr?.message || idxErr);
   }
 
+  try {
+    const PaymentSessionModel = (await import('./models/PaymentSession.js')).default;
+    await PaymentSessionModel.syncIndexes();
+    console.log('[startup][indexes] PaymentSession.syncIndexes() done');
+  } catch (psErr) {
+    console.warn('[startup][indexes] PaymentSession index sync skipped/failed:', psErr?.message || psErr);
+  }
+
   // Initialize default data after database connection is established
   try {
     // Import and run data initialization
@@ -585,6 +594,13 @@ const startServer = async () => {
     console.log('[startup] DeepSeek translation config loaded');
   } catch (e) {
     console.warn('[startup] DeepSeek config load skipped:', e?.message || e);
+  }
+
+  try {
+    startPaymentSessionJanitor();
+    console.log('[startup] Payment session janitor started');
+  } catch (e) {
+    console.warn('[startup] Payment session janitor start failed:', e?.message || e);
   }
 
   server.listen(PORT, () => {

@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import Order from '../models/Order.js';
 import Product from '../models/Product.js';
 import GiftCard from '../models/GiftCard.js';
+import PaymentSession from '../models/PaymentSession.js';
 import { inventoryService } from './inventoryService.js';
 
 function normalizeCoupon(session) {
@@ -183,5 +184,25 @@ export async function rollbackGiftCardRedemption(doc, orderId, amount) {
     await doc.save();
   } catch (e) {
     console.warn('[paymentSession] rollback gift card failed', e?.message || e);
+  }
+}
+
+const SPACE_QUOTA_REGEX = /space quota/i;
+
+function wrapStorageQuotaError(err) {
+  if (SPACE_QUOTA_REGEX.test(err?.message || '')) {
+    const friendly = new Error('storage_quota_exceeded');
+    friendly.statusCode = 507; // HTTP 507 Insufficient Storage
+    friendly.detail = 'Database storage quota exceeded. Clear space or upgrade your plan before taking new payments.';
+    return friendly;
+  }
+  return err;
+}
+
+export async function createPaymentSessionDocument(payload) {
+  try {
+    return await PaymentSession.create(payload);
+  } catch (err) {
+    throw wrapStorageQuotaError(err);
   }
 }
