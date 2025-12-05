@@ -142,9 +142,6 @@ export const calculateShippingFee = async (req, res) => {
 export const getShippingOptions = async (req, res) => {
   try {
     const { country, region, city, subtotal, weight } = req.query;
-    if (!city && !country) {
-      throw new ApiError(StatusCodes.BAD_REQUEST, 'city or country is required');
-    }
     const options = await getAvailableShippingOptions({ country, region, city, subtotal: Number(subtotal) || 0, weight: Number(weight) || 0 });
     res.json({ options });
   } catch (error) {
