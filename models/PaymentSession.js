@@ -55,8 +55,11 @@ const PaymentSessionSchema = new mongoose.Schema({
 
   // TTL expiry to auto-clean abandoned sessions
   createdAt: { type: Date, default: Date.now },
-  expiresAt: { type: Date, default: () => new Date(Date.now() + 1000 * 60 * 60 * 24 * 3), index: { expires: 0 } } // ~3 days
+  expiresAt: { type: Date, default: () => new Date(Date.now() + 1000 * 60 * 60 * 24 * 3) } // ~3 days
 });
+
+// TTL index (expireAfterSeconds: 0 == expire exactly at expiresAt)
+PaymentSessionSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 const PaymentSession = mongoose.model('PaymentSession', PaymentSessionSchema);
 export default PaymentSession;
