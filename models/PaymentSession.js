@@ -8,7 +8,10 @@ const PaymentSessionSchema = new mongoose.Schema({
   // Cart snapshot to reconstruct the order at confirmation time
   items: [
     {
-      product: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true },
+      // Product reference is optional when client provides explicit pricing
+      product: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: false },
+      // Persist per-item price snapshot to reconstruct totals without DB lookups
+      price: { type: Number },
       quantity: { type: Number, required: true },
       size: { type: String },
       color: { type: String },
