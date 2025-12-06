@@ -283,6 +283,27 @@ export const createSessionHandler = asyncHandler(async (req, res) => {
 export const createSessionFromCartHandler = asyncHandler(async (req, res) => {
   const body = req.body || {};
   const { items, shippingAddress, customerInfo } = body;
+  try {
+    console.log('[zcredit][session-from-cart] incoming', {
+      itemsCount: Array.isArray(items) ? items.length : 0,
+      shippingAddress: {
+        street: shippingAddress?.street,
+        city: shippingAddress?.city,
+        country: shippingAddress?.country
+      },
+      customerInfo: {
+        email: customerInfo?.email,
+        mobile: customerInfo?.mobile
+      },
+      currency: body?.currency,
+      shippingFee: body?.shippingFee,
+      totalWithShipping: body?.totalWithShipping,
+      coupon: body?.coupon?.code ? { code: body.coupon.code, discount: body.coupon.discount } : undefined,
+      giftCard: body?.giftCard?.code ? { code: body.giftCard.code, amount: body.giftCard.amount } : undefined,
+      successUrl: body?.successUrl,
+      cancelUrl: body?.cancelUrl
+    });
+  } catch {}
   if (!Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ message: 'items required' });
   }
@@ -318,6 +339,7 @@ export const createSessionFromCartHandler = asyncHandler(async (req, res) => {
   const totalWithShipping = itemsTotal + shippingFee;
   const giftDeduction = giftCardInfo?.amount || 0;
   const cardChargeAmount = Math.max(0, totalWithShipping - giftDeduction);
+  try { console.log('[zcredit][session-from-cart] totals', { itemsTotal, shippingFee, totalWithShipping, giftDeduction, cardChargeAmount }); } catch {}
   if (!(cardChargeAmount > 0)) {
     return res.status(400).json({ message: 'card_charge_must_be_positive' });
   }
