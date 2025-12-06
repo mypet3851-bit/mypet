@@ -33,19 +33,20 @@ function buildDefaultUrls(req) {
 
 function sanitizeCheckoutItems(items) {
   if (!Array.isArray(items)) return [];
+  const isHex24 = (s) => typeof s === 'string' && /^[0-9a-fA-F]{24}$/.test(s);
   return items.map((it) => ({
-    product: it.product,
+    product: isHex24(it.product) ? it.product : undefined,
     quantity: Number(it.quantity) || 0,
     price: Number(it.price) || undefined,
     size: it.size,
     color: typeof it.color === 'string' ? it.color : (it.color?.name || it.color?.code || undefined),
-    variantId: it.variantId,
+    variantId: isHex24(it.variantId) ? it.variantId : undefined,
     sku: it.sku,
     variants: Array.isArray(it.variants)
       ? it.variants.map((v) => ({
-        attributeId: v.attributeId || v.attribute || undefined,
+        attributeId: isHex24(v.attributeId || v.attribute) ? (v.attributeId || v.attribute) : undefined,
         attributeName: v.attributeName || v.name || undefined,
-        valueId: v.valueId || v.value || undefined,
+        valueId: isHex24(v.valueId || v.value) ? (v.valueId || v.value) : undefined,
         valueName: v.valueName || v.valueLabel || v.label || undefined
       }))
       : undefined
