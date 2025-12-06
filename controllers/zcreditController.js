@@ -66,15 +66,38 @@ async function calculatePricingSummary(items, currency) {
     if (qty <= 0) {
       throw new Error('invalid_quantity');
     }
-    const product = await Product.findById(item.product);
-    if (!product) {
-      throw new Error(`Product not found: ${item.product}`);
+    let unitPrice = undefined;
+    // Try to load product from DB; if unavailable, use client-provided price as fallback
+    if (item.product) {
+      const product = await Product.findById(item.product);
+      if (product) {
+        unitPrice = Number(product.price);
+        // Optional: allow variant-specific pricing if provided on the item
+        if (Number.isFinite(Number(item.price)) && Number(item.price) > 0) {
+          // If client sent a specific price (e.g., variant/discounted), prefer it if it's positive
+          unitPrice = Number(item.price);
+        }
+        if (!Number.isFinite(unitPrice) || unitPrice <= 0) {
+          throw new Error(`Invalid price for product ${product._id}`);
+        }
+      } else {
+        // Product not found in DB — allow proceeding if the client provided a valid price
+        const fallback = Number(item.price);
+        if (!Number.isFinite(fallback) || fallback <= 0) {
+          throw new Error(`Product not found and no valid price provided: ${item.product}`);
+        }
+        unitPrice = fallback;
+      }
+    } else {
+      // No product id — require a valid price
+      const fallback = Number(item.price);
+      if (!Number.isFinite(fallback) || fallback <= 0) {
+        throw new Error('missing_product_and_price');
+      }
+      unitPrice = fallback;
     }
-    const price = Number(product.price);
-    if (!Number.isFinite(price) || price <= 0) {
-      throw new Error(`Invalid price for product ${product._id}`);
-    }
-    summary.subtotal += price * qty;
+
+    summary.subtotal += unitPrice * qty;
   }
   summary.currency = currency;
   return summary;
