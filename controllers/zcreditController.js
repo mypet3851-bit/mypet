@@ -36,6 +36,7 @@ function sanitizeCheckoutItems(items) {
   return items.map((it) => ({
     product: it.product,
     quantity: Number(it.quantity) || 0,
+    price: Number(it.price) || undefined,
     size: it.size,
     color: typeof it.color === 'string' ? it.color : (it.color?.name || it.color?.code || undefined),
     variantId: it.variantId,
@@ -67,34 +68,23 @@ async function calculatePricingSummary(items, currency) {
       throw new Error('invalid_quantity');
     }
     let unitPrice = undefined;
-    // Try to load product from DB; if unavailable, use client-provided price as fallback
-    if (item.product) {
+    // Prefer client-provided price to avoid DB dependency/timeouts
+    const provided = Number(item.price);
+    if (Number.isFinite(provided) && provided > 0) {
+      unitPrice = provided;
+    } else if (item.product) {
+      // Fallback to DB price only when no valid client price was provided
       const product = await Product.findById(item.product);
       if (product) {
         unitPrice = Number(product.price);
-        // Optional: allow variant-specific pricing if provided on the item
-        if (Number.isFinite(Number(item.price)) && Number(item.price) > 0) {
-          // If client sent a specific price (e.g., variant/discounted), prefer it if it's positive
-          unitPrice = Number(item.price);
-        }
         if (!Number.isFinite(unitPrice) || unitPrice <= 0) {
           throw new Error(`Invalid price for product ${product._id}`);
         }
       } else {
-        // Product not found in DB — allow proceeding if the client provided a valid price
-        const fallback = Number(item.price);
-        if (!Number.isFinite(fallback) || fallback <= 0) {
-          throw new Error(`Product not found and no valid price provided: ${item.product}`);
-        }
-        unitPrice = fallback;
+        throw new Error(`Product not found and no valid price provided: ${item.product}`);
       }
     } else {
-      // No product id — require a valid price
-      const fallback = Number(item.price);
-      if (!Number.isFinite(fallback) || fallback <= 0) {
-        throw new Error('missing_product_and_price');
-      }
-      unitPrice = fallback;
+      throw new Error('missing_product_and_price');
     }
 
     summary.subtotal += unitPrice * qty;
