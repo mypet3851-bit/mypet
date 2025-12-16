@@ -3,6 +3,7 @@ import ShippingRate from '../models/ShippingRate.js';
 import { calculateShippingFee as calculateFee, getAvailableShippingOptions } from '../services/shippingService.js';
 import { StatusCodes } from 'http-status-codes';
 import { ApiError } from '../utils/ApiError.js';
+import XLSX from 'xlsx';
 
 // Zone Controllers
 export const getShippingZones = async (req, res) => {
@@ -160,3 +161,169 @@ export const getConfiguredCities = async (req, res) => {
     throw new ApiError(StatusCodes.INTERNAL_SERVER_ERROR, 'Failed to fetch cities');
   }
 };
+
+export const importShippingZoneFromExcel = async (req, res) => {
+  try {
+    if (!req.file?.buffer) {
+      throw new ApiError(StatusCodes.BAD_REQUEST, 'Excel file is required');
+    }
+
+    const zoneName = (req.body.zoneName || req.body.name || '').trim();
+    if (!zoneName) {
+      throw new ApiError(StatusCodes.BAD_REQUEST, 'Zone name is required');
+    }
+
+    const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+    const [firstSheetName] = workbook.SheetNames;
+    if (!firstSheetName) {
+      throw new ApiError(StatusCodes.BAD_REQUEST, 'No worksheets found in the uploaded file');
+    }
+    const worksheet = workbook.Sheets[firstSheetName];
+    const rows = XLSX.utils.sheet_to_json(worksheet, { defval: null });
+
+    const parsedCities = parseCityRows(rows);
+    if (parsedCities.length === 0) {
+      throw new ApiError(StatusCodes.BAD_REQUEST, 'No valid city rows found in the spreadsheet');
+    }
+
+    const overwrite = parseBoolean(req.body.overwrite ?? req.body.replaceExisting, false);
+    const regions = parseRegionsInput(req.body.regions);
+    const zoneDescription = (req.body.zoneDescription || req.body.description || '').trim() || undefined;
+    const zoneIsActive = parseBoolean(req.body.zoneActive ?? req.body.isActive, true);
+    const zoneOrder = toNumber(req.body.zoneOrder, 0);
+
+    let zone = await ShippingZone.findOne({ name: zoneName });
+    const zonePayload = {
+      name: zoneName,
+      description: zoneDescription,
+      countries: parsedCities.map(entry => entry.name),
+      regions,
+      isActive: zoneIsActive,
+      order: zoneOrder,
+      zonePrice: null
+    };
+
+    if (zone) {
+      if (!overwrite) {
+        throw new ApiError(StatusCodes.CONFLICT, 'Shipping zone already exists. Enable overwrite to replace it.');
+      }
+      zone.set(zonePayload);
+      await zone.save();
+      await ShippingRate.deleteMany({ zone: zone._id });
+    } else {
+      zone = await ShippingZone.create(zonePayload);
+    }
+
+    const rateName = (req.body.rateName || `${zoneName} Delivery`).trim();
+    const rateDescription = (req.body.rateDescription || 'Imported from Excel').trim();
+    const rateActive = parseBoolean(req.body.rateActive ?? req.body.isActiveRate, true);
+    const rateOrder = toNumber(req.body.rateOrder, 0);
+    const baseCost = parsedCities.find(city => typeof city.cost === 'number')?.cost ?? 0;
+
+    const rate = await ShippingRate.create({
+      zone: zone._id,
+      name: rateName,
+      description: rateDescription,
+      method: 'flat_rate',
+      cost: baseCost,
+      cities: parsedCities,
+      conditions: {
+        minOrderValue: 0
+      },
+      isActive: rateActive,
+      order: rateOrder
+    });
+
+    res.status(StatusCodes.CREATED).json({
+      message: 'Shipping zone imported successfully',
+      zone,
+      rate,
+      cityCount: parsedCities.length
+    });
+  } catch (error) {
+    if (error instanceof ApiError) {
+      throw error;
+    }
+    console.error('Failed to import shipping zone from Excel:', error);
+    throw new ApiError(StatusCodes.BAD_REQUEST, error.message || 'Failed to import shipping zone');
+  }
+};
+
+function parseCityRows(rows = []) {
+  const entries = [];
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue;
+    const normalized = Object.entries(row).reduce((acc, [key, value]) => {
+      const k = (key || '').toString().trim().toLowerCase();
+      if (!k) return acc;
+      acc[k] = value;
+      return acc;
+    }, {});
+
+    const city = (normalized.city || normalized['city name'] || normalized.name || normalized['town'] || normalized['المدينة'] || '').toString().trim();
+    if (!city) continue;
+
+    const priceValue = normalized.price ?? normalized.cost ?? normalized.amount ?? normalized.rate ?? normalized['delivery fee'] ?? null;
+    const cost = parseNumeric(priceValue);
+    entries.push({ name: city, cost });
+  }
+
+  const deduped = new Map();
+  for (const entry of entries) {
+    const key = entry.name.toLowerCase();
+    deduped.set(key, entry);
+  }
+  return Array.from(deduped.values());
+}
+
+function parseRegionsInput(input) {
+  if (!input) return [];
+  if (Array.isArray(input)) {
+    return input.map(r => (r || '').toString().trim()).filter(Boolean);
+  }
+  if (typeof input === 'string') {
+    try {
+      const parsed = JSON.parse(input);
+      if (Array.isArray(parsed)) {
+        return parsed.map(r => (r || '').toString().trim()).filter(Boolean);
+      }
+    } catch {
+      // not JSON, continue
+    }
+    return input.split(',').map(r => r.trim()).filter(Boolean);
+  }
+  return [];
+}
+
+function parseNumeric(value) {
+  if (value === null || value === undefined || value === '') return undefined;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  let str = value.toString().trim();
+  if (!str) return undefined;
+  str = str.replace(/[^0-9.,-]/g, '');
+  if (!str) return undefined;
+  if (str.includes('.') && str.includes(',')) {
+    str = str.replace(/,/g, '');
+  } else if (str.includes(',') && !str.includes('.')) {
+    str = str.replace(',', '.');
+  } else {
+    str = str.replace(/,/g, '');
+  }
+  const num = Number(str);
+  return Number.isFinite(num) ? num : undefined;
+}
+
+function parseBoolean(value, defaultValue = true) {
+  if (value === undefined || value === null || value === '') return defaultValue;
+  if (typeof value === 'boolean') return value;
+  const normalized = value.toString().trim().toLowerCase();
+  if (['1', 'true', 'yes', 'y', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'n', 'off'].includes(normalized)) return false;
+  return defaultValue;
+}
+
+function toNumber(value, fallback = 0) {
+  if (value === undefined || value === null || value === '') return fallback;
+  const num = Number(value);
+  return Number.isFinite(num) ? num : fallback;
+}

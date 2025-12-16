@@ -1,5 +1,6 @@
 import express from 'express';
 import asyncHandler from 'express-async-handler';
+import multer from 'multer';
 import { adminAuth } from '../middleware/auth.js';
 import {
   getShippingZones,
@@ -15,9 +16,26 @@ import {
   calculateShippingFee,
   getShippingOptions,
   getConfiguredCities,
+  importShippingZoneFromExcel,
 } from '../controllers/shippingController.js';
 
 const router = express.Router();
+
+const excelUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = [
+      'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'text/csv'
+    ];
+    if (!allowedTypes.includes(file.mimetype)) {
+      return cb(new Error('Invalid file type. Please upload an Excel file.'));
+    }
+    cb(null, true);
+  }
+});
 
 // Shipping Zone Routes
 router.route('/zones')
@@ -47,5 +65,12 @@ router.get('/options', asyncHandler(getShippingOptions));
 
 // Get distinct configured cities (admin only)
 router.get('/cities', adminAuth, asyncHandler(getConfiguredCities));
+
+router.post(
+  '/zones/import/excel',
+  adminAuth,
+  excelUpload.single('file'),
+  asyncHandler(importShippingZoneFromExcel)
+);
 
 export default router;
