@@ -203,7 +203,9 @@ app.use((req, res, next) => {
 // Apply Content Security Policy middleware
 app.use(cspMiddleware);
 
-app.use(express.json());
+// Allow larger JSON payloads (city bulk uploads, etc.) without triggering 413 errors
+app.use(express.json({ limit: '2mb' }));
+app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 app.use(cookieParser());
 // Serve static for service worker if behind express (especially in production)
 app.use(express.static(path.resolve(__dirname, '../public')));
