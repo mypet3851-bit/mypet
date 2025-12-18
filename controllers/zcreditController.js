@@ -20,15 +20,27 @@ function deriveOrigin(req) {
   return `${proto}://${host}`.replace(/\/$/, '');
 }
 
+function deriveServerBase(req) {
+  const headers = req?.headers || {};
+  const hostHeader = headers['x-forwarded-host'] || headers.host || '';
+  const host = typeof hostHeader === 'string' ? hostHeader.split(',')[0].trim() : '';
+  if (!host) return '';
+  const protoHeader = headers['x-forwarded-proto'] || '';
+  const protocol = protoHeader.split(',')[0] || req?.protocol || 'https';
+  return `${protocol}://${host}`.replace(/\/$/, '');
+}
+
 function buildDefaultUrls(req) {
   const requestOrigin = deriveOrigin(req) || '';
+  const serverBase = deriveServerBase(req) || '';
   const publicBase = (process.env.PUBLIC_WEB_URL || requestOrigin || '').replace(/\/$/, '');
-  const apiBase = (process.env.PUBLIC_API_URL || publicBase || '').replace(/\/$/, '');
-  const defaultSuccess = publicBase ? `${publicBase}/checkout/success` : '';
-  const defaultCancel = publicBase ? `${publicBase}/checkout/cancel` : '';
+  const apiBase = (process.env.PUBLIC_API_URL || serverBase || publicBase || '').replace(/\/$/, '');
+  const successBase = publicBase || serverBase;
+  const defaultSuccess = successBase ? `${successBase}/checkout/success` : '';
+  const defaultCancel = successBase ? `${successBase}/checkout/cancel` : '';
   const defaultSuccessCb = apiBase ? `${apiBase}/api/zcredit/callback/success` : '';
   const defaultFailureCb = apiBase ? `${apiBase}/api/zcredit/callback/failure` : '';
-  return { defaultSuccess, defaultCancel, defaultSuccessCb, defaultFailureCb, publicBase, apiBase };
+  return { defaultSuccess, defaultCancel, defaultSuccessCb, defaultFailureCb, publicBase, apiBase, serverBase };
 }
 
 function sanitizeCheckoutItems(items) {
@@ -95,9 +107,10 @@ async function calculatePricingSummary(items, currency) {
 }
 
 function buildSessionUrlSet(req, sessionId) {
-  const { publicBase, apiBase } = buildDefaultUrls(req);
-  const success = publicBase ? `${publicBase}/payment/return?session=${sessionId}` : '';
-  const cancel = publicBase ? `${publicBase}/cart` : '';
+  const { publicBase, apiBase, serverBase } = buildDefaultUrls(req);
+  const successBase = publicBase || serverBase;
+  const success = successBase ? `${successBase}/payment/return?session=${sessionId}` : '';
+  const cancel = successBase ? `${successBase}/cart` : '';
   const callback = apiBase ? `${apiBase}/api/zcredit/callback/success` : '';
   const failureCallback = apiBase ? `${apiBase}/api/zcredit/callback/failure` : '';
   return { success, cancel, callback, failureCallback };
