@@ -105,7 +105,7 @@ router.get('/', async (req, res) => {
     });
   } catch {}
   try {
-    let settings = await Settings.findOne();
+    let settings = await Settings.findOne().sort({ updatedAt: -1 });
     if (!settings) {
       settings = await Settings.create({});
     }
