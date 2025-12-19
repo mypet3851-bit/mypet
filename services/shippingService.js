@@ -49,6 +49,18 @@ export const calculateShippingFee = async ({ subtotal, weight, country, region, 
     if (zones.length === 0) {
       throw new Error('No shipping zones found for the specified location');
     }
+    const normalizedAreaGroup = (areaGroup || '').trim();
+    if (normalizedAreaGroup) {
+      const prioritized = zones
+        .map(zone => ({ zone, entry: getAreaGroupEntry(zone, normalizedAreaGroup) }))
+        .filter(item => item.entry && typeof item.entry.price === 'number' && item.entry.price >= 0);
+      if (prioritized.length) {
+        const cheapest = prioritized.reduce((min, item) => Math.min(min, item.entry.price), Infinity);
+        if (Number.isFinite(cheapest)) {
+          return cheapest;
+        }
+      }
+    }
     
     const zoneIds = zones.map(z => z._id);
     // Get all shipping rates for the matching zones
@@ -196,6 +208,17 @@ export const getAvailableShippingOptions = async ({ country, region, areaGroup, 
     if (zones.length === 0) {
       return [];
     }
+
+    const normalizedAreaGroup = (areaGroup || '').trim();
+    const areaGroupEntriesByZone = new Map();
+    if (normalizedAreaGroup) {
+      zones.forEach(zone => {
+        const entry = getAreaGroupEntry(zone, normalizedAreaGroup);
+        if (entry && typeof entry.price === 'number' && entry.price >= 0) {
+          areaGroupEntriesByZone.set(String(zone._id), entry);
+        }
+      });
+    }
     
     const zoneIds = zones.map(z => z._id);
     // Get all shipping rates for the matching zones
@@ -231,6 +254,10 @@ export const getAvailableShippingOptions = async ({ country, region, areaGroup, 
     
     const candidateRates = citySpecific.length ? citySpecific : allRates;
     for (const rate of candidateRates) {
+      const zoneId = String(rate.zone?._id || rate.zone || '');
+      if (normalizedAreaGroup && areaGroupEntriesByZone.has(zoneId)) {
+        continue;
+      }
       const cost = rate.calculateCost(subtotal, weight);
       if (cost !== null) {
         options.push({
@@ -246,9 +273,9 @@ export const getAvailableShippingOptions = async ({ country, region, areaGroup, 
     }
 
     // Fallback: prefer area-group specific price, otherwise uniform zone price
-    const normalizedAreaGroup = (areaGroup || '').trim();
     for (const zone of zones) {
-      const areaEntry = getAreaGroupEntry(zone, areaGroup);
+      const zoneId = String(zone._id);
+      const areaEntry = normalizedAreaGroup ? areaGroupEntriesByZone.get(zoneId) || null : null;
       if (areaEntry && typeof areaEntry.price === 'number' && areaEntry.price >= 0) {
         const areaCost = areaEntry.price;
         const estimatedDays = getAreaGroupEstimatedDays(areaEntry);
