@@ -19,7 +19,7 @@ export const calculateShippingFee = async ({ subtotal, weight, country, region, 
     const effectiveRegion = resolvedAreaGroup || region;
     // Free shipping threshold and fixed fee override (from Settings)
     try {
-      const s = await Settings.findOne();
+      const s = await Settings.findOne().sort({ updatedAt: -1 });
       // Free shipping if subtotal meets threshold
       if (s?.shipping?.freeShippingEnabled) {
         const min = typeof s.shipping.freeShippingMinSubtotal === 'number' ? s.shipping.freeShippingMinSubtotal : 0;
@@ -177,7 +177,7 @@ export const getAvailableShippingOptions = async ({ country, region, areaGroup, 
     const effectiveRegion = resolvedAreaGroup || region;
     // Free shipping threshold and fixed fee override
     try {
-      const s = await Settings.findOne();
+      const s = await Settings.findOne().sort({ updatedAt: -1 });
       // Free shipping if subtotal meets threshold
       if (s?.shipping?.freeShippingEnabled) {
         const min = typeof s.shipping.freeShippingMinSubtotal === 'number' ? s.shipping.freeShippingMinSubtotal : 0;
