@@ -293,7 +293,8 @@ export const createSessionFromCartHandler = asyncHandler(async (req, res) => {
       shippingAddress: {
         street: shippingAddress?.street,
         city: shippingAddress?.city,
-        country: shippingAddress?.country
+        country: shippingAddress?.country,
+        areaGroup: shippingAddress?.areaGroup
       },
       customerInfo: {
         email: customerInfo?.email,
@@ -358,7 +359,8 @@ export const createSessionFromCartHandler = asyncHandler(async (req, res) => {
     shippingAddress: {
       street: shippingAddress.street,
       city: shippingAddress.city,
-      country: shippingAddress.country
+      country: shippingAddress.country,
+      areaGroup: typeof shippingAddress.areaGroup === 'string' ? shippingAddress.areaGroup.trim() : ''
     },
     customerInfo: {
       firstName: customerInfo.firstName,

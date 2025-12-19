@@ -148,6 +148,14 @@ export const createOrder = async (req, res) => {
       return res.status(400).json({ message: 'Complete shipping address is required' });
     }
 
+    const normalizedAreaGroup = typeof shippingAddress.areaGroup === 'string' ? shippingAddress.areaGroup.trim() : '';
+    const normalizedShippingAddress = {
+      street: shippingAddress.street,
+      city: shippingAddress.city,
+      country: shippingAddress.country,
+      areaGroup: normalizedAreaGroup
+    };
+
     // In single-currency mode we only validate equality with store currency; SUPPORTED_CURRENCIES retained for backward compatibility.
     if (!SUPPORTED_CURRENCIES[currency]) {
       return res.status(400).json({ message: 'Store currency not recognized in configuration' });
@@ -286,9 +294,10 @@ export const createOrder = async (req, res) => {
       mobile: customerInfo.mobile,
       secondaryMobile: customerInfo.secondaryMobile,
       address: {
-        street: shippingAddress.street,
-        city: shippingAddress.city,
-        country: shippingAddress.country
+        street: normalizedShippingAddress.street,
+        city: normalizedShippingAddress.city,
+        country: normalizedShippingAddress.country,
+        areaGroup: normalizedShippingAddress.areaGroup
       }
     };
     if (useTransaction) {
@@ -305,7 +314,7 @@ export const createOrder = async (req, res) => {
     // 4. Final fallback: DEFAULT_SHIPPING_FEE env or 50
     let shippingFee = 0;
     let shippingMeta = {
-      city: shippingAddress?.city,
+      city: normalizedShippingAddress?.city,
       rateId: null,
       zoneId: null,
       methodName: null,
@@ -331,9 +340,9 @@ export const createOrder = async (req, res) => {
       shippingFee = clientDeliveryFee;
     } else {
       try {
-        const addressCountry = shippingAddress.country;
-        const addressCity = shippingAddress.city;
-        shippingFee = await calcShipFee({ subtotal: totalAmount, weight: 0, country: addressCountry, region: undefined, city: addressCity });
+        const addressCountry = normalizedShippingAddress.country;
+        const addressCity = normalizedShippingAddress.city;
+        shippingFee = await calcShipFee({ subtotal: totalAmount, weight: 0, country: addressCountry, region: normalizedShippingAddress.areaGroup || undefined, city: addressCity });
         if (!isFinite(shippingFee) || shippingFee < 0) shippingFee = 0;
       } catch (e) {
         console.warn('Shipping fee calculation failed, will use fallback logic:', e?.message || e);
@@ -414,7 +423,7 @@ export const createOrder = async (req, res) => {
       totalAmount,
       currency,
       exchangeRate,
-      shippingAddress,
+      shippingAddress: normalizedShippingAddress,
       paymentMethod,
       customerInfo: {
         firstName: customerInfo.firstName,
@@ -435,8 +444,9 @@ export const createOrder = async (req, res) => {
       shippingCostComponents: shippingMeta.costComponents,
       shippingCalculation: {
         subtotal: totalAmount,
-        country: shippingAddress.country,
-        city: shippingAddress.city,
+        country: normalizedShippingAddress.country,
+        city: normalizedShippingAddress.city,
+        areaGroup: normalizedShippingAddress.areaGroup,
         weight: 0
       },
       coupon: couponInfo,
@@ -838,10 +848,15 @@ export const recalculateShipping = async (req, res) => {
 
     const city = order.shippingAddress?.city;
     const country = order.shippingAddress?.country;
-    const subtotal = order.totalAmount || 0;
-    let newFee = 0;
+    const areaGroup = order.shippingAddress?.areaGroup;
+    if (!city || !country) {
+      return res.status(400).json({ message: 'Order missing shipping address' });
+    }
+
+    const subtotal = order.totalAmount || order.items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+    let newFee = order.shippingFee || 0;
     try {
-      newFee = await calcShipFee({ subtotal, weight: 0, country, region: undefined, city });
+      newFee = await calcShipFee({ subtotal, weight: 0, country, region: areaGroup || undefined, city });
     } catch (e) {
       return res.status(400).json({ message: 'Failed to calculate shipping', error: e?.message });
     }
@@ -849,7 +864,14 @@ export const recalculateShipping = async (req, res) => {
     order.shippingFee = newFee;
     order.deliveryFee = newFee;
     order.shippingCity = city;
-    order.shippingCalculation = { subtotal, country, city, weight: 0, recalculatedAt: new Date() };
+    order.shippingCalculation = {
+      subtotal,
+      country,
+      city,
+      areaGroup,
+      weight: 0,
+      recalculatedAt: new Date()
+    };
     await order.save();
 
     res.json({

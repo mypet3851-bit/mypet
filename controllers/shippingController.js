@@ -131,8 +131,8 @@ export const deleteShippingRate = async (req, res) => {
 // Fee Calculation
 export const calculateShippingFee = async (req, res) => {
   try {
-    const { subtotal, weight, country, region, city } = req.body;
-    const fee = await calculateFee({ subtotal, weight, country, region, city });
+    const { subtotal, weight, country, region, areaGroup, city } = req.body;
+    const fee = await calculateFee({ subtotal, weight, country, region, areaGroup, city });
     res.json({ fee, cityApplied: !!city });
   } catch (error) {
     throw new ApiError(StatusCodes.BAD_REQUEST, error.message || 'Failed to calculate shipping fee');
@@ -142,8 +142,8 @@ export const calculateShippingFee = async (req, res) => {
 // Get options (including city overrides) for UI selection
 export const getShippingOptions = async (req, res) => {
   try {
-    const { country, region, city, subtotal, weight } = req.query;
-    const options = await getAvailableShippingOptions({ country, region, city, subtotal: Number(subtotal) || 0, weight: Number(weight) || 0 });
+    const { country, region, areaGroup, city, subtotal, weight } = req.query;
+    const options = await getAvailableShippingOptions({ country, region, areaGroup, city, subtotal: Number(subtotal) || 0, weight: Number(weight) || 0 });
     res.json({ options });
   } catch (error) {
     throw new ApiError(StatusCodes.BAD_REQUEST, error.message || 'Failed to get shipping options');
