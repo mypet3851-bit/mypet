@@ -37,8 +37,13 @@ export const calculateShippingFee = async ({ subtotal, weight, country, region, 
     }
     // City-first lookup: treat `countries` array as list of cities if no real country logic is used
     let zones = [];
-    if (city) {
-      zones = await ShippingZone.find({ countries: { $in: [city] }, isActive: true });
+    const trimmedCity = (city || '').trim();
+    if (trimmedCity) {
+      const cityRegex = buildCaseInsensitiveRegex(trimmedCity);
+      zones = await ShippingZone.find({
+        countries: { $elemMatch: { $regex: cityRegex } },
+        isActive: true
+      });
     }
     // If none by city, fall back to country / region (for future extensibility)
     if (zones.length === 0 && country) {
@@ -46,6 +51,13 @@ export const calculateShippingFee = async ({ subtotal, weight, country, region, 
     }
     if (zones.length === 0 && effectiveRegion) {
       zones = await ShippingZone.findByRegion(effectiveRegion);
+    }
+    if (zones.length === 0 && resolvedAreaGroup) {
+      const areaRegex = buildCaseInsensitiveRegex(resolvedAreaGroup);
+      zones = await ShippingZone.find({
+        isActive: true,
+        'areaGroupPrices.areaGroup': { $regex: areaRegex }
+      });
     }
     if (zones.length === 0) {
       throw new Error('No shipping zones found for the specified location');
@@ -198,14 +210,26 @@ export const getAvailableShippingOptions = async ({ country, region, areaGroup, 
     }
     // City-first strategy (we repurpose `countries` to store city names)
     let zones = [];
-    if (city) {
-      zones = await ShippingZone.find({ countries: { $in: [city] }, isActive: true });
+    const trimmedCity = (city || '').trim();
+    if (trimmedCity) {
+      const cityRegex = buildCaseInsensitiveRegex(trimmedCity);
+      zones = await ShippingZone.find({
+        countries: { $elemMatch: { $regex: cityRegex } },
+        isActive: true
+      });
     }
     if (zones.length === 0 && country) {
       zones = await ShippingZone.findByCountry(country);
     }
     if (zones.length === 0 && effectiveRegion) {
       zones = await ShippingZone.findByRegion(effectiveRegion);
+    }
+    if (zones.length === 0 && resolvedAreaGroup) {
+      const areaRegex = buildCaseInsensitiveRegex(resolvedAreaGroup);
+      zones = await ShippingZone.find({
+        isActive: true,
+        'areaGroupPrices.areaGroup': { $regex: areaRegex }
+      });
     }
     if (zones.length === 0) {
       return [];
@@ -384,6 +408,13 @@ function getAreaGroupEtaLabel(entry) {
 const cityAreaGroupCache = {
   map: null,
   expires: 0
+};
+
+const escapeRegex = (value = '') => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const buildCaseInsensitiveRegex = (value = '') => {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  return new RegExp(`^${escapeRegex(trimmed)}$`, 'i');
 };
 
 const extractCityRows = (checkoutForm = {}) => {
