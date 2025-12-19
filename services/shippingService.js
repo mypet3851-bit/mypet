@@ -15,7 +15,8 @@ import Settings from '../models/Settings.js';
  */
 export const calculateShippingFee = async ({ subtotal, weight, country, region, city, areaGroup }) => {
   try {
-    const effectiveRegion = areaGroup || region;
+    const resolvedAreaGroup = await resolveAreaGroupForCity(areaGroup, city);
+    const effectiveRegion = resolvedAreaGroup || region;
     // Free shipping threshold and fixed fee override (from Settings)
     try {
       const s = await Settings.findOne();
@@ -49,7 +50,7 @@ export const calculateShippingFee = async ({ subtotal, weight, country, region, 
     if (zones.length === 0) {
       throw new Error('No shipping zones found for the specified location');
     }
-    const normalizedAreaGroup = (areaGroup || '').trim();
+    const normalizedAreaGroup = resolvedAreaGroup;
     if (normalizedAreaGroup) {
       const prioritized = zones
         .map(zone => ({ zone, entry: getAreaGroupEntry(zone, normalizedAreaGroup) }))
@@ -114,13 +115,13 @@ export const calculateShippingFee = async ({ subtotal, weight, country, region, 
     
     const fallbackOptions = [];
     for (const zone of zones) {
-      const areaEntry = getAreaGroupEntry(zone, areaGroup);
+      const areaEntry = getAreaGroupEntry(zone, resolvedAreaGroup);
       if (areaEntry && typeof areaEntry.price === 'number' && areaEntry.price >= 0) {
         fallbackOptions.push({
           rate: null,
           cost: areaEntry.price,
           method: 'area_group',
-          name: `${zone.name} (${areaGroup || 'Area'})`
+          name: `${zone.name} (${resolvedAreaGroup || 'Area'})`
         });
         continue;
       }
@@ -160,7 +161,8 @@ export const calculateShippingFee = async ({ subtotal, weight, country, region, 
  */
 export const getAvailableShippingOptions = async ({ country, region, areaGroup, city, subtotal = 0, weight = 0 }) => {
   try {
-    const effectiveRegion = areaGroup || region;
+    const resolvedAreaGroup = await resolveAreaGroupForCity(areaGroup, city);
+    const effectiveRegion = resolvedAreaGroup || region;
     // Free shipping threshold and fixed fee override
     try {
       const s = await Settings.findOne();
@@ -209,7 +211,7 @@ export const getAvailableShippingOptions = async ({ country, region, areaGroup, 
       return [];
     }
 
-    const normalizedAreaGroup = (areaGroup || '').trim();
+    const normalizedAreaGroup = resolvedAreaGroup;
     const areaGroupEntriesByZone = new Map();
     if (normalizedAreaGroup) {
       zones.forEach(zone => {
@@ -377,6 +379,74 @@ function getAreaGroupEtaLabel(entry) {
   const unitLabel = eta.value === 1 ? (eta.unit === 'hours' ? 'hour' : 'day') : (eta.unit === 'hours' ? 'hours' : 'days');
   return `${eta.value} ${unitLabel}`;
 }
+
+// Cache city → areaGroup mappings to avoid repeated full Settings scans
+const cityAreaGroupCache = {
+  map: null,
+  expires: 0
+};
+
+const extractCityRows = (checkoutForm = {}) => {
+  if (Array.isArray(checkoutForm.cityTable) && checkoutForm.cityTable.length) {
+    return checkoutForm.cityTable;
+  }
+  if (Array.isArray(checkoutForm.cityRows) && checkoutForm.cityRows.length) {
+    return checkoutForm.cityRows;
+  }
+  return [];
+};
+
+const buildCityAreaGroupMap = (checkoutForm = {}) => {
+  const rows = extractCityRows(checkoutForm);
+  const map = new Map();
+  rows.forEach(entry => {
+    if (!entry || typeof entry !== 'object') return;
+    const areaGroup = (entry.areaGroup || entry.area_group || entry.group || entry.region || '').toString().trim();
+    if (!areaGroup) return;
+    const label = (entry.ar || entry.en || entry.he || entry.label || entry.name || entry.city || entry.value || '').toString().trim();
+    if (!label) return;
+    const key = normalizeLabel(label);
+    if (key && !map.has(key)) {
+      map.set(key, areaGroup);
+    }
+  });
+  return map;
+};
+
+const getCityAreaGroupMap = async () => {
+  const now = Date.now();
+  if (cityAreaGroupCache.map && now < cityAreaGroupCache.expires) {
+    return cityAreaGroupCache.map;
+  }
+  try {
+    const settings = await Settings.findOne();
+    const checkoutForm = settings?.checkoutForm || {};
+    const map = buildCityAreaGroupMap(checkoutForm);
+    cityAreaGroupCache.map = map;
+    cityAreaGroupCache.expires = now + 10 * 60 * 1000; // 10 minutes
+    return map;
+  } catch (error) {
+    console.warn('ShippingService: unable to load checkout city table for area groups', error);
+    if (!cityAreaGroupCache.map) {
+      cityAreaGroupCache.map = new Map();
+    }
+    return cityAreaGroupCache.map;
+  }
+};
+
+const resolveAreaGroupForCity = async (areaGroup, city) => {
+  const trimmed = (areaGroup || '').trim();
+  if (trimmed) return trimmed;
+  if (!city) return '';
+  try {
+    const map = await getCityAreaGroupMap();
+    const key = normalizeLabel(city);
+    return map.get(key) || '';
+  } catch (error) {
+    console.warn('ShippingService: failed to resolve area group for city', error);
+    return '';
+  }
+};
 
 /**
  * Validate shipping address
