@@ -33,18 +33,19 @@ const normalizeCityRow = (entry) => {
     const ar = trim(entry.ar);
     const en = trim(entry.en);
     const he = trim(entry.he);
+    const areaGroup = trim(entry.areaGroup ?? entry.area_group ?? entry.group ?? entry.region);
     if (ar || en || he) {
-      return { ar, en, he };
+      return { ar, en, he, areaGroup };
     }
     const fallback = trim(entry.label || entry.name || entry.city || entry.value);
     if (fallback) {
-      return { ar: fallback, en: '', he: '' };
+      return { ar: fallback, en: '', he: '', areaGroup };
     }
     return null;
   }
   const str = trim(entry);
   if (!str) return null;
-  return { ar: str, en: '', he: '' };
+  return { ar: str, en: '', he: '', areaGroup: '' };
 };
 
 const canonicalCityValue = (row) => (row?.ar || row?.en || row?.he || '').trim();
@@ -59,7 +60,7 @@ const buildCityTable = (checkoutForm) => {
   raw.forEach(entry => {
     const normalized = normalizeCityRow(entry);
     if (!normalized) return;
-    const key = `${normalized.ar}|${normalized.en}|${normalized.he}`;
+    const key = `${normalized.ar}|${normalized.en}|${normalized.he}|${normalized.areaGroup || ''}`;
     if (seen.has(key)) return;
     seen.add(key);
     rows.push(normalized);
