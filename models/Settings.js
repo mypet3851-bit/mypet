@@ -487,7 +487,8 @@ settingsSchema.add({
     cityTable: [{
       ar: { type: String, default: '' },
       en: { type: String, default: '' },
-      he: { type: String, default: '' }
+      he: { type: String, default: '' },
+      areaGroup: { type: String, default: '' }
     }],
     // Cities list for dropdown
     cities: {
@@ -1074,11 +1075,12 @@ settingsSchema.statics.createDefaultSettings = async function() {
                 return {
                   ar: typeof entry.ar === 'string' ? entry.ar : '',
                   en: typeof entry.en === 'string' ? entry.en : '',
-                  he: typeof entry.he === 'string' ? entry.he : ''
+                  he: typeof entry.he === 'string' ? entry.he : '',
+                  areaGroup: typeof entry.areaGroup === 'string' ? entry.areaGroup : ''
                 };
               }
               const value = typeof entry === 'string' ? entry : '';
-              return { ar: value, en: '', he: '' };
+              return { ar: value, en: '', he: '', areaGroup: '' };
             };
             if (!updateData.checkoutForm) {
               updateData.checkoutForm = { ...(settings.checkoutForm || {}) };

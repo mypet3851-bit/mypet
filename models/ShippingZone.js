@@ -23,6 +23,26 @@ const shippingZoneSchema = new mongoose.Schema({
     default: null,
     min: 0
   },
+  areaGroupPrices: [{
+    areaGroup: {
+      type: String,
+      trim: true
+    },
+    price: {
+      type: Number,
+      min: 0
+    },
+    deliveryTimeValue: {
+      type: Number,
+      min: 0,
+      default: null
+    },
+    deliveryTimeUnit: {
+      type: String,
+      enum: ['hours', 'days'],
+      default: 'days'
+    }
+  }],
   regions: [{
     type: String,
     trim: true

@@ -30,6 +30,7 @@ const PaymentSessionSchema = new mongoose.Schema({
   shippingAddress: {
     street: { type: String, required: true },
     city: { type: String, required: true },
+    areaGroup: { type: String, default: '' },
     country: { type: String, required: true }
   },
   customerInfo: {

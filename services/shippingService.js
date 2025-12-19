@@ -9,11 +9,13 @@ import Settings from '../models/Settings.js';
  * @param {number} params.weight - Total weight of items
  * @param {string} params.country - Destination country
  * @param {string} params.region - Destination region (optional)
+ * @param {string} params.areaGroup - Area grouping label (optional, overrides region when provided)
  * @param {string} params.city - Destination city (optional for city-specific rates)
  * @returns {Promise<number>} Calculated shipping fee
  */
-export const calculateShippingFee = async ({ subtotal, weight, country, region, city }) => {
+export const calculateShippingFee = async ({ subtotal, weight, country, region, city, areaGroup }) => {
   try {
+    const effectiveRegion = areaGroup || region;
     // Free shipping threshold and fixed fee override (from Settings)
     try {
       const s = await Settings.findOne();
@@ -41,8 +43,8 @@ export const calculateShippingFee = async ({ subtotal, weight, country, region, 
     if (zones.length === 0 && country) {
       zones = await ShippingZone.findByCountry(country);
     }
-    if (zones.length === 0 && region) {
-      zones = await ShippingZone.findByRegion(region);
+    if (zones.length === 0 && effectiveRegion) {
+      zones = await ShippingZone.findByRegion(effectiveRegion);
     }
     if (zones.length === 0) {
       throw new Error('No shipping zones found for the specified location');
@@ -98,14 +100,37 @@ export const calculateShippingFee = async ({ subtotal, weight, country, region, 
       }
     }
     
-    if (applicableRates.length === 0) {
+    const fallbackOptions = [];
+    for (const zone of zones) {
+      const areaEntry = getAreaGroupEntry(zone, areaGroup);
+      if (areaEntry && typeof areaEntry.price === 'number' && areaEntry.price >= 0) {
+        fallbackOptions.push({
+          rate: null,
+          cost: areaEntry.price,
+          method: 'area_group',
+          name: `${zone.name} (${areaGroup || 'Area'})`
+        });
+        continue;
+      }
+      if (typeof zone.zonePrice === 'number' && zone.zonePrice >= 0) {
+        fallbackOptions.push({
+          rate: null,
+          cost: zone.zonePrice,
+          method: 'zone_price',
+          name: `${zone.name} Standard`
+        });
+      }
+    }
+
+    const combinedOptions = [...applicableRates, ...fallbackOptions];
+    if (combinedOptions.length === 0) {
       throw new Error('No applicable shipping rates found for the order criteria');
     }
     
     // Sort by cost (cheapest first) and return the lowest cost
-    applicableRates.sort((a, b) => a.cost - b.cost);
+    combinedOptions.sort((a, b) => a.cost - b.cost);
     
-    return applicableRates[0].cost;
+    return combinedOptions[0].cost;
   } catch (error) {
     console.error('Error calculating shipping fee:', error);
     throw new Error(`Failed to calculate shipping fee: ${error.message}`);
@@ -121,8 +146,9 @@ export const calculateShippingFee = async ({ subtotal, weight, country, region, 
  * @param {number} params.weight - Total weight (optional)
  * @returns {Promise<Array>} Available shipping options
  */
-export const getAvailableShippingOptions = async ({ country, region, city, subtotal = 0, weight = 0 }) => {
+export const getAvailableShippingOptions = async ({ country, region, areaGroup, city, subtotal = 0, weight = 0 }) => {
   try {
+    const effectiveRegion = areaGroup || region;
     // Free shipping threshold and fixed fee override
     try {
       const s = await Settings.findOne();
@@ -164,8 +190,8 @@ export const getAvailableShippingOptions = async ({ country, region, city, subto
     if (zones.length === 0 && country) {
       zones = await ShippingZone.findByCountry(country);
     }
-    if (zones.length === 0 && region) {
-      zones = await ShippingZone.findByRegion(region);
+    if (zones.length === 0 && effectiveRegion) {
+      zones = await ShippingZone.findByRegion(effectiveRegion);
     }
     if (zones.length === 0) {
       return [];
@@ -219,10 +245,29 @@ export const getAvailableShippingOptions = async ({ country, region, city, subto
       }
     }
 
-    // Fallback: if a zone defines a uniform zonePrice include it (if not already represented by cheaper/equal rate)
+    // Fallback: prefer area-group specific price, otherwise uniform zone price
+    const normalizedAreaGroup = (areaGroup || '').trim();
     for (const zone of zones) {
+      const areaEntry = getAreaGroupEntry(zone, areaGroup);
+      if (areaEntry && typeof areaEntry.price === 'number' && areaEntry.price >= 0) {
+        const areaCost = areaEntry.price;
+        const estimatedDays = getAreaGroupEstimatedDays(areaEntry);
+        const etaLabel = getAreaGroupEtaLabel(areaEntry);
+        const hasEquivalent = options.some(o => o.zone === zone.name && o.method === 'area_group' && o.cost <= areaCost);
+        if (!hasEquivalent) {
+          options.push({
+            id: `areaGroup:${zone._id}:${normalizedAreaGroup.toLowerCase()}`,
+            name: `${zone.name} ${normalizedAreaGroup || 'Area'}`,
+            description: etaLabel ? `Area group shipping · ETA ${etaLabel}` : 'Area group shipping',
+            method: 'area_group',
+            cost: areaCost,
+            zone: zone.name,
+            estimatedDays: estimatedDays ?? null
+          });
+        }
+        continue;
+      }
       if (typeof zone.zonePrice === 'number' && zone.zonePrice >= 0) {
-        // If no existing option belongs to this zone with same or lower cost, add it
         const hasEquivalent = options.some(o => o.zone === zone.name && o.cost <= zone.zonePrice);
         if (!hasEquivalent) {
           options.push({
@@ -256,6 +301,54 @@ function resolveCityCost(rate, baseCost, city) {
     return match.cost;
   }
   return baseCost;
+}
+
+const NORMALIZE_REGEX = /[\u064B-\u0652\u0640]/g;
+const normalizeLabel = (value = '') =>
+  value
+    .toString()
+    .toLowerCase()
+    .trim()
+    .replace(NORMALIZE_REGEX, '');
+
+function getAreaGroupEntry(zone, areaGroup) {
+  if (!areaGroup || !zone?.areaGroupPrices?.length) return null;
+  const target = normalizeLabel(areaGroup);
+  return zone.areaGroupPrices.find(entry =>
+    entry?.areaGroup && normalizeLabel(entry.areaGroup) === target
+  ) || null;
+}
+
+function resolveAreaGroupCost(zone, areaGroup) {
+  const entry = getAreaGroupEntry(zone, areaGroup);
+  if (entry && typeof entry.price === 'number' && entry.price >= 0) {
+    return entry.price;
+  }
+  return null;
+}
+
+function getAreaGroupEta(entry) {
+  if (!entry) return null;
+  const raw = entry.deliveryTimeValue;
+  const value = typeof raw === 'number' ? raw : Number(raw);
+  if (!Number.isFinite(value) || value <= 0) {
+    return null;
+  }
+  const unit = entry.deliveryTimeUnit === 'hours' ? 'hours' : 'days';
+  return { value, unit };
+}
+
+function getAreaGroupEstimatedDays(entry) {
+  const eta = getAreaGroupEta(entry);
+  if (!eta) return null;
+  return eta.unit === 'hours' ? eta.value / 24 : eta.value;
+}
+
+function getAreaGroupEtaLabel(entry) {
+  const eta = getAreaGroupEta(entry);
+  if (!eta) return null;
+  const unitLabel = eta.value === 1 ? (eta.unit === 'hours' ? 'hour' : 'day') : (eta.unit === 'hours' ? 'hours' : 'days');
+  return `${eta.value} ${unitLabel}`;
 }
 
 /**

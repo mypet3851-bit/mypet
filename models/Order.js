@@ -70,6 +70,10 @@ const orderSchema = new mongoose.Schema({
       type: String,
       required: true
     },
+    areaGroup: {
+      type: String,
+      default: ''
+    },
     country: {
       type: String,
       required: true,
