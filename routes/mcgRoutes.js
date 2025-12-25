@@ -437,13 +437,20 @@ router.post('/sync-items', adminAuth, async (req, res) => {
         let remoteName = (it?.ItemName ?? it?.Name ?? it?.name ?? it?.item_name ?? it?.ItemDescription ?? it?.Description ?? '') + '';
         remoteName = remoteName.trim();
         const descTemp = (it?.ItemDescription ?? it?.Description ?? it?.description ?? '') + '';
-        if (!remoteName || numericLike(remoteName)) remoteName = descTemp.trim() || remoteName;
+        const remoteDesc = descTemp.trim();
+        if (!remoteName || numericLike(remoteName)) remoteName = remoteDesc || remoteName;
+        const langGuess = detectLangFromText(`${remoteName} ${remoteDesc}`);
         if (remoteName && remoteName !== pDoc.name && remoteName.toLowerCase() !== String(pDoc.name||'').toLowerCase()) {
           if (!dry) {
-            await Product.updateOne({ _id: pDoc._id }, { $set: { name: remoteName } });
-            updatedNames.push({ mcgItemId: mcgId, before: pDoc.name, after: remoteName });
+            const setPayload = { name: remoteName };
+            if (langGuess && langGuess !== 'en') {
+              setPayload[`name_i18n.${langGuess}`] = remoteName;
+              if (remoteDesc) setPayload[`description_i18n.${langGuess}`] = remoteDesc;
+            }
+            await Product.updateOne({ _id: pDoc._id }, { $set: setPayload });
+            updatedNames.push({ mcgItemId: mcgId, before: pDoc.name, after: remoteName, lang: langGuess || 'en' });
           } else {
-            updatedNames.push({ mcgItemId: mcgId, before: pDoc.name, after: remoteName, dryRun: true });
+            updatedNames.push({ mcgItemId: mcgId, before: pDoc.name, after: remoteName, lang: langGuess || 'en', dryRun: true });
           }
         }
       }
