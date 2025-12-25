@@ -9,6 +9,7 @@ import InventoryHistory from '../models/InventoryHistory.js';
 import Warehouse from '../models/Warehouse.js';
 import { getItemsList } from './mcgService.js';
 import { inventoryService } from './inventoryService.js';
+import McgItemBlock from '../models/McgItemBlock.js';
 
 let _timer = null;
 let _inFlight = false;
@@ -56,7 +57,23 @@ async function oneRun() {
     const baseUrl = String(mcg.baseUrl || '').trim();
     const isUpli = apiFlavor === 'uplicali' || /apis\.uplicali\.com/i.test(baseUrl) || /SuperMCG\/MCG_API/i.test(baseUrl);
 
-    let processed = 0, updated = 0, created = 0, skippedNoMatch = 0, errors = 0, autoCreated = 0;
+    let processed = 0, updated = 0, created = 0, skippedNoMatch = 0, errors = 0, autoCreated = 0, skippedBlocked = 0;
+
+    const blockCtx = {
+      blockedBarcodes: new Set(),
+      blockedItemIds: new Set()
+    };
+    try {
+      const blockDocs = await McgItemBlock.find({}, 'barcode mcgItemId').lean();
+      for (const doc of blockDocs || []) {
+        const barcode = typeof doc?.barcode === 'string' ? doc.barcode.trim().toLowerCase() : '';
+        const mcgId = typeof doc?.mcgItemId === 'string' ? doc.mcgItemId.trim().toLowerCase() : '';
+        if (barcode) blockCtx.blockedBarcodes.add(barcode);
+        if (mcgId) blockCtx.blockedItemIds.add(mcgId);
+      }
+    } catch (blockErr) {
+      try { console.warn('[mcg][auto-pull] blocklist load failed:', blockErr?.message || blockErr); } catch {}
+    }
 
     // Resolve default category for auto-created products (first existing or create 'Imported')
     let defaultCategoryId = null;
@@ -101,6 +118,16 @@ async function oneRun() {
           // Fallback non-variant by mcgItemId
           if (!prod && mcgId) {
             prod = await Product.findOne({ mcgItemId: mcgId }).select('_id');
+          }
+
+          const normalizedBarcode = barcode ? barcode.toLowerCase() : '';
+          const normalizedMcgId = mcgId ? mcgId.toLowerCase() : '';
+          if (!prod && (
+            (normalizedBarcode && blockCtx.blockedBarcodes.has(normalizedBarcode)) ||
+            (normalizedMcgId && blockCtx.blockedItemIds.has(normalizedMcgId))
+          )) {
+            skippedBlocked++;
+            continue;
           }
 
           if (!prod) {
@@ -221,7 +248,7 @@ async function oneRun() {
       }
     }
 
-  try { console.log('[mcg][auto-pull] processed=%d updated=%d createdInv=%d autoCreatedProducts=%d skipped=%d errors=%d', processed, updated, created, autoCreated, skippedNoMatch, errors); } catch {}
+  try { console.log('[mcg][auto-pull] processed=%d updated=%d createdInv=%d autoCreatedProducts=%d skipped=%d skippedBlocklist=%d errors=%d', processed, updated, created, autoCreated, skippedNoMatch, skippedBlocked, errors); } catch {}
     _lastRunAt = Date.now();
   } catch (e) {
     try { console.warn('[mcg][auto-pull] failed:', e?.message || e); } catch {}

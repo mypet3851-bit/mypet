@@ -104,6 +104,7 @@ import Attribute from '../models/Attribute.js';
 import AttributeValue from '../models/AttributeValue.js';
 import Inventory from '../models/Inventory.js';
 import InventoryHistory from '../models/InventoryHistory.js';
+import McgItemBlock from '../models/McgItemBlock.js';
 import Category from '../models/Category.js';
 import Brand from '../models/Brand.js';
 import Warehouse from '../models/Warehouse.js';
@@ -1516,9 +1517,80 @@ export const deleteProduct = async (req, res) => {
   try {
     const { hard } = req.query;
     if (hard === 'true') {
-      const product = await Product.findByIdAndDelete(req.params.id);
+      const product = await Product.findById(req.params.id);
       if (!product) return res.status(404).json({ message: 'Product not found' });
+
+      await product.deleteOne();
       await Inventory.deleteMany({ product: product._id });
+
+      // Persist blocklist entries so MCG auto-pull will skip recreating this product
+      try {
+        const mcgIds = new Set();
+        const barcodes = new Set();
+        const normalize = (value) => {
+          if (value === undefined || value === null) return '';
+          return String(value).trim();
+        };
+        const pushIfPresent = (set, raw) => {
+          const normalized = normalize(raw);
+          if (normalized) set.add(normalized);
+        };
+
+        pushIfPresent(mcgIds, product.mcgItemId);
+        pushIfPresent(barcodes, product.mcgBarcode);
+        if (Array.isArray(product.variants)) {
+          for (const variant of product.variants) {
+            pushIfPresent(barcodes, variant?.barcode);
+          }
+        }
+
+        if (mcgIds.size || barcodes.size) {
+          const insertBase = {
+            reason: 'hard_delete',
+            lastProductId: product._id,
+            lastProductName: product.name || '',
+            notes: 'Auto-blocked because product was hard deleted',
+            ...(req.user?._id ? { createdBy: req.user._id } : {})
+          };
+          const updateBase = {
+            reason: 'hard_delete',
+            lastProductId: product._id,
+            lastProductName: product.name || '',
+            notes: 'Auto-blocked because product was hard deleted',
+            ...(req.user?._id ? { updatedBy: req.user._id } : {})
+          };
+
+          const ops = [];
+          for (const mcgId of mcgIds) {
+            ops.push(
+              McgItemBlock.findOneAndUpdate(
+                { mcgItemId: mcgId },
+                {
+                  $set: { ...updateBase, mcgItemId: mcgId },
+                  $setOnInsert: { ...insertBase, mcgItemId: mcgId }
+                },
+                { upsert: true, new: true, setDefaultsOnInsert: true }
+              )
+            );
+          }
+          for (const barcode of barcodes) {
+            ops.push(
+              McgItemBlock.findOneAndUpdate(
+                { barcode },
+                {
+                  $set: { ...updateBase, barcode },
+                  $setOnInsert: { ...insertBase, barcode }
+                },
+                { upsert: true, new: true, setDefaultsOnInsert: true }
+              )
+            );
+          }
+          await Promise.allSettled(ops);
+        }
+      } catch (blockErr) {
+        try { console.warn('[products][delete] mcg blocklist write failed:', blockErr?.message || blockErr); } catch {}
+      }
+
       await new InventoryHistory({
         product: product._id,
         type: 'decrease',
