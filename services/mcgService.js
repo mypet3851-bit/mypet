@@ -333,4 +333,68 @@ export async function setItemsList(items = [], group) {
   }
 }
 
-export default { getItemsList, getVersion, updateItemsQuantities, setItemsList };
+export async function deleteItems(items = [], group) {
+  if (!Array.isArray(items) || !items.length) return { ok: false, reason: 'no_items' };
+  const cfg = await getConfig();
+  const cleanItems = [];
+  const seen = new Set();
+  for (const it of items) {
+    if (!it) continue;
+    const item_code = (it.item_code ?? it.itemCode ?? it.ItemCode ?? it.barcode ?? '') + '';
+    const item_id = (it.item_id ?? it.itemId ?? it.ItemID ?? it.id ?? '') + '';
+    const code = item_code.trim();
+    const id = item_id.trim();
+    if (!code && !id) continue;
+    const key = `${code}::${id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const payload = {};
+    if (code) payload.item_code = code;
+    if (id) payload.item_id = id;
+    cleanItems.push(payload);
+  }
+  if (!cleanItems.length) return { ok: false, reason: 'no_valid_items' };
+
+  const normalizedGroup = (group !== undefined && group !== null && !Number.isNaN(Number(group))) ? Number(group) : undefined;
+
+  if (isUpliFlavor(cfg)) {
+    const body = { req: 'delete_items', items: cleanItems };
+    if (normalizedGroup !== undefined) body.group = normalizedGroup;
+    return await mcgRequestUpli(body);
+  }
+
+  const { base, version, extraHeaderName, extraHeaderValue } = cfg;
+  const url = `${base}/api/${version}/delete_items`;
+  let token = await getAccessToken();
+  try {
+    const resp = await axios.post(url, { items: cleanItems, ...(normalizedGroup !== undefined ? { group: normalizedGroup } : {}) }, {
+      headers: { 'Content-Type': 'application/json', ...buildAuthHeader(token), ...(extraHeaderName && extraHeaderValue ? { [extraHeaderName]: extraHeaderValue } : {}) },
+      timeout: 20000
+    });
+    return resp?.data || { ok: true };
+  } catch (e) {
+    const status = e?.response?.status;
+    if (status === 401) {
+      token = await fetchAccessToken();
+      const resp2 = await axios.post(url, { items: cleanItems, ...(normalizedGroup !== undefined ? { group: normalizedGroup } : {}) }, {
+        headers: { 'Content-Type': 'application/json', ...buildAuthHeader(token), ...(extraHeaderName && extraHeaderValue ? { [extraHeaderName]: extraHeaderValue } : {}) },
+        timeout: 20000
+      });
+      return resp2?.data || { ok: true };
+    }
+    let detail = '';
+    try {
+      const d = e?.response?.data;
+      if (d && typeof d === 'object') {
+        detail = d.message || d.error || d.Message || '';
+      } else if (typeof e?.response?.data === 'string') {
+        detail = String(e.response.data).slice(0, 160).replace(/\s+/g, ' ').trim();
+      }
+    } catch {}
+    const err = new Error(`MCG delete_items failed${status ? ` (${status})` : ''}${detail ? `: ${detail}` : ''}`);
+    err.status = status;
+    throw err;
+  }
+}
+
+export default { getItemsList, getVersion, updateItemsQuantities, setItemsList, deleteItems };

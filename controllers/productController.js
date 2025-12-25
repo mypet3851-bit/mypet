@@ -117,7 +117,7 @@ import { inventoryService } from '../services/inventoryService.js';
 import { realTimeEventService } from '../services/realTimeEventService.js';
 import { deepseekTranslate, deepseekTranslateBatch, isDeepseekConfigured } from '../services/translate/deepseek.js';
 import { getItemQuantity as rivhitGetQty, testConnectivity as rivhitTest } from '../services/rivhitService.js';
-import { setItemsList } from '../services/mcgService.js';
+import { setItemsList, deleteItems as deleteMcgItems } from '../services/mcgService.js';
 // Currency conversion disabled for product storage/display; prices are stored and served as-is in store currency
 
 // Get all products
@@ -1525,25 +1525,7 @@ export const deleteProduct = async (req, res) => {
 
       // Persist blocklist entries so MCG auto-pull will skip recreating this product
       try {
-        const mcgIds = new Set();
-        const barcodes = new Set();
-        const normalize = (value) => {
-          if (value === undefined || value === null) return '';
-          return String(value).trim();
-        };
-        const pushIfPresent = (set, raw) => {
-          const normalized = normalize(raw);
-          if (normalized) set.add(normalized);
-        };
-
-        pushIfPresent(mcgIds, product.mcgItemId);
-        pushIfPresent(barcodes, product.mcgBarcode);
-        if (Array.isArray(product.variants)) {
-          for (const variant of product.variants) {
-            pushIfPresent(barcodes, variant?.barcode);
-          }
-        }
-
+        const { mcgIds, barcodes } = collectMcgIdentifiers(product);
         if (mcgIds.size || barcodes.size) {
           const insertBase = {
             reason: 'hard_delete',
@@ -1590,6 +1572,8 @@ export const deleteProduct = async (req, res) => {
       } catch (blockErr) {
         try { console.warn('[products][delete] mcg blocklist write failed:', blockErr?.message || blockErr); } catch {}
       }
+
+      await propagateMcgDeletion(product);
 
       await new InventoryHistory({
         product: product._id,
@@ -2631,6 +2615,64 @@ async function pushMcgHebrewName(productDoc, hebrewName) {
       console.warn('[mcg][i18n] failed to push he name for product %s: %s', String(productDoc?._id || ''), err?.message || err);
     } catch {}
     return { attempted: true, success: false, reason: err?.message || 'mcg_push_failed' };
+  }
+}
+
+function collectMcgIdentifiers(productDoc) {
+  const mcgIds = new Set();
+  const barcodes = new Set();
+  const normalize = (value) => {
+    if (value === undefined || value === null) return '';
+    return String(value).trim();
+  };
+  const pushIfPresent = (set, raw) => {
+    const normalized = normalize(raw);
+    if (normalized) set.add(normalized);
+  };
+
+  if (!productDoc) {
+    return { mcgIds, barcodes };
+  }
+
+  pushIfPresent(mcgIds, productDoc.mcgItemId);
+  pushIfPresent(barcodes, productDoc.mcgBarcode);
+
+  if (Array.isArray(productDoc.variants)) {
+    for (const variant of productDoc.variants) {
+      pushIfPresent(barcodes, variant?.barcode);
+      pushIfPresent(mcgIds, variant?.mcgItemId);
+    }
+  }
+
+  return { mcgIds, barcodes };
+}
+
+async function propagateMcgDeletion(productDoc) {
+  try {
+    const { mcgIds, barcodes } = collectMcgIdentifiers(productDoc);
+    if (!mcgIds.size && !barcodes.size) return;
+
+    const settings = await Settings.findOne().select('mcg').lean();
+    const mcgCfg = settings?.mcg || {};
+    if (!mcgCfg.enabled) return;
+
+    const payload = [];
+    for (const mcgId of mcgIds) {
+      payload.push({ item_id: mcgId });
+    }
+    for (const barcode of barcodes) {
+      payload.push({ item_code: barcode });
+    }
+    if (!payload.length) return;
+
+    const group = Number.isFinite(Number(mcgCfg.group)) ? Number(mcgCfg.group) : undefined;
+    const res = await deleteMcgItems(payload, group);
+    try {
+      const summary = (res && typeof res === 'object') ? JSON.stringify(res).slice(0, 160) : String(res || 'ok');
+      console.log('[products][delete] propagated mcg delete product=%s identifiers=%d resp=%s', productDoc?._id, payload.length, summary);
+    } catch {}
+  } catch (err) {
+    try { console.warn('[products][delete] mcg delete propagation failed:', err?.message || err); } catch {}
   }
 }
 
