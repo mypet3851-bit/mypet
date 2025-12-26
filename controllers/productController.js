@@ -1523,55 +1523,7 @@ export const deleteProduct = async (req, res) => {
       await product.deleteOne();
       await Inventory.deleteMany({ product: product._id });
 
-      // Persist blocklist entries so MCG auto-pull will skip recreating this product
-      try {
-        const { mcgIds, barcodes } = collectMcgIdentifiers(product);
-        if (mcgIds.size || barcodes.size) {
-          const insertBase = {
-            reason: 'hard_delete',
-            lastProductId: product._id,
-            lastProductName: product.name || '',
-            notes: 'Auto-blocked because product was hard deleted',
-            ...(req.user?._id ? { createdBy: req.user._id } : {})
-          };
-          const updateBase = {
-            reason: 'hard_delete',
-            lastProductId: product._id,
-            lastProductName: product.name || '',
-            notes: 'Auto-blocked because product was hard deleted',
-            ...(req.user?._id ? { updatedBy: req.user._id } : {})
-          };
-
-          const ops = [];
-          for (const mcgId of mcgIds) {
-            ops.push(
-              McgItemBlock.findOneAndUpdate(
-                { mcgItemId: mcgId },
-                {
-                  $set: { ...updateBase, mcgItemId: mcgId },
-                  $setOnInsert: { ...insertBase, mcgItemId: mcgId }
-                },
-                { upsert: true, new: true, setDefaultsOnInsert: true }
-              )
-            );
-          }
-          for (const barcode of barcodes) {
-            ops.push(
-              McgItemBlock.findOneAndUpdate(
-                { barcode },
-                {
-                  $set: { ...updateBase, barcode },
-                  $setOnInsert: { ...insertBase, barcode }
-                },
-                { upsert: true, new: true, setDefaultsOnInsert: true }
-              )
-            );
-          }
-          await Promise.allSettled(ops);
-        }
-      } catch (blockErr) {
-        try { console.warn('[products][delete] mcg blocklist write failed:', blockErr?.message || blockErr); } catch {}
-      }
+      await persistMcgBlocklistEntries(product, req.user?._id, 'hard_delete');
 
       await propagateMcgDeletion(product);
 
@@ -1592,6 +1544,8 @@ export const deleteProduct = async (req, res) => {
       { new: true }
     );
     if (!product) return res.status(404).json({ message: 'Product not found' });
+    // Block identifiers on soft delete as well to prevent auto-pull from recreating it
+    await persistMcgBlocklistEntries(product, req.user?._id, 'soft_delete');
     // Remove inventory rows so the product disappears from Inventory page
     try { await Inventory.deleteMany({ product: product._id }); } catch (e) { try { console.warn('[products][delete] inventory cleanup failed', e?.message || e); } catch {} }
     // Recompute stock to reflect deletion (will become 0 with no rows)
@@ -2646,6 +2600,61 @@ function collectMcgIdentifiers(productDoc) {
   }
 
   return { mcgIds, barcodes };
+}
+
+async function persistMcgBlocklistEntries(productDoc, userId, reason = 'hard_delete') {
+  try {
+    const { mcgIds, barcodes } = collectMcgIdentifiers(productDoc);
+    if (!mcgIds.size && !barcodes.size) return;
+
+    const note = reason === 'soft_delete'
+      ? 'Auto-blocked because product was soft deleted'
+      : 'Auto-blocked because product was hard deleted';
+
+    const insertBase = {
+      reason,
+      lastProductId: productDoc._id,
+      lastProductName: productDoc.name || '',
+      notes: note,
+      ...(userId ? { createdBy: userId } : {})
+    };
+    const updateBase = {
+      reason,
+      lastProductId: productDoc._id,
+      lastProductName: productDoc.name || '',
+      notes: note,
+      ...(userId ? { updatedBy: userId } : {})
+    };
+
+    const ops = [];
+    for (const mcgId of mcgIds) {
+      ops.push(
+        McgItemBlock.findOneAndUpdate(
+          { mcgItemId: mcgId },
+          {
+            $set: { ...updateBase, mcgItemId: mcgId },
+            $setOnInsert: { ...insertBase, mcgItemId: mcgId }
+          },
+          { upsert: true, new: true, setDefaultsOnInsert: true }
+        )
+      );
+    }
+    for (const barcode of barcodes) {
+      ops.push(
+        McgItemBlock.findOneAndUpdate(
+          { barcode },
+          {
+            $set: { ...updateBase, barcode },
+            $setOnInsert: { ...insertBase, barcode }
+          },
+          { upsert: true, new: true, setDefaultsOnInsert: true }
+        )
+      );
+    }
+    await Promise.allSettled(ops);
+  } catch (blockErr) {
+    try { console.warn('[products][delete] mcg blocklist write failed:', blockErr?.message || blockErr); } catch {}
+  }
 }
 
 async function propagateMcgDeletion(productDoc) {
