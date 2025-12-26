@@ -9,6 +9,7 @@ import InventoryHistory from '../models/InventoryHistory.js';
 import Warehouse from '../models/Warehouse.js';
 import { inventoryService } from '../services/inventoryService.js';
 import { runMcgSyncOnce } from '../services/mcgSyncScheduler.js';
+import McgItemBlock from '../models/McgItemBlock.js';
 
 const router = express.Router();
 
@@ -388,6 +389,7 @@ router.post('/sync-items', adminAuth, async (req, res) => {
   const createdAll = [];
   let skippedByMissingKey = 0;
   let skippedAsDuplicate = 0;
+  let skippedByBlocklist = 0;
   let incomingTotal = 0;
   // Maintain seen set across the whole run to avoid duplicates across pages (by mcgItemId only)
   const seenIds = new Set();
@@ -408,6 +410,28 @@ router.post('/sync-items', adminAuth, async (req, res) => {
 
     const taxMultiplier = Number(s?.mcg?.taxMultiplier || 1.18);
 
+    // Load blocklisted identifiers to avoid recreating deleted products
+    const blockDocs = await McgItemBlock.find({}, 'barcode mcgItemId').lean();
+    const blockedBarcodes = new Set();
+    const blockedItemIds = new Set();
+    const normalizeBlockKey = (value) => {
+      if (value === undefined || value === null) return '';
+      return String(value).trim().toLowerCase();
+    };
+    for (const doc of blockDocs || []) {
+      const bc = normalizeBlockKey(doc?.barcode);
+      const id = normalizeBlockKey(doc?.mcgItemId);
+      if (bc) blockedBarcodes.add(bc);
+      if (id) blockedItemIds.add(id);
+    }
+    const isBlockedIdentifier = (mcgId, barcode) => {
+      const idKey = normalizeBlockKey(mcgId);
+      if (idKey && blockedItemIds.has(idKey)) return true;
+      const bcKey = normalizeBlockKey(barcode);
+      if (bcKey && blockedBarcodes.has(bcKey)) return true;
+      return false;
+    };
+
     // Helper to process a single page of results
     const processPage = async (items) => {
       // Build per-page dedupe sets and fetch existing once per page
@@ -426,6 +450,10 @@ router.post('/sync-items', adminAuth, async (req, res) => {
       const mcgId = ((it?.ItemID ?? it?.id ?? it?.itemId ?? it?.item_id ?? '') + '').trim();
       const barcode = ((it?.Barcode ?? it?.barcode ?? it?.item_code ?? '') + '').trim();
         if (!mcgId && !barcode) { skippedByMissingKey++; continue; }
+        if (isBlockedIdentifier(mcgId, barcode)) {
+          skippedByBlocklist++;
+          continue;
+        }
   // Duplicate rule (updated): dedupe ONLY by mcgItemId. Barcode duplicates are allowed by request.
   const isDupById = mcgId && (existId.has(mcgId) || seenIds.has(mcgId));
   if (isDupById) {
@@ -569,6 +597,7 @@ router.post('/sync-items', adminAuth, async (req, res) => {
         existingByBarcode: undefined,
         toInsert: createdAll.length,
         skippedByMissingKey,
+        skippedByBlocklist,
         skippedAsDuplicate,
         sampleNew: createdAll.slice(0, 3).map(x => ({ name: x.name, mcgItemId: x.mcgItemId, mcgBarcode: x.mcgBarcode })),
         updatedNames
@@ -654,6 +683,7 @@ router.post('/sync-items', adminAuth, async (req, res) => {
       reactivated: reactivatedAll.length,
       skipped: Math.max(0, incomingTotal - createdAll.length - reactivatedAll.length),
       skippedByMissingKey,
+      skippedByBlocklist,
       skippedAsDuplicate,
       sampleNew: createdAll.slice(0, 3).map(x => ({ name: x.name, mcgItemId: x.mcgItemId, mcgBarcode: x.mcgBarcode })),
       updatedNames
