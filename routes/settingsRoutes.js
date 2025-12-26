@@ -189,6 +189,7 @@ router.get('/', async (req, res) => {
   if (obj.announcementsBackgroundImage && obj.announcementsBackgroundImage.startsWith('/uploads/')) obj.announcementsBackgroundImage = toAbsolute(req, obj.announcementsBackgroundImage);
   // Global store background
   if (obj.storeBackgroundImage && obj.storeBackgroundImage.startsWith('/uploads/')) obj.storeBackgroundImage = toAbsolute(req, obj.storeBackgroundImage);
+  if (obj.productDetailBackgroundImage && obj.productDetailBackgroundImage.startsWith('/uploads/')) obj.productDetailBackgroundImage = toAbsolute(req, obj.productDetailBackgroundImage);
   // Normalize header icon background images
   if (obj.headerIconBackgrounds) {
     ['cart','wishlist','account','search','language','currency'].forEach(k => {
@@ -790,6 +791,8 @@ router.put('/', settingsWriteGuard, async (req, res) => {
             // Global store background
             storeBackgroundImage: settings.storeBackgroundImage ? toAbsolute(req, settings.storeBackgroundImage) : settings.storeBackgroundImage,
             storeBackgroundColor: settings.storeBackgroundColor,
+            productDetailBackgroundColor: settings.productDetailBackgroundColor,
+            productDetailBackgroundImage: settings.productDetailBackgroundImage ? toAbsolute(req, settings.productDetailBackgroundImage) : settings.productDetailBackgroundImage,
             customCss: settings.customCss,
             headerIcons: settings.headerIcons,
             headerIconVariants: settings.headerIconVariants,

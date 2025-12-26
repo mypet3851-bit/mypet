@@ -180,6 +180,15 @@ const settingsSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  // Dedicated product details background overrides (color/image)
+  productDetailBackgroundColor: {
+    type: String,
+    default: ''
+  },
+  productDetailBackgroundImage: {
+    type: String,
+    default: ''
+  },
   headerTextColor: {
     type: String,
     default: ''
