@@ -190,6 +190,7 @@ router.get('/', async (req, res) => {
   // Global store background
   if (obj.storeBackgroundImage && obj.storeBackgroundImage.startsWith('/uploads/')) obj.storeBackgroundImage = toAbsolute(req, obj.storeBackgroundImage);
   if (obj.productDetailBackgroundImage && obj.productDetailBackgroundImage.startsWith('/uploads/')) obj.productDetailBackgroundImage = toAbsolute(req, obj.productDetailBackgroundImage);
+  if (obj.productCardBackgroundImage && obj.productCardBackgroundImage.startsWith('/uploads/')) obj.productCardBackgroundImage = toAbsolute(req, obj.productCardBackgroundImage);
   if (obj.categoryBackgroundImage && obj.categoryBackgroundImage.startsWith('/uploads/')) obj.categoryBackgroundImage = toAbsolute(req, obj.categoryBackgroundImage);
   // Normalize header icon background images
   if (obj.headerIconBackgrounds) {
@@ -794,6 +795,8 @@ router.put('/', settingsWriteGuard, async (req, res) => {
             storeBackgroundColor: settings.storeBackgroundColor,
             productDetailBackgroundColor: settings.productDetailBackgroundColor,
             productDetailBackgroundImage: settings.productDetailBackgroundImage ? toAbsolute(req, settings.productDetailBackgroundImage) : settings.productDetailBackgroundImage,
+            productCardBackgroundColor: settings.productCardBackgroundColor,
+            productCardBackgroundImage: settings.productCardBackgroundImage ? toAbsolute(req, settings.productCardBackgroundImage) : settings.productCardBackgroundImage,
             categoryBackgroundColor: settings.categoryBackgroundColor,
             categoryBackgroundImage: settings.categoryBackgroundImage ? toAbsolute(req, settings.categoryBackgroundImage) : settings.categoryBackgroundImage,
             customCss: settings.customCss,
@@ -869,6 +872,7 @@ router.put('/', settingsWriteGuard, async (req, res) => {
     if (savedObj.announcementsBackgroundImage && savedObj.announcementsBackgroundImage.startsWith('/uploads/')) savedObj.announcementsBackgroundImage = toAbsolute(req, savedObj.announcementsBackgroundImage);
       if (savedObj.storeBackgroundImage && savedObj.storeBackgroundImage.startsWith('/uploads/')) savedObj.storeBackgroundImage = toAbsolute(req, savedObj.storeBackgroundImage);
       if (savedObj.productDetailBackgroundImage && savedObj.productDetailBackgroundImage.startsWith('/uploads/')) savedObj.productDetailBackgroundImage = toAbsolute(req, savedObj.productDetailBackgroundImage);
+      if (savedObj.productCardBackgroundImage && savedObj.productCardBackgroundImage.startsWith('/uploads/')) savedObj.productCardBackgroundImage = toAbsolute(req, savedObj.productCardBackgroundImage);
       if (savedObj.categoryBackgroundImage && savedObj.categoryBackgroundImage.startsWith('/uploads/')) savedObj.categoryBackgroundImage = toAbsolute(req, savedObj.categoryBackgroundImage);
       if (savedObj.headerIconBackgrounds) {
         ['cart','wishlist','account','search','language','currency'].forEach(k => {

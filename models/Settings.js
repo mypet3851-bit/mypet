@@ -189,6 +189,14 @@ const settingsSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  productCardBackgroundColor: {
+    type: String,
+    default: ''
+  },
+  productCardBackgroundImage: {
+    type: String,
+    default: ''
+  },
   categoryBackgroundColor: {
     type: String,
     default: ''
