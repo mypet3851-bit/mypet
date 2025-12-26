@@ -117,7 +117,7 @@ import { realTimeEventService } from '../services/realTimeEventService.js';
 import { deepseekTranslate, deepseekTranslateBatch, isDeepseekConfigured } from '../services/translate/deepseek.js';
 import { getItemQuantity as rivhitGetQty, testConnectivity as rivhitTest } from '../services/rivhitService.js';
 import { setItemsList } from '../services/mcgService.js';
-import { persistMcgBlocklistEntries, propagateMcgDeletion } from '../services/mcgDeletionService.js';
+import { collectMcgIdentifiers, persistMcgBlocklistEntries, propagateMcgDeletion } from '../services/mcgDeletionService.js';
 // Currency conversion disabled for product storage/display; prices are stored and served as-is in store currency
 
 // Get all products
@@ -1513,6 +1513,47 @@ export const updateProduct = async (req, res) => {
 };
 
 // Delete product
+async function mirrorDeletionInMcg(productDoc, userId, reason = 'hard_delete') {
+  if (!productDoc) {
+    return { attempted: false, skipped: true, reason: 'product_not_found' };
+  }
+
+  const identifiers = collectMcgIdentifiers(productDoc);
+  const mcgItemIds = Array.from(identifiers.mcgIds);
+  const barcodes = Array.from(identifiers.barcodes);
+  const total = mcgItemIds.length + barcodes.length;
+
+  await persistMcgBlocklistEntries(productDoc, userId, reason, { identifiers });
+
+  if (!total) {
+    return {
+      attempted: false,
+      skipped: true,
+      reason: 'no_identifiers',
+      identifiers: { mcgItemIds, barcodes, total }
+    };
+  }
+
+  try {
+    const response = await propagateMcgDeletion(productDoc, { identifiers, allowWhenDisabled: true });
+    return {
+      attempted: true,
+      ok: !response?.skipped && response?.ok !== false,
+      skipped: !!response?.skipped,
+      identifiers: { mcgItemIds, barcodes, total },
+      response
+    };
+  } catch (error) {
+    try { console.warn('[products][delete] mcg propagation failed:', error?.message || error); } catch {}
+    return {
+      attempted: true,
+      ok: false,
+      error: error?.message || 'mcg_delete_failed',
+      identifiers: { mcgItemIds, barcodes, total }
+    };
+  }
+}
+
 export const deleteProduct = async (req, res) => {
   try {
     const { hard } = req.query;
@@ -1523,9 +1564,7 @@ export const deleteProduct = async (req, res) => {
       await product.deleteOne();
       await Inventory.deleteMany({ product: product._id });
 
-      await persistMcgBlocklistEntries(product, req.user?._id, 'hard_delete');
-
-      await propagateMcgDeletion(product, { allowWhenDisabled: true }); // Always mirror delete in MCG
+      const mcgDeletion = await mirrorDeletionInMcg(product, req.user?._id, 'hard_delete');
 
       await new InventoryHistory({
         product: product._id,
@@ -1536,7 +1575,7 @@ export const deleteProduct = async (req, res) => {
       }).save();
       // Notify clients to refresh inventory views/caches
       try { realTimeEventService.emitInventoryChanged({ productId: String(product._id), action: 'hard_deleted' }); } catch {}
-      return res.json({ message: 'Product hard deleted' });
+      return res.json({ message: 'Product hard deleted', mcgDeletion });
     }
     const product = await Product.findByIdAndUpdate(
       req.params.id,
@@ -1545,12 +1584,11 @@ export const deleteProduct = async (req, res) => {
     );
     if (!product) return res.status(404).json({ message: 'Product not found' });
     // Block identifiers on soft delete as well to prevent auto-pull from recreating it
-    await persistMcgBlocklistEntries(product, req.user?._id, 'soft_delete');
+    const mcgDeletion = await mirrorDeletionInMcg(product, req.user?._id, 'soft_delete');
     // Remove inventory rows so the product disappears from Inventory page
     try { await Inventory.deleteMany({ product: product._id }); } catch (e) { try { console.warn('[products][delete] inventory cleanup failed', e?.message || e); } catch {} }
     // Recompute stock to reflect deletion (will become 0 with no rows)
     try { await inventoryService.recomputeProductStock(product._id); } catch {}
-    await propagateMcgDeletion(product, { allowWhenDisabled: true }); // Always mirror delete in MCG
     await new InventoryHistory({
       product: product._id,
       type: 'decrease',
@@ -1560,7 +1598,7 @@ export const deleteProduct = async (req, res) => {
     }).save();
     // Notify clients to refresh inventory views/caches
     try { realTimeEventService.emitInventoryChanged({ productId: String(product._id), action: 'deactivated' }); } catch {}
-    res.json({ message: 'Product deactivated (soft delete)', product });
+    res.json({ message: 'Product deactivated (soft delete)', product, mcgDeletion });
   } catch (error) {
     console.error('Error deleting product:', error);
     res.status(500).json({ message: error.message });
