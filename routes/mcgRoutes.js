@@ -952,16 +952,20 @@ router.post('/delete-product/:productId', adminAuth, async (req, res) => {
     const additionalIdentifiers = Array.isArray(req.body?.identifiers) ? req.body.identifiers : [];
 
     const product = await Product.findById(productId).select('name mcgItemId mcgBarcode variants.mcgItemId variants.barcode');
-    if (!product) return res.status(404).json({ message: 'Product not found' });
 
-    const identifiers = collectMcgIdentifiers(product, {
+    const identifierOptions = {
       includeVariants,
       additionalIdentifiers,
       overrideMcgItemId: overrideMcgItemId || undefined,
       overrideBarcode: overrideBarcode || undefined
-    });
+    };
+    const identifiers = collectMcgIdentifiers(product, identifierOptions);
 
-    if (!identifiers.mcgIds.size && !identifiers.barcodes.size) {
+    if (!product && !identifiers.mcgIds.size && !identifiers.barcodes.size) {
+      return res.status(404).json({ message: 'Product not found' });
+    }
+
+    if (product && !identifiers.mcgIds.size && !identifiers.barcodes.size) {
       return res.status(400).json({ message: 'Product is not linked to MCG (missing barcode/item id)' });
     }
 
@@ -976,7 +980,13 @@ router.post('/delete-product/:productId', adminAuth, async (req, res) => {
     }
 
     if (blocklist) {
-      await persistMcgBlocklistEntries(product, req.user?._id, reason, { identifiers, includeVariants });
+      await persistMcgBlocklistEntries(product, req.user?._id, reason, {
+        identifiers,
+        includeVariants,
+        additionalIdentifiers,
+        overrideMcgItemId: overrideMcgItemId || undefined,
+        overrideBarcode: overrideBarcode || undefined
+      });
     }
 
     res.json({
