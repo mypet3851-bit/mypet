@@ -1525,7 +1525,7 @@ export const deleteProduct = async (req, res) => {
 
       await persistMcgBlocklistEntries(product, req.user?._id, 'hard_delete');
 
-      await propagateMcgDeletion(product);
+      await propagateMcgDeletion(product, { allowWhenDisabled: true }); // Always mirror delete in MCG
 
       await new InventoryHistory({
         product: product._id,
@@ -1550,7 +1550,7 @@ export const deleteProduct = async (req, res) => {
     try { await Inventory.deleteMany({ product: product._id }); } catch (e) { try { console.warn('[products][delete] inventory cleanup failed', e?.message || e); } catch {} }
     // Recompute stock to reflect deletion (will become 0 with no rows)
     try { await inventoryService.recomputeProductStock(product._id); } catch {}
-    await propagateMcgDeletion(product);
+    await propagateMcgDeletion(product, { allowWhenDisabled: true }); // Always mirror delete in MCG
     await new InventoryHistory({
       product: product._id,
       type: 'decrease',
