@@ -940,7 +940,12 @@ router.post('/sync-product/:productId', adminAuth, async (req, res) => {
 router.post('/delete-product/:productId', adminAuth, async (req, res) => {
   try {
     const settings = await Settings.findOne();
-    if (!settings?.mcg?.enabled) return res.status(412).json({ message: 'MCG integration disabled' });
+    const rawAllow = req.body?.allowWhenDisabled;
+    const allowWhenDisabled = rawAllow === undefined
+      ? true
+      : (typeof rawAllow === 'string'
+          ? rawAllow.trim().toLowerCase() !== 'false'
+          : rawAllow !== false);
 
     const { productId } = req.params;
     const includeVariants = req.body?.includeVariants !== false;
@@ -972,10 +977,11 @@ router.post('/delete-product/:productId', adminAuth, async (req, res) => {
     const mcgResp = await propagateMcgDeletion(product, {
       identifiers,
       includeVariants,
-      settingsDoc: settings
+      settingsDoc: settings,
+      allowWhenDisabled
     });
 
-    if (mcgResp?.skipped && mcgResp.reason === 'mcg_disabled') {
+    if (mcgResp?.skipped && mcgResp.reason === 'mcg_disabled' && !allowWhenDisabled) {
       return res.status(412).json({ message: 'MCG integration disabled' });
     }
 
