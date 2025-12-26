@@ -2653,10 +2653,6 @@ async function propagateMcgDeletion(productDoc) {
     const { mcgIds, barcodes } = collectMcgIdentifiers(productDoc);
     if (!mcgIds.size && !barcodes.size) return;
 
-    const settings = await Settings.findOne().select('mcg').lean();
-    const mcgCfg = settings?.mcg || {};
-    if (!mcgCfg.enabled) return;
-
     const payload = [];
     for (const mcgId of mcgIds) {
       payload.push({ item_id: mcgId });
@@ -2666,8 +2662,24 @@ async function propagateMcgDeletion(productDoc) {
     }
     if (!payload.length) return;
 
-    const group = Number.isFinite(Number(mcgCfg.group)) ? Number(mcgCfg.group) : undefined;
-    const res = await deleteMcgItems(payload, group);
+    let resolvedGroup;
+    let explicitlyDisabled = false;
+    try {
+      const settings = await Settings.findOne().select('mcg').lean();
+      const cfg = settings?.mcg || {};
+      if (cfg.enabled === false) {
+        explicitlyDisabled = true;
+      }
+      const parsedGroup = Number(cfg.group);
+      if (Number.isFinite(parsedGroup)) {
+        resolvedGroup = parsedGroup;
+      }
+    } catch (cfgErr) {
+      try { console.warn('[products][delete] mcg config load failed, attempting delete anyway:', cfgErr?.message || cfgErr); } catch {}
+    }
+    if (explicitlyDisabled) return;
+
+    const res = await deleteMcgItems(payload, resolvedGroup);
     try {
       const summary = (res && typeof res === 'object') ? JSON.stringify(res).slice(0, 160) : String(res || 'ok');
       console.log('[products][delete] propagated mcg delete product=%s identifiers=%d resp=%s', productDoc?._id, payload.length, summary);
