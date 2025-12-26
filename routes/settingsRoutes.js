@@ -790,6 +790,7 @@ router.put('/', settingsWriteGuard, async (req, res) => {
             // Global store background
             storeBackgroundImage: settings.storeBackgroundImage ? toAbsolute(req, settings.storeBackgroundImage) : settings.storeBackgroundImage,
             storeBackgroundColor: settings.storeBackgroundColor,
+            customCss: settings.customCss,
             headerIcons: settings.headerIcons,
             headerIconVariants: settings.headerIconVariants,
             headerIconBackgrounds: settings.headerIconBackgrounds,

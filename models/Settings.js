@@ -96,6 +96,10 @@ const settingsSchema = new mongoose.Schema({
     type: String,
     default: '#ffffff' // White
   },
+  customCss: {
+    type: String,
+    default: ''
+  },
   // Footer-specific text color (overrides default text color within footer)
   footerTextColor: {
     type: String,
