@@ -4,6 +4,7 @@ import Settings from '../models/Settings.js';
 import Product from '../models/Product.js';
 import Category from '../models/Category.js';
 import { getItemsList, setItemsList } from '../services/mcgService.js';
+import { collectMcgIdentifiers, persistMcgBlocklistEntries, propagateMcgDeletion } from '../services/mcgDeletionService.js';
 import Inventory from '../models/Inventory.js';
 import InventoryHistory from '../models/InventoryHistory.js';
 import Warehouse from '../models/Warehouse.js';
@@ -932,6 +933,62 @@ router.post('/sync-product/:productId', adminAuth, async (req, res) => {
   } catch (e) {
     const status = e?.status || e?.response?.status || 400;
     res.status(status).json({ message: e?.message || 'mcg_sync_product_failed' });
+  }
+});
+
+// Delete mapped identifiers from MCG without removing the local product
+router.post('/delete-product/:productId', adminAuth, async (req, res) => {
+  try {
+    const settings = await Settings.findOne();
+    if (!settings?.mcg?.enabled) return res.status(412).json({ message: 'MCG integration disabled' });
+
+    const { productId } = req.params;
+    const includeVariants = req.body?.includeVariants !== false;
+    const blocklist = req.body?.blocklist !== false;
+    const reasonRaw = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+    const reason = reasonRaw || 'manual_delete';
+    const overrideMcgItemId = (req.body?.mcgItemId || '').toString().trim();
+    const overrideBarcode = (req.body?.mcgBarcode || '').toString().trim();
+    const additionalIdentifiers = Array.isArray(req.body?.identifiers) ? req.body.identifiers : [];
+
+    const product = await Product.findById(productId).select('name mcgItemId mcgBarcode variants.mcgItemId variants.barcode');
+    if (!product) return res.status(404).json({ message: 'Product not found' });
+
+    const identifiers = collectMcgIdentifiers(product, {
+      includeVariants,
+      additionalIdentifiers,
+      overrideMcgItemId: overrideMcgItemId || undefined,
+      overrideBarcode: overrideBarcode || undefined
+    });
+
+    if (!identifiers.mcgIds.size && !identifiers.barcodes.size) {
+      return res.status(400).json({ message: 'Product is not linked to MCG (missing barcode/item id)' });
+    }
+
+    const mcgResp = await propagateMcgDeletion(product, {
+      identifiers,
+      includeVariants,
+      settingsDoc: settings
+    });
+
+    if (mcgResp?.skipped && mcgResp.reason === 'mcg_disabled') {
+      return res.status(412).json({ message: 'MCG integration disabled' });
+    }
+
+    if (blocklist) {
+      await persistMcgBlocklistEntries(product, req.user?._id, reason, { identifiers, includeVariants });
+    }
+
+    res.json({
+      ok: mcgResp?.skipped ? false : mcgResp?.ok !== false,
+      deletedCount: identifiers.mcgIds.size + identifiers.barcodes.size,
+      mcgItemIds: Array.from(identifiers.mcgIds),
+      barcodes: Array.from(identifiers.barcodes),
+      mcgResponse: mcgResp
+    });
+  } catch (e) {
+    const status = e?.status || e?.response?.status || 500;
+    res.status(status).json({ message: e?.message || 'mcg_delete_product_failed' });
   }
 });
 

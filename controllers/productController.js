@@ -104,7 +104,6 @@ import Attribute from '../models/Attribute.js';
 import AttributeValue from '../models/AttributeValue.js';
 import Inventory from '../models/Inventory.js';
 import InventoryHistory from '../models/InventoryHistory.js';
-import McgItemBlock from '../models/McgItemBlock.js';
 import Category from '../models/Category.js';
 import Brand from '../models/Brand.js';
 import Warehouse from '../models/Warehouse.js';
@@ -117,7 +116,8 @@ import { inventoryService } from '../services/inventoryService.js';
 import { realTimeEventService } from '../services/realTimeEventService.js';
 import { deepseekTranslate, deepseekTranslateBatch, isDeepseekConfigured } from '../services/translate/deepseek.js';
 import { getItemQuantity as rivhitGetQty, testConnectivity as rivhitTest } from '../services/rivhitService.js';
-import { setItemsList, deleteItems as deleteMcgItems } from '../services/mcgService.js';
+import { setItemsList } from '../services/mcgService.js';
+import { persistMcgBlocklistEntries, propagateMcgDeletion } from '../services/mcgDeletionService.js';
 // Currency conversion disabled for product storage/display; prices are stored and served as-is in store currency
 
 // Get all products
@@ -2573,130 +2573,6 @@ async function pushMcgHebrewName(productDoc, hebrewName) {
   }
 }
 
-function collectMcgIdentifiers(productDoc) {
-  const mcgIds = new Set();
-  const barcodes = new Set();
-  const normalize = (value) => {
-    if (value === undefined || value === null) return '';
-    return String(value).trim();
-  };
-  const pushIfPresent = (set, raw) => {
-    const normalized = normalize(raw);
-    if (normalized) set.add(normalized);
-  };
-
-  if (!productDoc) {
-    return { mcgIds, barcodes };
-  }
-
-  pushIfPresent(mcgIds, productDoc.mcgItemId);
-  pushIfPresent(barcodes, productDoc.mcgBarcode);
-
-  if (Array.isArray(productDoc.variants)) {
-    for (const variant of productDoc.variants) {
-      pushIfPresent(barcodes, variant?.barcode);
-      pushIfPresent(mcgIds, variant?.mcgItemId);
-    }
-  }
-
-  return { mcgIds, barcodes };
-}
-
-async function persistMcgBlocklistEntries(productDoc, userId, reason = 'hard_delete') {
-  try {
-    const { mcgIds, barcodes } = collectMcgIdentifiers(productDoc);
-    if (!mcgIds.size && !barcodes.size) return;
-
-    const note = reason === 'soft_delete'
-      ? 'Auto-blocked because product was soft deleted'
-      : 'Auto-blocked because product was hard deleted';
-
-    const insertBase = {
-      reason,
-      lastProductId: productDoc._id,
-      lastProductName: productDoc.name || '',
-      notes: note,
-      ...(userId ? { createdBy: userId } : {})
-    };
-    const updateBase = {
-      reason,
-      lastProductId: productDoc._id,
-      lastProductName: productDoc.name || '',
-      notes: note,
-      ...(userId ? { updatedBy: userId } : {})
-    };
-
-    const ops = [];
-    for (const mcgId of mcgIds) {
-      ops.push(
-        McgItemBlock.findOneAndUpdate(
-          { mcgItemId: mcgId },
-          {
-            $set: { ...updateBase, mcgItemId: mcgId },
-            $setOnInsert: { ...insertBase, mcgItemId: mcgId }
-          },
-          { upsert: true, new: true, setDefaultsOnInsert: true }
-        )
-      );
-    }
-    for (const barcode of barcodes) {
-      ops.push(
-        McgItemBlock.findOneAndUpdate(
-          { barcode },
-          {
-            $set: { ...updateBase, barcode },
-            $setOnInsert: { ...insertBase, barcode }
-          },
-          { upsert: true, new: true, setDefaultsOnInsert: true }
-        )
-      );
-    }
-    await Promise.allSettled(ops);
-  } catch (blockErr) {
-    try { console.warn('[products][delete] mcg blocklist write failed:', blockErr?.message || blockErr); } catch {}
-  }
-}
-
-async function propagateMcgDeletion(productDoc) {
-  try {
-    const { mcgIds, barcodes } = collectMcgIdentifiers(productDoc);
-    if (!mcgIds.size && !barcodes.size) return;
-
-    const payload = [];
-    for (const mcgId of mcgIds) {
-      payload.push({ item_id: mcgId });
-    }
-    for (const barcode of barcodes) {
-      payload.push({ item_code: barcode });
-    }
-    if (!payload.length) return;
-
-    let resolvedGroup;
-    let explicitlyDisabled = false;
-    try {
-      const settings = await Settings.findOne().select('mcg').lean();
-      const cfg = settings?.mcg || {};
-      if (cfg.enabled === false) {
-        explicitlyDisabled = true;
-      }
-      const parsedGroup = Number(cfg.group);
-      if (Number.isFinite(parsedGroup)) {
-        resolvedGroup = parsedGroup;
-      }
-    } catch (cfgErr) {
-      try { console.warn('[products][delete] mcg config load failed, attempting delete anyway:', cfgErr?.message || cfgErr); } catch {}
-    }
-    if (explicitlyDisabled) return;
-
-    const res = await deleteMcgItems(payload, resolvedGroup);
-    try {
-      const summary = (res && typeof res === 'object') ? JSON.stringify(res).slice(0, 160) : String(res || 'ok');
-      console.log('[products][delete] propagated mcg delete product=%s identifiers=%d resp=%s', productDoc?._id, payload.length, summary);
-    } catch {}
-  } catch (err) {
-    try { console.warn('[products][delete] mcg delete propagation failed:', err?.message || err); } catch {}
-  }
-}
 
 export const setProductI18n = async (req, res) => {
   try {
