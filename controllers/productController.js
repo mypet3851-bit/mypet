@@ -1513,12 +1513,12 @@ export const updateProduct = async (req, res) => {
 };
 
 // Delete product
-async function mirrorDeletionInMcg(productDoc, userId, reason = 'hard_delete') {
+async function mirrorDeletionInMcg(productDoc, userId, reason = 'hard_delete', options = {}) {
   if (!productDoc) {
     return { attempted: false, skipped: true, reason: 'product_not_found' };
   }
 
-  const identifiers = collectMcgIdentifiers(productDoc);
+  const identifiers = options?.identifiers || collectMcgIdentifiers(productDoc);
   const mcgItemIds = Array.from(identifiers.mcgIds);
   const barcodes = Array.from(identifiers.barcodes);
   const total = mcgItemIds.length + barcodes.length;
@@ -1561,10 +1561,11 @@ export const deleteProduct = async (req, res) => {
       const product = await Product.findById(req.params.id);
       if (!product) return res.status(404).json({ message: 'Product not found' });
 
+      const identifiers = collectMcgIdentifiers(product);
       await product.deleteOne();
       await Inventory.deleteMany({ product: product._id });
 
-      const mcgDeletion = await mirrorDeletionInMcg(product, req.user?._id, 'hard_delete');
+      const mcgDeletion = await mirrorDeletionInMcg(product, req.user?._id, 'hard_delete', { identifiers });
 
       await new InventoryHistory({
         product: product._id,
@@ -1583,8 +1584,9 @@ export const deleteProduct = async (req, res) => {
       { new: true }
     );
     if (!product) return res.status(404).json({ message: 'Product not found' });
+    const identifiers = collectMcgIdentifiers(product);
     // Block identifiers on soft delete as well to prevent auto-pull from recreating it
-    const mcgDeletion = await mirrorDeletionInMcg(product, req.user?._id, 'soft_delete');
+    const mcgDeletion = await mirrorDeletionInMcg(product, req.user?._id, 'soft_delete', { identifiers });
     // Remove inventory rows so the product disappears from Inventory page
     try { await Inventory.deleteMany({ product: product._id }); } catch (e) { try { console.warn('[products][delete] inventory cleanup failed', e?.message || e); } catch {} }
     // Recompute stock to reflect deletion (will become 0 with no rows)
