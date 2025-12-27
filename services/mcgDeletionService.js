@@ -18,6 +18,63 @@ function coerceArray(input) {
   return [input];
 }
 
+function normalizeIndicator(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') {
+    if (value === 1) return true;
+    if (value === 0) return false;
+    return null;
+  }
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (!normalized) return null;
+    if (['success', 'ok', 'true', '1'].includes(normalized)) return true;
+    if (['error', 'failed', 'fail', 'false', '0', 'ko'].includes(normalized)) return false;
+  }
+  return null;
+}
+
+function extractMcgResponseMessage(resp) {
+  if (!resp || typeof resp !== 'object') return '';
+  const keys = ['error', 'Error', 'message', 'Message', 'detail', 'Detail', 'reason', 'Reason', 'StatusMessage'];
+  for (const key of keys) {
+    const value = resp[key];
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+  }
+  return '';
+}
+
+function normalizeMcgDeleteResponse(resp) {
+  if (!resp || typeof resp !== 'object') {
+    return { ok: true };
+  }
+  if (resp.ok === false) {
+    return { ok: false, error: extractMcgResponseMessage(resp) || 'mcg_delete_failed' };
+  }
+  const verdicts = [
+    normalizeIndicator(resp.success),
+    normalizeIndicator(resp.Success),
+    normalizeIndicator(resp.status),
+    normalizeIndicator(resp.Status),
+    normalizeIndicator(resp.result),
+    normalizeIndicator(resp.Result),
+    normalizeIndicator(resp.code),
+    normalizeIndicator(resp.Code),
+    normalizeIndicator(resp.state),
+    normalizeIndicator(resp.State)
+  ];
+  if (verdicts.includes(false)) {
+    return { ok: false, error: extractMcgResponseMessage(resp) || 'mcg_delete_failed' };
+  }
+  if (resp.error && typeof resp.error === 'string' && resp.error.trim()) {
+    return { ok: false, error: resp.error.trim() };
+  }
+  return { ok: true };
+}
+
 export function collectMcgIdentifiers(productDoc, options = {}) {
   const {
     includeVariants = true,
@@ -167,8 +224,10 @@ export async function propagateMcgDeletion(productDoc, options = {}) {
   }
 
   const res = await deleteMcgItems(payload, resolvedGroup);
+  const normalized = normalizeMcgDeleteResponse(res);
   try {
     console.log('[mcg][delete] propagated product=%s identifiers=%d', productDoc?._id || 'n/a', payload.length);
   } catch {}
-  return res;
+  const base = (res && typeof res === 'object') ? res : {};
+  return { ...base, ...normalized };
 }
