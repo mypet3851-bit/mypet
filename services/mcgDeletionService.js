@@ -31,6 +31,7 @@ export function collectMcgIdentifiers(productDoc, options = {}) {
   if (productDoc) {
     pushIfPresent(mcgIds, productDoc.mcgItemId);
     pushIfPresent(barcodes, productDoc.mcgBarcode);
+    pushIfPresent(barcodes, productDoc.barcode);
     if (includeVariants && Array.isArray(productDoc.variants)) {
       for (const variant of productDoc.variants) {
         pushIfPresent(barcodes, variant?.barcode);
