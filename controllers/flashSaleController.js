@@ -35,6 +35,21 @@ async function expandCategoriesToItems(categoryIds = [], discountPercent) {
   return items;
 }
 
+// Expand selected brands to concrete flash sale items using percentage pricing
+async function expandBrandsToItems(brandIds = [], discountPercent) {
+  if (!Array.isArray(brandIds) || brandIds.length === 0) return [];
+  const products = await Product.find({
+    brand: { $in: brandIds }
+  }).select('_id price').lean();
+  const items = products.map((p, idx) => ({
+    product: p._id,
+    flashPrice: computePercentPrice(p.price || 0, discountPercent),
+    quantityLimit: 0,
+    order: idx
+  })).filter(it => it.flashPrice > 0);
+  return items;
+}
+
 // Build public response items for category-targeted sales, hydrating product fields directly
 async function buildPublicItemsForCategories(categoryIds = [], discountPercent) {
   if (!Array.isArray(categoryIds) || categoryIds.length === 0) return [];
@@ -43,6 +58,22 @@ async function buildPublicItemsForCategories(categoryIds = [], discountPercent) 
       { category: { $in: categoryIds } },
       { categories: { $in: categoryIds } }
     ]
+  }).select('name images colors attributeImages price originalPrice').lean();
+  return prods
+    .map((p, idx) => ({
+      product: p,
+      flashPrice: computePercentPrice(p.price || 0, discountPercent),
+      quantityLimit: 0,
+      order: idx,
+    }))
+    .filter(it => it.flashPrice > 0);
+}
+
+// Build public response items for brand-targeted sales, hydrating product fields directly
+async function buildPublicItemsForBrands(brandIds = [], discountPercent) {
+  if (!Array.isArray(brandIds) || brandIds.length === 0) return [];
+  const prods = await Product.find({
+    brand: { $in: brandIds }
   }).select('name images colors attributeImages price originalPrice').lean();
   return prods
     .map((p, idx) => ({
@@ -85,6 +116,18 @@ export const create = async (req, res) => {
         return res.status(400).json({ message: 'Provide a valid discountPercent (0-100) for category-based flash sale' });
       }
       const items = await expandCategoriesToItems(payload.categoryIds || [], pct);
+      payload.items = items;
+    }
+    // When targeting brands, materialize items at creation time (percent mode only)
+    if (payload.targetType === 'brands') {
+      if (payload.pricingMode !== 'percent') {
+        return res.status(400).json({ message: 'Brand-based flash sale requires percentage pricing mode' });
+      }
+      const pct = Number(payload.discountPercent);
+      if (!(pct > 0 && pct < 100)) {
+        return res.status(400).json({ message: 'Provide a valid discountPercent (0-100) for brand-based flash sale' });
+      }
+      const items = await expandBrandsToItems(payload.brandIds || [], pct);
       payload.items = items;
     }
     const sale = await FlashSale.create(payload);
@@ -130,6 +173,17 @@ export const update = async (req, res) => {
       const items = await expandCategoriesToItems(payload.categoryIds || [], pct);
       payload.items = items;
     }
+    if (payload.targetType === 'brands') {
+      if (payload.pricingMode !== 'percent') {
+        return res.status(400).json({ message: 'Brand-based flash sale requires percentage pricing mode' });
+      }
+      const pct = Number(payload.discountPercent);
+      if (!(pct > 0 && pct < 100)) {
+        return res.status(400).json({ message: 'Provide a valid discountPercent (0-100) for brand-based flash sale' });
+      }
+      const items = await expandBrandsToItems(payload.brandIds || [], pct);
+      payload.items = items;
+    }
     const updated = await FlashSale.findByIdAndUpdate(req.params.id, payload, { new: true, runValidators: true });
     if (!updated) return res.status(404).json({ message: 'Not found' });
     res.json(updated);
@@ -171,6 +225,12 @@ export const publicActiveList = async (req, res) => {
               ]
             });
           } catch {}
+        } else if (s.targetType === 'brands') {
+          try {
+            itemsCount = await Product.countDocuments({
+              brand: { $in: s.brandIds || [] }
+            });
+          } catch {}
         }
         return {
           _id: s._id,
@@ -197,13 +257,22 @@ export const publicActiveList = async (req, res) => {
 
     // Localize embedded products (name) if lang provided; persist missing translations when DeepSeek configured
     const out = await Promise.all(sales.map(async (s) => {
-      // If this sale targets categories, compute items dynamically to ensure store reflects latest products/prices
+      // If this sale targets categories/brands, compute items dynamically to ensure store reflects latest products/prices
       let baseItems = Array.isArray(s.items) ? s.items : [];
       if (s.targetType === 'categories') {
         const pct = Number(s.discountPercent);
         if (pct > 0 && pct < 100) {
           try {
             baseItems = await buildPublicItemsForCategories(s.categoryIds || [], pct);
+          } catch {}
+        } else {
+          baseItems = [];
+        }
+      } else if (s.targetType === 'brands') {
+        const pct = Number(s.discountPercent);
+        if (pct > 0 && pct < 100) {
+          try {
+            baseItems = await buildPublicItemsForBrands(s.brandIds || [], pct);
           } catch {}
         } else {
           baseItems = [];
@@ -271,13 +340,22 @@ export const publicGetById = async (req, res) => {
       })
       .lean();
     if (!s) return res.status(404).json({ message: 'Flash sale not found or not active' });
-    // Compute base items (dynamic when targeting categories)
+    // Compute base items (dynamic when targeting categories/brands)
     let baseItems = Array.isArray(s.items) ? s.items : [];
     if (s.targetType === 'categories') {
       const pct = Number(s.discountPercent);
       if (pct > 0 && pct < 100) {
         try {
           baseItems = await buildPublicItemsForCategories(s.categoryIds || [], pct);
+        } catch {}
+      } else {
+        baseItems = [];
+      }
+    } else if (s.targetType === 'brands') {
+      const pct = Number(s.discountPercent);
+      if (pct > 0 && pct < 100) {
+        try {
+          baseItems = await buildPublicItemsForBrands(s.brandIds || [], pct);
         } catch {}
       } else {
         baseItems = [];
@@ -360,6 +438,23 @@ export const publicGetActiveItems = async (req, res) => {
           { category: { $in: s.categoryIds || [] } },
           { categories: { $in: s.categoryIds || [] } }
         ]
+      };
+      totalItems = await Product.countDocuments(query);
+      const prods = await Product.find(query)
+        .select(selectFields + ' name_i18n')
+        .skip(skip)
+        .limit(pageSize)
+        .lean();
+      pageItems = prods.map((p, idx) => ({
+        product: p,
+        flashPrice: computePercentPrice(p.price || 0, Number(s.discountPercent)),
+        quantityLimit: 0,
+        order: skip + idx,
+      })).filter(it => it.flashPrice > 0);
+    } else if (s.targetType === 'brands') {
+      // Dynamic from brands: page directly on products query
+      const query = {
+        brand: { $in: s.brandIds || [] }
       };
       totalItems = await Product.countDocuments(query);
       const prods = await Product.find(query)

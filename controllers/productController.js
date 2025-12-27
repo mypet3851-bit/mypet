@@ -367,7 +367,7 @@ export const getProducts = async (req, res) => {
     let activeSales = [];
     try {
       activeSales = await FlashSale.find({ active: true, startDate: { $lte: now }, endDate: { $gte: now } })
-        .select('items targetType categoryIds pricingMode discountPercent')
+        .select('items targetType categoryIds brandIds pricingMode discountPercent')
         .lean();
     } catch {}
 
@@ -387,8 +387,9 @@ export const getProducts = async (req, res) => {
       }
     }
 
-    // Keep category-targeted sales aside for per-product computation
+    // Keep category/brand-targeted sales aside for per-product computation
     const categorySales = activeSales.filter(s => s && s.targetType === 'categories' && Array.isArray(s.categoryIds) && s.categoryIds.length);
+    const brandSales = activeSales.filter(s => s && s.targetType === 'brands' && Array.isArray(s.brandIds) && s.brandIds.length);
 
     const computePercentPrice = (base, pct) => {
       if (typeof base !== 'number' || !isFinite(base) || base <= 0) return 0;
@@ -412,7 +413,7 @@ export const getProducts = async (req, res) => {
         try {
           const pid = String(productObj._id);
           let fp = productFlashMap.get(pid) ?? null;
-          if (fp == null && categorySales.length) {
+          if (fp == null && (categorySales.length || brandSales.length)) {
             for (const s of categorySales) {
               const pct = Number(s?.discountPercent);
               if (!(pct > 0 && pct < 100)) continue;
@@ -422,6 +423,18 @@ export const getProducts = async (req, res) => {
               const intersects = (arr1, arr2) => arr1.some(v => arr2.includes(v));
               const prodCats = [primary, ...secondary].filter(Boolean);
               if (prodCats.length && intersects(prodCats, catIds)) {
+                const calc = computePercentPrice(productObj.price || 0, pct);
+                if (calc > 0) fp = (fp == null ? calc : Math.min(fp, calc));
+              }
+            }
+            // Brand-based percent sales
+            if (brandSales.length && productObj.brand) {
+              const prodBrand = String(productObj.brand._id || productObj.brand);
+              for (const s of brandSales) {
+                const pct = Number(s?.discountPercent);
+                if (!(pct > 0 && pct < 100)) continue;
+                const brandIds = (s.brandIds || []).map((b)=> String(b));
+                if (!brandIds.includes(prodBrand)) continue;
                 const calc = computePercentPrice(productObj.price || 0, pct);
                 if (calc > 0) fp = (fp == null ? calc : Math.min(fp, calc));
               }
@@ -845,7 +858,7 @@ export const getProduct = async (req, res) => {
     try {
       const now = new Date();
       const sList = await FlashSale.find({ active: true, startDate: { $lte: now }, endDate: { $gte: now } })
-        .select('items targetType categoryIds pricingMode discountPercent')
+        .select('items targetType categoryIds brandIds pricingMode discountPercent')
         .lean();
       let fp = null;
       for (const s of sList) {
@@ -854,8 +867,9 @@ export const getProduct = async (req, res) => {
         const hit = s.items.find(it => String(it?.product?._id || it?.product) === String(productObj._id));
         if (hit && Number(hit.flashPrice) > 0) fp = fp == null ? Number(hit.flashPrice) : Math.min(fp, Number(hit.flashPrice));
       }
-      const pctSales = sList.filter(s => s.targetType === 'categories' && Array.isArray(s.categoryIds) && s.categoryIds.length);
-      if (fp == null && pctSales.length) {
+      const pctCategorySales = sList.filter(s => s.targetType === 'categories' && Array.isArray(s.categoryIds) && s.categoryIds.length);
+      const pctBrandSales = sList.filter(s => s.targetType === 'brands' && Array.isArray(s.brandIds) && s.brandIds.length);
+      if (fp == null && (pctCategorySales.length || pctBrandSales.length)) {
         const computePercentPrice = (base, pct) => {
           if (typeof base !== 'number' || !isFinite(base) || base <= 0) return 0;
           if (typeof pct !== 'number' || !isFinite(pct) || pct <= 0 || pct >= 100) return 0;
@@ -868,12 +882,23 @@ export const getProduct = async (req, res) => {
         const primary = productObj.category && String(productObj.category._id || productObj.category);
         const secondary = Array.isArray(productObj.categories) ? productObj.categories.map((c)=> String(c._id || c)) : [];
         const prodCats = [primary, ...secondary].filter(Boolean);
-        for (const s of pctSales) {
+        for (const s of pctCategorySales) {
           const pct = Number(s.discountPercent);
           if (!(pct > 0 && pct < 100)) continue;
           const catIds = (s.categoryIds || []).map((c)=> String(c));
           const intersects = (arr1, arr2) => arr1.some(v => arr2.includes(v));
           if (prodCats.length && intersects(prodCats, catIds)) {
+            const calc = computePercentPrice(productObj.price || 0, pct);
+            if (calc > 0) fp = fp == null ? calc : Math.min(fp, calc);
+          }
+        }
+        if (pctBrandSales.length && productObj.brand) {
+          const prodBrand = String(productObj.brand._id || productObj.brand);
+          for (const s of pctBrandSales) {
+            const pct = Number(s.discountPercent);
+            if (!(pct > 0 && pct < 100)) continue;
+            const brandIds = (s.brandIds || []).map((b)=> String(b));
+            if (!brandIds.includes(prodBrand)) continue;
             const calc = computePercentPrice(productObj.price || 0, pct);
             if (calc > 0) fp = fp == null ? calc : Math.min(fp, calc);
           }
@@ -1679,7 +1704,7 @@ export const searchProducts = async (req, res) => {
     // Attach active flashPrice for product or via category-based percent sales
     try {
       const activeSales = await FlashSale.find({ status: 'active' })
-        .select('items targetType categoryIds pricingMode discountPercent')
+        .select('items targetType categoryIds brandIds pricingMode discountPercent')
         .lean();
       const productFlashMap = new Map(); // productId -> min flash price from explicit items
       for (const s of activeSales || []) {
@@ -1694,11 +1719,12 @@ export const searchProducts = async (req, res) => {
         }
       }
       const categorySales = (activeSales || []).filter(s => s && s.targetType === 'categories' && Array.isArray(s.categoryIds) && s.categoryIds.length);
+      const brandSales = (activeSales || []).filter(s => s && s.targetType === 'brands' && Array.isArray(s.brandIds) && s.brandIds.length);
       for (const p of products) {
         const pid = String(p?._id || '');
         if (!pid) continue;
         let fp = productFlashMap.get(pid) ?? null;
-        if (categorySales.length) {
+        if (categorySales.length || brandSales.length) {
           const cats = [];
           if (p?.category) cats.push(String(p.category));
           if (Array.isArray(p?.categories)) cats.push(...p.categories.map((c)=> String((c?._id || c))));
@@ -1714,6 +1740,21 @@ export const searchProducts = async (req, res) => {
             if (!(base > 0)) continue;
             const cand = +(base * (1 - (pct/100))).toFixed(2);
             fp = fp == null ? cand : Math.min(fp, cand);
+          }
+          if (brandSales.length && p?.brand) {
+            const prodBrand = String(p.brand._id || p.brand);
+            for (const s of brandSales) {
+              if (!Array.isArray(s.brandIds) || !s.brandIds.length) continue;
+              const set = new Set((s.brandIds || []).map((id)=> String((id?._id || id))));
+              if (!set.has(prodBrand)) continue;
+              if (String(s.pricingMode || '').toLowerCase() !== 'percent') continue;
+              const pct = Number(s.discountPercent);
+              if (!(pct > 0 && pct < 100)) continue;
+              const base = Number(p?.price || 0);
+              if (!(base > 0)) continue;
+              const cand = +(base * (1 - (pct/100))).toFixed(2);
+              fp = fp == null ? cand : Math.min(fp, cand);
+            }
           }
         }
         if (fp != null) p.flashPrice = fp;
