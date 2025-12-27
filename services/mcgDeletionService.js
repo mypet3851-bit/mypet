@@ -201,8 +201,12 @@ export async function propagateMcgDeletion(productDoc, options = {}) {
   }
 
   const payload = [];
-  for (const mcgId of mcgIds) payload.push({ item_id: mcgId });
-  for (const barcode of barcodes) payload.push({ item_code: barcode });
+  const hasMcgIds = mcgIds.size > 0;
+  if (hasMcgIds) {
+    for (const mcgId of mcgIds) payload.push({ item_id: mcgId });
+  } else {
+    for (const barcode of barcodes) payload.push({ item_code: barcode });
+  }
 
   let resolvedGroup = Number.isFinite(Number(groupOverride)) ? Number(groupOverride) : undefined;
   let mcgConfig = settingsDoc?.mcg ?? settingsDoc ?? null;

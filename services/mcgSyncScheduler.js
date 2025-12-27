@@ -104,7 +104,7 @@ async function oneRun() {
           const qtySafe = Number.isFinite(qty) ? qty : 0;
 
           // Variant by barcode
-          let prod = null; let variant = null;
+          let prod = null; let variant = null; let matchedByMcgId = false;
           if (barcode) {
             prod = await Product.findOne({ 'variants.barcode': barcode }).select('_id variants');
             if (prod?.variants) {
@@ -117,7 +117,8 @@ async function oneRun() {
           }
           // Fallback non-variant by mcgItemId
           if (!prod && mcgId) {
-            prod = await Product.findOne({ mcgItemId: mcgId }).select('_id');
+            prod = await Product.findOne({ mcgItemId: mcgId }).select('_id mcgBarcode');
+            if (prod) matchedByMcgId = true;
           }
 
           const normalizedBarcode = barcode ? barcode.toLowerCase() : '';
@@ -128,6 +129,17 @@ async function oneRun() {
           )) {
             skippedBlocked++;
             continue;
+          }
+
+          if (matchedByMcgId && prod && barcode) {
+            const stored = (prod.mcgBarcode || '').trim();
+            if (stored !== barcode) {
+              try {
+                await Product.updateOne({ _id: prod._id }, { $set: { mcgBarcode: barcode } });
+              } catch (updateErr) {
+                try { console.warn('[mcg][auto-pull] failed to refresh mcgBarcode', updateErr?.message || updateErr); } catch {}
+              }
+            }
           }
 
           if (!prod) {

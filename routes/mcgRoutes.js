@@ -396,6 +396,7 @@ router.post('/sync-items', adminAuth, async (req, res) => {
   const seenIds = new Set();
     // Track name updates for existing products whose MCG name changed
     const updatedNames = [];
+    const updatedBarcodes = [];
 
     // Determine category
     let categoryId = null;
@@ -441,7 +442,7 @@ router.post('/sync-items', adminAuth, async (req, res) => {
 
       const existing = await Product.find({ $or: [
         uniqueIds.length ? { mcgItemId: { $in: uniqueIds } } : null
-      ].filter(Boolean) }).select('mcgItemId isActive _id name');
+      ].filter(Boolean) }).select('mcgItemId mcgBarcode isActive _id name');
       const existId = new Set(existing.filter(p => p.isActive !== false).map(p => (p.mcgItemId || '').toString()));
       const existById = new Map(existing.map(p => [ (p.mcgItemId || '').toString(), p ]));
 
@@ -480,6 +481,15 @@ router.post('/sync-items', adminAuth, async (req, res) => {
             updatedNames.push({ mcgItemId: mcgId, before: pDoc.name, after: remoteName, lang: langGuess || 'en' });
           } else {
             updatedNames.push({ mcgItemId: mcgId, before: pDoc.name, after: remoteName, lang: langGuess || 'en', dryRun: true });
+          }
+        }
+        const currentBarcode = (pDoc.mcgBarcode || '').trim();
+        if (barcode && barcode !== currentBarcode) {
+          if (!dry) {
+            await Product.updateOne({ _id: pDoc._id }, { $set: { mcgBarcode: barcode } });
+            updatedBarcodes.push({ mcgItemId: mcgId, before: currentBarcode || null, after: barcode });
+          } else {
+            updatedBarcodes.push({ mcgItemId: mcgId, before: currentBarcode || null, after: barcode, dryRun: true });
           }
         }
       }
@@ -601,7 +611,8 @@ router.post('/sync-items', adminAuth, async (req, res) => {
         skippedByBlocklist,
         skippedAsDuplicate,
         sampleNew: createdAll.slice(0, 3).map(x => ({ name: x.name, mcgItemId: x.mcgItemId, mcgBarcode: x.mcgBarcode })),
-        updatedNames
+        updatedNames,
+        updatedBarcodes
       });
     }
 
@@ -687,7 +698,8 @@ router.post('/sync-items', adminAuth, async (req, res) => {
       skippedByBlocklist,
       skippedAsDuplicate,
       sampleNew: createdAll.slice(0, 3).map(x => ({ name: x.name, mcgItemId: x.mcgItemId, mcgBarcode: x.mcgBarcode })),
-      updatedNames
+      updatedNames,
+      updatedBarcodes
     });
   } catch (e) {
     const status = e?.status || e?.response?.status || 400;
