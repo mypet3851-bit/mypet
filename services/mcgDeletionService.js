@@ -7,11 +7,6 @@ const normalize = (value) => {
   return String(value).trim();
 };
 
-function pushIfPresent(set, raw) {
-  const normalized = normalize(raw);
-  if (normalized) set.add(normalized);
-}
-
 function coerceArray(input) {
   if (!input) return [];
   if (Array.isArray(input)) return input;
@@ -84,35 +79,48 @@ export function collectMcgIdentifiers(productDoc, options = {}) {
   } = options;
   const mcgIds = new Set();
   const barcodes = new Set();
+  const entries = [];
+
+  const trackEntry = (mcgItemId, barcode) => {
+    const normalizedId = normalize(mcgItemId);
+    const normalizedBarcode = normalize(barcode);
+    if (!normalizedId && !normalizedBarcode) return;
+    if (normalizedId) mcgIds.add(normalizedId);
+    if (normalizedBarcode) barcodes.add(normalizedBarcode);
+    entries.push({
+      mcgItemId: normalizedId || undefined,
+      barcode: normalizedBarcode || undefined
+    });
+  };
 
   if (productDoc) {
-    pushIfPresent(mcgIds, productDoc.mcgItemId);
-    pushIfPresent(barcodes, productDoc.mcgBarcode);
-    pushIfPresent(barcodes, productDoc.barcode);
+    trackEntry(productDoc.mcgItemId, productDoc.mcgBarcode);
+    trackEntry(undefined, productDoc.barcode);
     if (includeVariants && Array.isArray(productDoc.variants)) {
       for (const variant of productDoc.variants) {
-        pushIfPresent(barcodes, variant?.barcode);
-        pushIfPresent(mcgIds, variant?.mcgItemId);
+        trackEntry(variant?.mcgItemId, variant?.barcode);
       }
     }
   }
 
-  if (overrideMcgItemId) pushIfPresent(mcgIds, overrideMcgItemId);
-  if (overrideBarcode) pushIfPresent(barcodes, overrideBarcode);
+  if (overrideMcgItemId || overrideBarcode) {
+    trackEntry(overrideMcgItemId, overrideBarcode);
+  }
 
   for (const extra of coerceArray(additionalIdentifiers)) {
     if (!extra) continue;
     if (typeof extra === 'string') {
-      pushIfPresent(barcodes, extra);
+      trackEntry(undefined, extra);
       continue;
     }
     if (typeof extra === 'object') {
-      pushIfPresent(mcgIds, extra?.mcgItemId ?? extra?.item_id ?? extra?.itemId ?? extra?.id);
-      pushIfPresent(barcodes, extra?.mcgBarcode ?? extra?.barcode ?? extra?.item_code ?? extra?.itemCode ?? extra?.code);
+      const mcgId = extra?.mcgItemId ?? extra?.item_id ?? extra?.itemId ?? extra?.id;
+      const barcode = extra?.mcgBarcode ?? extra?.barcode ?? extra?.item_code ?? extra?.itemCode ?? extra?.code;
+      trackEntry(mcgId, barcode);
     }
   }
 
-  return { mcgIds, barcodes };
+  return { mcgIds, barcodes, entries };
 }
 
 export async function persistMcgBlocklistEntries(productDoc, userId, reason = 'hard_delete', options = {}) {
@@ -195,17 +203,37 @@ export async function propagateMcgDeletion(productDoc, options = {}) {
     overrideMcgItemId,
     overrideBarcode
   });
-  const { mcgIds, barcodes } = collected;
+  const { mcgIds, barcodes, entries = [] } = collected;
   if (!mcgIds.size && !barcodes.size) {
     return { skipped: true, reason: 'no_identifiers' };
   }
 
   const payload = [];
-  const hasMcgIds = mcgIds.size > 0;
-  if (hasMcgIds) {
-    for (const mcgId of mcgIds) payload.push({ item_id: mcgId });
-  } else {
-    for (const barcode of barcodes) payload.push({ item_code: barcode });
+  const seenPairs = new Set();
+  const appendPayload = (itemId, itemCode) => {
+    const normalizedId = normalize(itemId);
+    const normalizedCode = normalize(itemCode);
+    if (!normalizedId && !normalizedCode) return;
+    const key = `${normalizedId}::${normalizedCode}`;
+    if (seenPairs.has(key)) return;
+    seenPairs.add(key);
+    const entry = {};
+    if (normalizedId) entry.item_id = normalizedId;
+    if (normalizedCode) entry.item_code = normalizedCode;
+    payload.push(entry);
+  };
+
+  if (entries.length) {
+    for (const entry of entries) {
+      appendPayload(entry?.mcgItemId, entry?.barcode);
+    }
+  }
+
+  if (!payload.length) {
+    for (const mcgId of mcgIds) appendPayload(mcgId);
+    if (!mcgIds.size) {
+      for (const barcode of barcodes) appendPayload(undefined, barcode);
+    }
   }
 
   let resolvedGroup = Number.isFinite(Number(groupOverride)) ? Number(groupOverride) : undefined;
