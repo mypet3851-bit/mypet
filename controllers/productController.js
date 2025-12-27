@@ -1518,7 +1518,8 @@ async function mirrorDeletionInMcg(productDoc, userId, reason = 'hard_delete', o
     return { attempted: false, skipped: true, reason: 'product_not_found' };
   }
 
-  const identifiers = options?.identifiers || collectMcgIdentifiers(productDoc);
+  const { identifiers: identifiersOverride, groupOverride } = options || {};
+  const identifiers = identifiersOverride || collectMcgIdentifiers(productDoc);
   const mcgItemIds = Array.from(identifiers.mcgIds);
   const barcodes = Array.from(identifiers.barcodes);
   const total = mcgItemIds.length + barcodes.length;
@@ -1535,7 +1536,7 @@ async function mirrorDeletionInMcg(productDoc, userId, reason = 'hard_delete', o
   }
 
   try {
-    const response = await propagateMcgDeletion(productDoc, { identifiers, allowWhenDisabled: true });
+    const response = await propagateMcgDeletion(productDoc, { identifiers, allowWhenDisabled: true, groupOverride });
     return {
       attempted: true,
       ok: !response?.skipped && response?.ok !== false,
@@ -1557,6 +1558,8 @@ async function mirrorDeletionInMcg(productDoc, userId, reason = 'hard_delete', o
 export const deleteProduct = async (req, res) => {
   try {
     const { hard } = req.query;
+    const mcgGroupRaw = req.query?.mcgGroup ?? req.query?.group;
+    const mcgGroup = Number.isFinite(Number(mcgGroupRaw)) ? Number(mcgGroupRaw) : undefined;
     if (hard === 'true') {
       const product = await Product.findById(req.params.id);
       if (!product) return res.status(404).json({ message: 'Product not found' });
@@ -1565,7 +1568,7 @@ export const deleteProduct = async (req, res) => {
       await product.deleteOne();
       await Inventory.deleteMany({ product: product._id });
 
-      const mcgDeletion = await mirrorDeletionInMcg(product, req.user?._id, 'hard_delete', { identifiers });
+      const mcgDeletion = await mirrorDeletionInMcg(product, req.user?._id, 'hard_delete', { identifiers, groupOverride: mcgGroup });
 
       await new InventoryHistory({
         product: product._id,
@@ -1586,7 +1589,7 @@ export const deleteProduct = async (req, res) => {
     if (!product) return res.status(404).json({ message: 'Product not found' });
     const identifiers = collectMcgIdentifiers(product);
     // Block identifiers on soft delete as well to prevent auto-pull from recreating it
-    const mcgDeletion = await mirrorDeletionInMcg(product, req.user?._id, 'soft_delete', { identifiers });
+    const mcgDeletion = await mirrorDeletionInMcg(product, req.user?._id, 'soft_delete', { identifiers, groupOverride: mcgGroup });
     // Remove inventory rows so the product disappears from Inventory page
     try { await Inventory.deleteMany({ product: product._id }); } catch (e) { try { console.warn('[products][delete] inventory cleanup failed', e?.message || e); } catch {} }
     // Recompute stock to reflect deletion (will become 0 with no rows)
