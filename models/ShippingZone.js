@@ -33,9 +33,9 @@ const shippingZoneSchema = new mongoose.Schema({
       min: 0
     },
     deliveryTimeValue: {
-      type: Number,
-      min: 0,
-      default: null
+      type: String,
+      trim: true,
+      default: ''
     },
     deliveryTimeUnit: {
       type: String,
