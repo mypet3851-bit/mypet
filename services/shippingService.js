@@ -381,27 +381,28 @@ function resolveAreaGroupCost(zone, areaGroup) {
 }
 
 function getAreaGroupEta(entry) {
-  if (!entry) return null;
-  const raw = entry.deliveryTimeValue;
-  const value = typeof raw === 'number' ? raw : Number(raw);
-  if (!Number.isFinite(value) || value <= 0) {
-    return null;
-  }
+  if (!entry || entry.deliveryTimeValue === undefined || entry.deliveryTimeValue === null) return null;
+  const label = entry.deliveryTimeValue.toString().trim();
+  if (!label) return null;
+  const match = label.match(/(\d+(?:\.\d+)?)/);
+  const numeric = match ? Number(match[1]) : null;
   const unit = entry.deliveryTimeUnit === 'hours' ? 'hours' : 'days';
-  return { value, unit };
+  return { label, numeric, unit };
 }
 
 function getAreaGroupEstimatedDays(entry) {
   const eta = getAreaGroupEta(entry);
-  if (!eta) return null;
-  return eta.unit === 'hours' ? eta.value / 24 : eta.value;
+  if (!eta || !Number.isFinite(eta.numeric) || eta.numeric <= 0) return null;
+  return eta.unit === 'hours' ? eta.numeric / 24 : eta.numeric;
 }
 
 function getAreaGroupEtaLabel(entry) {
   const eta = getAreaGroupEta(entry);
   if (!eta) return null;
-  const unitLabel = eta.value === 1 ? (eta.unit === 'hours' ? 'hour' : 'day') : (eta.unit === 'hours' ? 'hours' : 'days');
-  return `${eta.value} ${unitLabel}`;
+  if (/(day|hour)s?/i.test(eta.label)) {
+    return eta.label;
+  }
+  return `${eta.label} ${eta.unit}`;
 }
 
 // Cache city → areaGroup mappings to avoid repeated full Settings scans

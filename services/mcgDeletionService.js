@@ -209,18 +209,23 @@ export async function propagateMcgDeletion(productDoc, options = {}) {
   }
 
   const payload = [];
-  const seenPairs = new Set();
+  const seen = new Set();
   const appendPayload = (itemId, itemCode) => {
     const normalizedId = normalize(itemId);
     const normalizedCode = normalize(itemCode);
-    if (!normalizedId && !normalizedCode) return;
-    const key = `${normalizedId}::${normalizedCode}`;
-    if (seenPairs.has(key)) return;
-    seenPairs.add(key);
-    const entry = {};
-    if (normalizedId) entry.item_id = normalizedId;
-    if (normalizedCode) entry.item_code = normalizedCode;
-    payload.push(entry);
+    if (normalizedId) {
+      const key = `id:${normalizedId}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      payload.push({ item_id: normalizedId });
+      return;
+    }
+    if (normalizedCode) {
+      const key = `code:${normalizedCode}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      payload.push({ item_code: normalizedCode });
+    }
   };
 
   if (entries.length) {
