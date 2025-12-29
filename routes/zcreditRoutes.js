@@ -4,11 +4,13 @@ import {
   createSessionFromCartHandler,
   getStatusHandler,
   getSessionOrderHandler,
+  createInvoiceFromOrderHandler,
   confirmSessionHandler,
   resendNotificationHandler,
   successCallbackHandler,
   failureCallbackHandler
 } from '../controllers/zcreditController.js';
+import { adminAuth } from '../middleware/auth.js';
 
 const router = express.Router();
 
@@ -17,6 +19,9 @@ router.post('/session', createSessionHandler);
 
 // Create session directly from checkout payload (no order pre-create)
 router.post('/session-from-cart', createSessionFromCartHandler);
+
+// Admin: create an invoice/payment session for an existing order
+router.post('/orders/:orderId/create-invoice', adminAuth, createInvoiceFromOrderHandler);
 
 // Get session status
 router.post('/status', getStatusHandler);

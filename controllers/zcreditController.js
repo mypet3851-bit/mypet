@@ -578,6 +578,108 @@ export const getSessionOrderHandler = asyncHandler(async (req, res) => {
   });
 });
 
+export const createInvoiceFromOrderHandler = asyncHandler(async (req, res) => {
+  const orderId = String(req.params?.orderId || '').trim();
+  if (!orderId) {
+    return res.status(400).json({ message: 'orderId required' });
+  }
+
+  const order = await Order.findById(orderId);
+  if (!order) {
+    return res.status(404).json({ message: 'order_not_found' });
+  }
+
+  const currency = order.currency || process.env.STORE_CURRENCY || 'ILS';
+  const shippingFee = Number.isFinite(Number(order.shippingFee))
+    ? Number(order.shippingFee)
+    : Number(order.deliveryFee) || 0;
+  const subtotal = Number(order.totalAmount) || 0;
+  const cardChargeAmount = +(subtotal + Math.max(0, shippingFee)).toFixed(2);
+  if (!(cardChargeAmount > 0)) {
+    return res.status(400).json({ message: 'invalid_order_total' });
+  }
+
+  const customer = order.customerInfo || {};
+  if (!customer.email || !customer.mobile) {
+    return res.status(400).json({ message: 'order_missing_customer_info' });
+  }
+
+  const { defaultSuccess, defaultCancel, defaultSuccessCb, defaultFailureCb } = buildDefaultUrls(req);
+  const payload = {
+    Local: 'He',
+    UniqueId: order.orderNumber,
+    SuccessUrl: defaultSuccess || undefined,
+    ...(defaultCancel ? { CancelUrl: defaultCancel } : {}),
+    CallbackUrl: defaultSuccessCb || '',
+    FailureCallBackUrl: defaultFailureCb || '',
+    NumberOfFailures: 3,
+    PaymentType: 'regular',
+    CreateInvoice: true,
+    AdditionalText: `Admin invoice creation for order ${order.orderNumber}`,
+    ShowCart: false,
+    Customer: {
+      Name: `${customer.firstName || ''} ${customer.lastName || ''}`.trim() || customer.email,
+      Email: customer.email,
+      Phone: customer.mobile
+    },
+    CartItems: [{
+      Amount: cardChargeAmount,
+      Currency: currency,
+      Name: `Order ${order.orderNumber}`,
+      Description: 'Admin initiated invoice payment',
+      Quantity: 1,
+      IsTaxFree: false,
+      AdjustAmount: false
+    }]
+  };
+
+  let data;
+  try {
+    data = await createSession(payload);
+  } catch (err) {
+    return res.status(400).json({
+      message: 'zcredit_invoice_failed',
+      detail: err?.message || String(err)
+    });
+  }
+
+  const sessionUrl = data?.Data?.SessionUrl || data?.SessionUrl;
+  const providerSessionId = data?.Data?.SessionId || data?.SessionId;
+  if (!sessionUrl || !providerSessionId) {
+    return res.status(502).json({ message: 'zcredit_session_missing' });
+  }
+
+  const snapshot = {
+    sessionId: providerSessionId,
+    sessionUrl,
+    createdAt: new Date().toISOString(),
+    amount: cardChargeAmount,
+    currency
+  };
+
+  const details = order.paymentDetails && typeof order.paymentDetails === 'object'
+    ? { ...order.paymentDetails }
+    : {};
+  const priorSessions = Array.isArray(details.zcreditInvoiceSessions)
+    ? [...details.zcreditInvoiceSessions]
+    : [];
+  priorSessions.push(snapshot);
+  details.zcreditInvoiceSessions = priorSessions;
+  order.paymentDetails = details;
+  order.markModified('paymentDetails');
+  await order.save();
+
+  return res.json({
+    ok: true,
+    orderId: order._id,
+    orderNumber: order.orderNumber,
+    sessionId: providerSessionId,
+    sessionUrl,
+    amount: cardChargeAmount,
+    currency
+  });
+});
+
 export const successCallbackHandler = asyncHandler(async (req, res) => {
   try {
     console.log('[zcredit][callback][success]', JSON.stringify(req.body));
@@ -686,6 +788,7 @@ export default {
   createSessionFromCartHandler,
   getStatusHandler,
   getSessionOrderHandler,
+  createInvoiceFromOrderHandler,
   confirmSessionHandler,
   resendNotificationHandler,
   successCallbackHandler,
