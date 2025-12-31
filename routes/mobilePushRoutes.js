@@ -1,12 +1,12 @@
 import express from 'express';
-import { auth, adminAuth } from '../middleware/auth.js';
+import { auth, adminAuth, maybeAuth } from '../middleware/auth.js';
 import { registerToken, deregisterToken, sendTestToMe, broadcastToAdmins, broadcastAll, sendToUser, listTokens, recordOpen, getStats, schedulePush, listScheduled, cancelScheduled, listHistory, getAnalytics, getMyBadge } from '../controllers/mobilePushController.js';
 
 const router = express.Router();
 
 // Register/deregister the device push token (associate to logged-in user if available)
-router.post('/register', auth, registerToken);
-router.post('/deregister', auth, deregisterToken);
+router.post('/register', maybeAuth, registerToken);
+router.post('/deregister', maybeAuth, deregisterToken);
 
 // Send a test push to current user
 router.post('/test', auth, sendTestToMe);
@@ -24,7 +24,7 @@ router.post('/send-to-user', adminAuth, sendToUser);
 router.get('/tokens', adminAuth, listTokens);
 
 // Track opens (auth optional)
-router.post('/open', auth, recordOpen);
+router.post('/open', maybeAuth, recordOpen);
 // Current unread badge count
 router.get('/badge', auth, getMyBadge);
 

@@ -26,6 +26,20 @@ export const auth = async (req, res, next) => {
   }
 };
 
+export const maybeAuth = async (req, _res, next) => {
+  try {
+    const token = req.header('Authorization')?.replace('Bearer ', '');
+    if (!token) return next();
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const user = await User.findById(decoded.userId);
+    if (user) req.user = user;
+  } catch (error) {
+    console.warn('Optional auth skipped:', error?.message || error);
+  }
+  return next();
+};
+
 export const adminAuth = async (req, res, next) => {
   console.log('adminAuth middleware called for:', req.method, req.path);
   console.log('Authorization header:', req.header('Authorization'));
