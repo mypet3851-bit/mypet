@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import Product from '../models/Product.js';
+import { Parser as Json2csvParser } from 'json2csv';
 // Get stock levels for a product or a specific generated variant.
 // Supported path patterns:
 //   /api/products/:productId/stock
@@ -540,6 +541,97 @@ export const getProductStats = async (req, res) => {
   } catch (e) {
     console.error('Error fetching product stats:', e);
     res.status(500).json({ message: 'Failed to fetch product stats' });
+  }
+};
+
+export const exportProductsCsv = async (req, res) => {
+  try {
+    const queryParams = { ...req.query };
+    if (queryParams.includeInactive == null) {
+      queryParams.includeInactive = 'true';
+    }
+    const query = await buildProductQuery(queryParams);
+    const products = await Product.find(query)
+      .populate('category', 'name slug')
+      .populate('categories', 'name slug')
+      .populate('brand', 'name slug')
+      .lean();
+
+    const normalizeName = (value) => {
+      if (!value) return '';
+      if (typeof value === 'string') return value;
+      if (typeof value === 'object') {
+        return value.name || value.slug || '';
+      }
+      return '';
+    };
+
+    const rows = products.map((product) => {
+      const primaryCategory = normalizeName(product.category);
+      const additionalCategories = Array.isArray(product.categories)
+        ? product.categories.map((cat) => normalizeName(cat)).filter(Boolean)
+        : [];
+      const categoryList = primaryCategory
+        ? [primaryCategory, ...additionalCategories.filter((label) => label !== primaryCategory)]
+        : additionalCategories;
+      const variantList = Array.isArray(product.variants) ? product.variants : [];
+      const activeVariants = variantList.filter((variant) => variant?.isActive !== false);
+      const tags = Array.isArray(product.tags) ? product.tags.filter(Boolean).join(', ') : '';
+
+      return {
+        id: product._id?.toString() || '',
+        name: product.name || '',
+        description: product.description || '',
+        price: product.price ?? '',
+        originalPrice: product.originalPrice ?? '',
+        stock: product.stock ?? '',
+        status: product.isActive === false ? 'Hidden' : 'Visible',
+        primaryCategory,
+        categories: categoryList.join(' | '),
+        brand: normalizeName(product.brand),
+        mcgItemId: product.mcgItemId || '',
+        mcgBarcode: product.mcgBarcode || '',
+        rivhitItemId: product.rivhitItemId || '',
+        slug: product.slug || '',
+        tags,
+        variantCount: variantList.length,
+        activeVariantCount: activeVariants.length,
+        createdAt: product.createdAt ? new Date(product.createdAt).toISOString() : '',
+        updatedAt: product.updatedAt ? new Date(product.updatedAt).toISOString() : ''
+      };
+    });
+
+    const fields = [
+      { label: 'Product ID', value: 'id' },
+      { label: 'Name', value: 'name' },
+      { label: 'Description', value: 'description' },
+      { label: 'Price', value: 'price' },
+      { label: 'Original Price', value: 'originalPrice' },
+      { label: 'Stock', value: 'stock' },
+      { label: 'Status', value: 'status' },
+      { label: 'Primary Category', value: 'primaryCategory' },
+      { label: 'All Categories', value: 'categories' },
+      { label: 'Brand', value: 'brand' },
+      { label: 'MCG Item ID', value: 'mcgItemId' },
+      { label: 'MCG Barcode', value: 'mcgBarcode' },
+      { label: 'Rivhit Item ID', value: 'rivhitItemId' },
+      { label: 'Slug', value: 'slug' },
+      { label: 'Tags', value: 'tags' },
+      { label: 'Variant Count', value: 'variantCount' },
+      { label: 'Active Variant Count', value: 'activeVariantCount' },
+      { label: 'Created At', value: 'createdAt' },
+      { label: 'Updated At', value: 'updatedAt' }
+    ];
+
+    const parser = new Json2csvParser({ fields, excelStrings: true, transforms: [] });
+    const csv = parser.parse(rows);
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="products-${timestamp}.csv"`);
+    return res.status(200).send(`\ufeff${csv}`);
+  } catch (error) {
+    console.error('[exportProductsCsv] Failed to export products', error);
+    return res.status(500).json({ message: 'Failed to export products' });
   }
 };
 
