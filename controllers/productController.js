@@ -547,10 +547,21 @@ export const getProductStats = async (req, res) => {
 export const exportProductsCsv = async (req, res) => {
   try {
     const queryParams = { ...req.query };
+    let requestedIds = [];
+    if (queryParams.ids) {
+      const parts = String(queryParams.ids).split(',').map((token) => token.trim()).filter(Boolean);
+      requestedIds = parts
+        .filter((token) => mongoose.Types.ObjectId.isValid(token))
+        .map((token) => new mongoose.Types.ObjectId(token));
+      delete queryParams.ids;
+    }
     if (queryParams.includeInactive == null) {
       queryParams.includeInactive = 'true';
     }
     const query = await buildProductQuery(queryParams);
+    if (requestedIds.length) {
+      query.$and = [ ...(query.$and || []), { _id: { $in: requestedIds } } ];
+    }
     const products = await Product.find(query)
       .populate('category', 'name slug')
       .populate('categories', 'name slug')
