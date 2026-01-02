@@ -566,6 +566,13 @@ export const exportProductsCsv = async (req, res) => {
       return '';
     };
 
+    const collectImageUrls = (value) => {
+      if (!Array.isArray(value)) return [];
+      return value
+        .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
+        .filter((entry) => !!entry);
+    };
+
     const rows = products.map((product) => {
       const primaryCategory = normalizeName(product.category);
       const additionalCategories = Array.isArray(product.categories)
@@ -577,6 +584,13 @@ export const exportProductsCsv = async (req, res) => {
       const variantList = Array.isArray(product.variants) ? product.variants : [];
       const activeVariants = variantList.filter((variant) => variant?.isActive !== false);
       const tags = Array.isArray(product.tags) ? product.tags.filter(Boolean).join(', ') : '';
+      const productImages = collectImageUrls(product.images);
+      const colorImages = Array.isArray(product.colors)
+        ? product.colors.flatMap((color) => collectImageUrls(color?.images))
+        : [];
+      const variantImagesList = activeVariants.flatMap((variant) => collectImageUrls(variant?.images));
+      const allImages = Array.from(new Set([...productImages, ...colorImages, ...variantImagesList]));
+      const primaryImage = productImages[0] || colorImages[0] || variantImagesList[0] || '';
 
       return {
         id: product._id?.toString() || '',
@@ -594,6 +608,11 @@ export const exportProductsCsv = async (req, res) => {
         rivhitItemId: product.rivhitItemId || '',
         slug: product.slug || '',
         tags,
+        primaryImage,
+        productImages: productImages.join(' | '),
+        variantImages: variantImagesList.join(' | '),
+        allImages: allImages.join(' | '),
+        imageCount: allImages.length,
         variantCount: variantList.length,
         activeVariantCount: activeVariants.length,
         createdAt: product.createdAt ? new Date(product.createdAt).toISOString() : '',
@@ -617,6 +636,11 @@ export const exportProductsCsv = async (req, res) => {
       { label: 'Rivhit Item ID', value: 'rivhitItemId' },
       { label: 'Slug', value: 'slug' },
       { label: 'Tags', value: 'tags' },
+      { label: 'Primary Image', value: 'primaryImage' },
+      { label: 'Product Images', value: 'productImages' },
+      { label: 'Variant Images', value: 'variantImages' },
+      { label: 'All Image URLs', value: 'allImages' },
+      { label: 'Image Count', value: 'imageCount' },
       { label: 'Variant Count', value: 'variantCount' },
       { label: 'Active Variant Count', value: 'activeVariantCount' },
       { label: 'Created At', value: 'createdAt' },
