@@ -1476,74 +1476,74 @@ router.post('/upload/nav-background', adminAuth, upload.single('file'), async (r
 
     settings.navBackgroundImage = finalUrl;
     await settings.save();
-
-    // Upload visitor popup background image (admin only)
-    router.post('/upload/visitor-popup-background', adminAuth, upload.single('file'), async (req, res) => {
-      try {
-        if (!req.file) {
-          return res.status(400).json({ message: 'No file uploaded' });
-        }
-
-        let settings = await Settings.findOne();
-        if (!settings) settings = new Settings();
-        settings.visitorPopup = settings.visitorPopup || {};
-
-        let finalUrl = `/uploads/${req.file.filename}`;
-        const hasCloudinaryCreds = await hasCloudinaryCredentials();
-
-        if (hasCloudinaryCreds) {
-          try {
-            await ensureCloudinaryConfig();
-            const uploadResult = await cloudinary.uploader.upload(path.join(uploadDir, req.file.filename), {
-              folder: 'settings/visitor-popup',
-              resource_type: 'image',
-              use_filename: true,
-              unique_filename: false,
-              overwrite: true
-            });
-            if (uploadResult && uploadResult.secure_url) {
-              finalUrl = uploadResult.secure_url;
-              try { fs.unlinkSync(path.join(uploadDir, req.file.filename)); } catch {}
-            }
-          } catch (cloudErr) {
-            console.warn('[visitor-popup-background] Cloudinary upload failed, keeping local file:', cloudErr.message);
-          }
-        }
-
-        if (!hasCloudinaryCreds) {
-          try {
-            const filePath = path.join(uploadDir, req.file.filename);
-            const buf = fs.readFileSync(filePath);
-            const b64 = buf.toString('base64');
-            const mime = req.file.mimetype || 'image/png';
-            finalUrl = `data:${mime};base64,${b64}`;
-            try { fs.unlinkSync(filePath); } catch {}
-          } catch (inlineErr) {
-            console.warn('[visitor-popup-background] Failed to inline image, falling back to relative path:', inlineErr.message);
-          }
-        }
-
-        settings.visitorPopup.backgroundImage = finalUrl;
-        try { settings.markModified('visitorPopup'); } catch {}
-        await settings.save();
-
-        try {
-          const broadcast = req.app.get('broadcastToClients');
-          if (typeof broadcast === 'function') {
-            broadcast({ type: 'settings_updated', data: { visitorPopup: { backgroundImage: finalUrl } } });
-          }
-        } catch {}
-
-        res.json({ url: finalUrl, stored: hasCloudinaryCreds ? 'cloudinary' : 'inline' });
-      } catch (error) {
-        res.status(500).json({ message: error.message });
-      }
-    });
     // Broadcast minimal update
     try {
       const broadcast = req.app.get('broadcastToClients');
       if (typeof broadcast === 'function') {
         broadcast({ type: 'settings_updated', data: { navBackgroundImage: toAbsolute(req, finalUrl) } });
+      }
+    } catch {}
+
+    res.json({ url: toAbsolute(req, finalUrl), stored: hasCloudinaryCreds ? 'cloudinary' : 'inline' });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Upload visitor popup background image (admin only)
+router.post('/upload/visitor-popup-background', adminAuth, upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: 'No file uploaded' });
+    }
+
+    let settings = await Settings.findOne();
+    if (!settings) settings = new Settings();
+    settings.visitorPopup = settings.visitorPopup || {};
+
+    let finalUrl = `/uploads/${req.file.filename}`;
+    const hasCloudinaryCreds = await hasCloudinaryCredentials();
+
+    if (hasCloudinaryCreds) {
+      try {
+        await ensureCloudinaryConfig();
+        const uploadResult = await cloudinary.uploader.upload(path.join(uploadDir, req.file.filename), {
+          folder: 'settings/visitor-popup',
+          resource_type: 'image',
+          use_filename: true,
+          unique_filename: false,
+          overwrite: true
+        });
+        if (uploadResult?.secure_url) {
+          finalUrl = uploadResult.secure_url;
+          try { fs.unlinkSync(path.join(uploadDir, req.file.filename)); } catch {}
+        }
+      } catch (cloudErr) {
+        console.warn('[visitor-popup-background] Cloudinary upload failed, keeping local file:', cloudErr.message);
+      }
+    }
+
+    if (!hasCloudinaryCreds) {
+      try {
+        const filePath = path.join(uploadDir, req.file.filename);
+        const buf = fs.readFileSync(filePath);
+        const b64 = buf.toString('base64');
+        const mime = req.file.mimetype || 'image/png';
+        finalUrl = `data:${mime};base64,${b64}`;
+        try { fs.unlinkSync(filePath); } catch {}
+      } catch (inlineErr) {
+        console.warn('[visitor-popup-background] Failed to inline image, falling back to relative path:', inlineErr.message);
+      }
+    }
+
+    settings.visitorPopup.backgroundImage = finalUrl;
+    try { settings.markModified('visitorPopup'); } catch {}
+    await settings.save();
+
+    try {
+      const broadcast = req.app.get('broadcastToClients');
+      if (typeof broadcast === 'function') {
+        broadcast({ type: 'settings_updated', data: { visitorPopup: { backgroundImage: finalUrl } } });
       }
     } catch {}
 
