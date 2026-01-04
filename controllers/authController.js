@@ -39,7 +39,8 @@ function issueTokens(res, userId) {
 export const promoteToAdmin = async (req, res) => {
   try {
     const { email, secret } = req.body || {};
-    if (!email || typeof email !== 'string') {
+    const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
+    if (!normalizedEmail) {
       return res.status(400).json({ message: 'Email is required' });
     }
 
@@ -54,7 +55,7 @@ export const promoteToAdmin = async (req, res) => {
       return res.status(403).json({ message: 'Admin already exists. Provide valid secret to promote.' });
     }
 
-    const user = await User.findOne({ email: String(email).toLowerCase() });
+    const user = await User.findOne({ email: normalizedEmail });
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
@@ -70,21 +71,37 @@ export const promoteToAdmin = async (req, res) => {
 
 export const register = async (req, res) => {
   try {
-  const { name, email, password, phoneNumber, region } = req.body;
-  const normalizedEmail = String(email || '').toLowerCase();
+    const { name, email, password, phoneNumber, region } = req.body || {};
+    const trimmedName = typeof name === 'string' ? name.trim() : '';
+    const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
+    const passwordValue = typeof password === 'string' ? password : '';
+    const phoneValue = typeof phoneNumber === 'string' ? phoneNumber : undefined;
+
+    if (!trimmedName) {
+      return res.status(400).json({ message: 'Name is required' });
+    }
+
+    const emailRegex = /^\S+@\S+\.\S+$/;
+    if (!normalizedEmail || !emailRegex.test(normalizedEmail)) {
+      return res.status(400).json({ message: 'Please provide a valid email' });
+    }
+
+    if (!passwordValue || passwordValue.length < 6) {
+      return res.status(400).json({ message: 'Password must be at least 6 characters' });
+    }
 
     // Check if user already exists
-  const existingUser = await User.findOne({ email: normalizedEmail });
+    const existingUser = await User.findOne({ email: normalizedEmail });
     if (existingUser) {
       return res.status(400).json({ message: 'User already exists with this email' });
     }
 
     // Create new user
     const user = new User({
-      name,
+      name: trimmedName,
       email: normalizedEmail,
-      password,
-      phoneNumber: phoneNumber ? normalizePhoneE164ish(phoneNumber, region) : undefined,
+      password: passwordValue,
+      phoneNumber: phoneValue ? (normalizePhoneE164ish(phoneValue, region) || undefined) : undefined,
       role: 'user' // Default role
     });
 
@@ -107,6 +124,15 @@ export const register = async (req, res) => {
       }
     });
   } catch (error) {
+    if (error?.code === 11000) {
+      const duplicateField = Object.keys(error?.keyPattern || {})[0] || 'email';
+      const fieldLabel = duplicateField === 'phoneNumber' ? 'phone number' : 'email';
+      return res.status(400).json({ message: `User already exists with this ${fieldLabel}` });
+    }
+    if (error?.name === 'ValidationError') {
+      const messages = Object.values(error.errors || {}).map((err) => err?.message).filter(Boolean);
+      return res.status(400).json({ message: messages[0] || 'Invalid registration data' });
+    }
     console.error('Registration error:', error);
     res.status(500).json({ message: 'Server error during registration' });
   }
@@ -115,7 +141,7 @@ export const register = async (req, res) => {
 export const login = async (req, res) => {
   try {
   const { email, password } = req.body;
-  const normalizedEmail = String(email || '').toLowerCase();
+  const normalizedEmail = String(email || '').trim().toLowerCase();
     
     // Find user
   const user = await User.findOne({ email: normalizedEmail });
