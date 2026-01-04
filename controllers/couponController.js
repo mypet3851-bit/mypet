@@ -73,6 +73,9 @@ export const deleteCoupon = async (req, res) => {
 
 export const validateCoupon = async (req, res) => {
   try {
+    if (!req.user?._id) {
+      return res.status(StatusCodes.UNAUTHORIZED).json({ message: 'Please login to use coupons' });
+    }
     // Support both POST body and optional GET query fallback
     const codeRaw = (req.body?.code || req.query?.code || '').toString();
     const totalAmountRaw = req.body?.totalAmount ?? req.query?.totalAmount ?? 0;
@@ -121,6 +124,9 @@ export const validateCoupon = async (req, res) => {
 
 export const applyCoupon = async (req, res) => {
   try {
+    if (!req.user?._id) {
+      return res.status(StatusCodes.UNAUTHORIZED).json({ message: 'Please login to use coupons' });
+    }
     const { code } = req.params;
     const coupon = await Coupon.findOne({ code: code.toUpperCase() });
     

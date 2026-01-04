@@ -1,5 +1,5 @@
 import express from 'express';
-import { adminAuth } from '../middleware/auth.js';
+import { adminAuth, auth } from '../middleware/auth.js';
 import {
   createCoupon,
   getAllCoupons,
@@ -19,11 +19,11 @@ router.get('/:id', adminAuth, getCoupon);
 router.put('/:id', adminAuth, updateCoupon);
 router.delete('/:id', adminAuth, deleteCoupon);
 
-// Public routes
+// Customer routes (registration required)
 // Primary POST validate endpoint (expects JSON body { code, totalAmount })
-router.post('/validate', validateCoupon);
+router.post('/validate', auth, validateCoupon);
 // Convenience GET variant to reduce accidental 404s from incorrect method usage
-router.get('/validate', validateCoupon);
-router.post('/:code/apply', applyCoupon);
+router.get('/validate', auth, validateCoupon);
+router.post('/:code/apply', auth, applyCoupon);
 
 export default router;
