@@ -61,7 +61,7 @@ export const promoteToAdmin = async (req, res) => {
 
     user.role = 'admin';
     await user.save();
-  return res.json({ ok: true, id: user._id, email: user.email, role: user.role, image: user.image || null });
+  return res.json({ ok: true, id: user._id, email: user.email, role: user.role, image: user.image || null, createdAt: user.createdAt, lastLoginAt: user.lastLoginAt });
   } catch (e) {
     console.error('promoteToAdmin error:', e);
     return res.status(500).json({ message: 'Failed to promote user' });
@@ -101,7 +101,9 @@ export const register = async (req, res) => {
         name: user.name,
         email: user.email,
         role: user.role,
-        image: user.image || null
+        image: user.image || null,
+        createdAt: user.createdAt,
+        lastLoginAt: user.lastLoginAt
       }
     });
   } catch (error) {
@@ -146,7 +148,9 @@ export const login = async (req, res) => {
             name: newUser.name,
             email: newUser.email,
             role: newUser.role,
-            image: newUser.image || null
+            image: newUser.image || null,
+            createdAt: newUser.createdAt,
+            lastLoginAt: newUser.lastLoginAt
           }
         });
       } catch (e) {
@@ -172,7 +176,9 @@ export const login = async (req, res) => {
         name: user.name,
         email: user.email,
         role: user.role,
-        image: user.image || null
+        image: user.image || null,
+        createdAt: user.createdAt,
+        lastLoginAt: user.lastLoginAt
       }
     });
   } catch (error) {
@@ -192,7 +198,9 @@ export const getCurrentUser = async (req, res) => {
       name: user.name,
       email: user.email,
       role: user.role,
-      image: user.image || null
+      image: user.image || null,
+      createdAt: user.createdAt,
+      lastLoginAt: user.lastLoginAt
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -248,7 +256,7 @@ export const refresh = async (req, res) => {
       try { revokeUserTokens(user._id.toString()); } catch {}
     }
     const { accessToken } = issueTokens(res, user._id);
-    return res.json({ token: accessToken, user: { id: user._id, name: user.name, email: user.email, role: user.role, image: user.image || null } });
+    return res.json({ token: accessToken, user: { id: user._id, name: user.name, email: user.email, role: user.role, image: user.image || null, createdAt: user.createdAt, lastLoginAt: user.lastLoginAt } });
   } catch (e) {
     console.error('Refresh error:', e);
     return res.status(500).json({ message: 'Failed to refresh session' });
