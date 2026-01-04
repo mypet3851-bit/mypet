@@ -684,6 +684,52 @@ router.put('/', settingsWriteGuard, async (req, res) => {
         try { settings.markModified('googleAnalytics'); } catch {}
       }
 
+      if (req.body.visitorPopup && typeof req.body.visitorPopup === 'object') {
+        const incoming = req.body.visitorPopup;
+        const prev = settings.visitorPopup || {};
+        const clamp = (value, min, max, fallback) => {
+          const num = Number(value);
+          if (!Number.isFinite(num)) return fallback;
+          return Math.min(max, Math.max(min, num));
+        };
+        const takeString = (value, fallback = '', limit = 200, allowEmpty = true) => {
+          if (typeof value === 'string') {
+            const trimmed = value.trim().slice(0, limit);
+            if (!trimmed && !allowEmpty) return fallback;
+            return trimmed;
+          }
+          return fallback;
+        };
+        const pixelBase = (() => {
+          if (typeof incoming.pixelEventBase === 'string') {
+            const cleaned = incoming.pixelEventBase.trim().slice(0, 40).replace(/[^0-9a-z_]/gi, '');
+            if (cleaned) return cleaned;
+          }
+          if (typeof prev.pixelEventBase === 'string' && prev.pixelEventBase.trim()) {
+            return prev.pixelEventBase.trim();
+          }
+          return 'VisitorPopup';
+        })();
+        settings.visitorPopup = {
+          enabled: typeof incoming.enabled === 'undefined' ? !!prev.enabled : !!incoming.enabled,
+          showOnScroll: typeof incoming.showOnScroll === 'undefined' ? (typeof prev.showOnScroll === 'boolean' ? prev.showOnScroll : true) : !!incoming.showOnScroll,
+          showExitIntent: typeof incoming.showExitIntent === 'undefined' ? (typeof prev.showExitIntent === 'boolean' ? prev.showExitIntent : true) : !!incoming.showExitIntent,
+          frequencyDays: Math.round(clamp(incoming.frequencyDays, 1, 30, typeof prev.frequencyDays === 'number' ? prev.frequencyDays : 7)),
+          scrollThreshold: Math.round(clamp(incoming.scrollThreshold, 0, 4000, typeof prev.scrollThreshold === 'number' ? prev.scrollThreshold : 360)),
+          heading: takeString(incoming.heading, prev.heading || 'Register & get 10% OFF', 160, false),
+          bodyAr: takeString(incoming.bodyAr, typeof prev.bodyAr === 'string' ? prev.bodyAr : '', 400),
+          bodyHe: takeString(incoming.bodyHe, typeof prev.bodyHe === 'string' ? prev.bodyHe : '', 400),
+          bodyEn: takeString(incoming.bodyEn, typeof prev.bodyEn === 'string' ? prev.bodyEn : '', 400),
+          ctaLabel: takeString(incoming.ctaLabel, prev.ctaLabel || 'Register now', 80, false),
+          ctaHref: takeString(incoming.ctaHref, prev.ctaHref || '/register', 400, false),
+          pixelEventBase: pixelBase,
+          accentColor: takeString(incoming.accentColor, prev.accentColor || '', 32),
+          textColor: takeString(incoming.textColor, prev.textColor || '', 32),
+          backgroundColor: takeString(incoming.backgroundColor, prev.backgroundColor || '', 32)
+        };
+        try { settings.markModified('visitorPopup'); } catch {}
+      }
+
       // Social links
       if (req.body.socialLinks && typeof req.body.socialLinks === 'object') {
         settings.socialLinks = { ...(settings.socialLinks || {}), ...req.body.socialLinks };

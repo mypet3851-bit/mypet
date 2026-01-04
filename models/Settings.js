@@ -328,6 +328,23 @@ const settingsSchema = new mongoose.Schema({
     trackingId: { type: String, default: '' },
     enabled: { type: Boolean, default: false }
   },
+  visitorPopup: {
+    enabled: { type: Boolean, default: false },
+    showOnScroll: { type: Boolean, default: true },
+    showExitIntent: { type: Boolean, default: true },
+    scrollThreshold: { type: Number, default: 360, min: 0, max: 4000 },
+    frequencyDays: { type: Number, default: 7, min: 1, max: 30 },
+    heading: { type: String, default: 'Register & get 10% OFF' },
+    bodyAr: { type: String },
+    bodyHe: { type: String },
+    bodyEn: { type: String },
+    ctaLabel: { type: String, default: 'Register now' },
+    ctaHref: { type: String, default: '/register' },
+    pixelEventBase: { type: String, default: 'VisitorPopup' },
+    accentColor: { type: String },
+    textColor: { type: String },
+    backgroundColor: { type: String }
+  },
   // Scroll-to-top button theme
   scrollTopBgColor: { type: String, default: '' },
   scrollTopTextColor: { type: String, default: '' },
