@@ -340,10 +340,19 @@ const settingsSchema = new mongoose.Schema({
     bodyEn: { type: String },
     ctaLabel: { type: String, default: 'Register now' },
     ctaHref: { type: String, default: '/register' },
+    couponCode: { type: String, default: '' },
+    couponNote: { type: String, default: '* Coupon applied automatically after you finish registering.' },
     pixelEventBase: { type: String, default: 'VisitorPopup' },
     accentColor: { type: String },
     textColor: { type: String },
-    backgroundColor: { type: String }
+    backgroundColor: { type: String },
+    backgroundImage: { type: String, default: '' },
+    headingColor: { type: String },
+    bodyColor: { type: String },
+    headingFontSize: { type: Number, default: 32 },
+    bodyFontSize: { type: Number, default: 16 },
+    ctaFontSize: { type: Number, default: 18 },
+    metaFontSize: { type: Number, default: 12 }
   },
   // Scroll-to-top button theme
   scrollTopBgColor: { type: String, default: '' },

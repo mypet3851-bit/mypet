@@ -193,6 +193,9 @@ router.get('/', async (req, res) => {
   if (obj.productCardBackgroundImage && obj.productCardBackgroundImage.startsWith('/uploads/')) obj.productCardBackgroundImage = toAbsolute(req, obj.productCardBackgroundImage);
   if (obj.productImageBackgroundImage && obj.productImageBackgroundImage.startsWith('/uploads/')) obj.productImageBackgroundImage = toAbsolute(req, obj.productImageBackgroundImage);
   if (obj.categoryBackgroundImage && obj.categoryBackgroundImage.startsWith('/uploads/')) obj.categoryBackgroundImage = toAbsolute(req, obj.categoryBackgroundImage);
+  if (obj.visitorPopup && obj.visitorPopup.backgroundImage && obj.visitorPopup.backgroundImage.startsWith('/uploads/')) {
+    obj.visitorPopup.backgroundImage = toAbsolute(req, obj.visitorPopup.backgroundImage);
+  }
   // Normalize header icon background images
   if (obj.headerIconBackgrounds) {
     ['cart','wishlist','account','search','language','currency'].forEach(k => {
@@ -710,6 +713,22 @@ router.put('/', settingsWriteGuard, async (req, res) => {
           }
           return 'VisitorPopup';
         })();
+        const couponCode = (() => {
+          const fallback = typeof prev.couponCode === 'string' ? prev.couponCode : '';
+          const next = takeString(incoming.couponCode, fallback, 80);
+          return next ? next.toUpperCase() : '';
+        })();
+        const couponNote = takeString(
+          incoming.couponNote,
+          typeof prev.couponNote === 'string' ? prev.couponNote : '* Coupon applied automatically after you finish registering.',
+          400
+        );
+        const headingColor = takeString(incoming.headingColor, prev.headingColor || '', 32);
+        const bodyColor = takeString(incoming.bodyColor, prev.bodyColor || '', 32);
+        const headingFontSize = clamp(incoming.headingFontSize, 16, 72, typeof prev.headingFontSize === 'number' ? prev.headingFontSize : 32);
+        const bodyFontSize = clamp(incoming.bodyFontSize, 12, 32, typeof prev.bodyFontSize === 'number' ? prev.bodyFontSize : 16);
+        const ctaFontSize = clamp(incoming.ctaFontSize, 12, 32, typeof prev.ctaFontSize === 'number' ? prev.ctaFontSize : 18);
+        const metaFontSize = clamp(incoming.metaFontSize, 8, 24, typeof prev.metaFontSize === 'number' ? prev.metaFontSize : 12);
         settings.visitorPopup = {
           enabled: typeof incoming.enabled === 'undefined' ? !!prev.enabled : !!incoming.enabled,
           showOnScroll: typeof incoming.showOnScroll === 'undefined' ? (typeof prev.showOnScroll === 'boolean' ? prev.showOnScroll : true) : !!incoming.showOnScroll,
@@ -722,10 +741,19 @@ router.put('/', settingsWriteGuard, async (req, res) => {
           bodyEn: takeString(incoming.bodyEn, typeof prev.bodyEn === 'string' ? prev.bodyEn : '', 400),
           ctaLabel: takeString(incoming.ctaLabel, prev.ctaLabel || 'Register now', 80, false),
           ctaHref: takeString(incoming.ctaHref, prev.ctaHref || '/register', 400, false),
+          couponCode,
+          couponNote,
           pixelEventBase: pixelBase,
           accentColor: takeString(incoming.accentColor, prev.accentColor || '', 32),
           textColor: takeString(incoming.textColor, prev.textColor || '', 32),
-          backgroundColor: takeString(incoming.backgroundColor, prev.backgroundColor || '', 32)
+          backgroundColor: takeString(incoming.backgroundColor, prev.backgroundColor || '', 32),
+          backgroundImage: takeString(incoming.backgroundImage, prev.backgroundImage || '', 1000),
+          headingColor,
+          bodyColor,
+          headingFontSize: Math.round(headingFontSize),
+          bodyFontSize: Math.round(bodyFontSize),
+          ctaFontSize: Math.round(ctaFontSize),
+          metaFontSize: Math.round(metaFontSize)
         };
         try { settings.markModified('visitorPopup'); } catch {}
       }
@@ -1449,6 +1477,68 @@ router.post('/upload/nav-background', adminAuth, upload.single('file'), async (r
     settings.navBackgroundImage = finalUrl;
     await settings.save();
 
+    // Upload visitor popup background image (admin only)
+    router.post('/upload/visitor-popup-background', adminAuth, upload.single('file'), async (req, res) => {
+      try {
+        if (!req.file) {
+          return res.status(400).json({ message: 'No file uploaded' });
+        }
+
+        let settings = await Settings.findOne();
+        if (!settings) settings = new Settings();
+        settings.visitorPopup = settings.visitorPopup || {};
+
+        let finalUrl = `/uploads/${req.file.filename}`;
+        const hasCloudinaryCreds = await hasCloudinaryCredentials();
+
+        if (hasCloudinaryCreds) {
+          try {
+            await ensureCloudinaryConfig();
+            const uploadResult = await cloudinary.uploader.upload(path.join(uploadDir, req.file.filename), {
+              folder: 'settings/visitor-popup',
+              resource_type: 'image',
+              use_filename: true,
+              unique_filename: false,
+              overwrite: true
+            });
+            if (uploadResult && uploadResult.secure_url) {
+              finalUrl = uploadResult.secure_url;
+              try { fs.unlinkSync(path.join(uploadDir, req.file.filename)); } catch {}
+            }
+          } catch (cloudErr) {
+            console.warn('[visitor-popup-background] Cloudinary upload failed, keeping local file:', cloudErr.message);
+          }
+        }
+
+        if (!hasCloudinaryCreds) {
+          try {
+            const filePath = path.join(uploadDir, req.file.filename);
+            const buf = fs.readFileSync(filePath);
+            const b64 = buf.toString('base64');
+            const mime = req.file.mimetype || 'image/png';
+            finalUrl = `data:${mime};base64,${b64}`;
+            try { fs.unlinkSync(filePath); } catch {}
+          } catch (inlineErr) {
+            console.warn('[visitor-popup-background] Failed to inline image, falling back to relative path:', inlineErr.message);
+          }
+        }
+
+        settings.visitorPopup.backgroundImage = finalUrl;
+        try { settings.markModified('visitorPopup'); } catch {}
+        await settings.save();
+
+        try {
+          const broadcast = req.app.get('broadcastToClients');
+          if (typeof broadcast === 'function') {
+            broadcast({ type: 'settings_updated', data: { visitorPopup: { backgroundImage: finalUrl } } });
+          }
+        } catch {}
+
+        res.json({ url: finalUrl, stored: hasCloudinaryCreds ? 'cloudinary' : 'inline' });
+      } catch (error) {
+        res.status(500).json({ message: error.message });
+      }
+    });
     // Broadcast minimal update
     try {
       const broadcast = req.app.get('broadcastToClients');
