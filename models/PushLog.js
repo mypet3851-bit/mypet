@@ -4,6 +4,7 @@ const pushLogSchema = new mongoose.Schema({
   title: String,
   body: String,
   data: {},
+  imageUrl: { type: String },
   audience: { type: Object },
   tokensCount: { type: Number, default: 0 },
   nid: { type: String, index: true },

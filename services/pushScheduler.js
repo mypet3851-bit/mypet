@@ -14,7 +14,20 @@ export function startPushScheduler(app) {
       for (const job of due) {
         try {
           // Fake req/res objects to reuse controller logic without duplication
-          const req = { body: { title: job.title, body: job.body, data: job.data, badge: job.badge, sound: job.sound, channelId: job?.audience?.channelId, userId: job?.audience?.userId, email: job?.audience?.email }, user: { _id: job.createdBy } };
+          const req = {
+            body: {
+              title: job.title,
+              body: job.body,
+              data: job.data,
+              badge: job.badge,
+              sound: job.sound,
+              channelId: job?.audience?.channelId,
+              userId: job?.audience?.userId,
+              email: job?.audience?.email,
+              imageUrl: job.imageUrl
+            },
+            user: { _id: job.createdBy }
+          };
           const res = { json: () => {}, status: (c) => ({ json: () => {} }) };
           if (job.audience?.type === 'admins') await broadcastToAdmins(req, res);
           else if (job.audience?.type === 'user') await sendToUser(req, res);
