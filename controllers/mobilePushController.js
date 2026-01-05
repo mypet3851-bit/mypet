@@ -5,28 +5,59 @@ import PushLog from '../models/PushLog.js';
 import PushOpen from '../models/PushOpen.js';
 import ScheduledPush from '../models/ScheduledPush.js';
 
-function toAbsolute(req, url) {
-  if (!url) return url;
-  if (/^https?:\/\//i.test(url)) return url;
+const LOOPBACK_HOST_RX = /^(localhost|127(?:\.\d+){0,2}|0\.0\.0\.0|\[?::1\]?)/i;
+const ENV_ASSET_BASE = (() => {
+  const candidate = (process.env.PUBLIC_ASSETS_BASE_URL
+    || process.env.PUBLIC_WEB_URL
+    || process.env.PUBLIC_API_URL
+    || process.env.FRONTEND_BASE_URL
+    || process.env.STORE_BASE_URL
+    || '').trim();
+  if (!candidate) return '';
+  return candidate.endsWith('/') ? candidate.slice(0, -1) : candidate;
+})();
+
+function joinWithBase(base, relative) {
+  if (!base) return null;
   try {
-    const headers = req?.headers || {};
-    const protoHeader = (headers['x-forwarded-proto'] || '').toString();
-    const proto = protoHeader.split(',')[0] || req?.protocol || 'http';
-    const hostHeader = (headers['x-forwarded-host'] || headers.host || '').toString();
-    const getHost = typeof req?.get === 'function' ? req.get('host') : (req?.host || '');
-    const host = (hostHeader || getHost || '').split(',')[0];
-    if (!host) return url;
-    return `${proto}://${host}${url.startsWith('/') ? '' : '/'}${url}`;
+    const normalizedBase = base.endsWith('/') ? base : `${base}/`;
+    return new URL(relative, normalizedBase).toString();
   } catch {
-    return url;
+    const path = relative.startsWith('/') ? relative : `/${relative}`;
+    return `${base}${path}`;
   }
+}
+
+function extractHostMeta(req) {
+  if (!req) return null;
+  const headers = req.headers || {};
+  const protoHeader = (headers['x-forwarded-proto'] || '').toString();
+  const proto = protoHeader.split(',')[0] || req.protocol || 'http';
+  const hostHeader = (headers['x-forwarded-host'] || headers.host || '').toString();
+  const derivedHost = typeof req.get === 'function' ? req.get('host') : req.host;
+  const host = (hostHeader || derivedHost || '').split(',')[0];
+  if (!host) return null;
+  return { proto, host };
+}
+
+function ensureAbsoluteUrl(req, url) {
+  if (!url) return url;
+  if (/^https?:\/\//i.test(url)) {
+    try { return new URL(url).toString(); } catch { return url; }
+  }
+  const hostMeta = extractHostMeta(req);
+  if (hostMeta && !LOOPBACK_HOST_RX.test(hostMeta.host)) {
+    return joinWithBase(`${hostMeta.proto}://${hostMeta.host}`, url);
+  }
+  if (ENV_ASSET_BASE) return joinWithBase(ENV_ASSET_BASE, url);
+  return url.startsWith('/') ? url : `/${url}`;
 }
 
 function resolveImageUrl(req, rawUrl) {
   if (typeof rawUrl !== 'string') return undefined;
   const trimmed = rawUrl.trim();
   if (!trimmed) return undefined;
-  return toAbsolute(req, trimmed);
+  return ensureAbsoluteUrl(req, trimmed);
 }
 
 function shapePayloadData(data, nid, imageUrl) {
