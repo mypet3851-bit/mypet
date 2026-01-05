@@ -5,6 +5,40 @@ import PushLog from '../models/PushLog.js';
 import PushOpen from '../models/PushOpen.js';
 import ScheduledPush from '../models/ScheduledPush.js';
 
+function toAbsolute(req, url) {
+  if (!url) return url;
+  if (/^https?:\/\//i.test(url)) return url;
+  try {
+    const headers = req?.headers || {};
+    const protoHeader = (headers['x-forwarded-proto'] || '').toString();
+    const proto = protoHeader.split(',')[0] || req?.protocol || 'http';
+    const hostHeader = (headers['x-forwarded-host'] || headers.host || '').toString();
+    const getHost = typeof req?.get === 'function' ? req.get('host') : (req?.host || '');
+    const host = (hostHeader || getHost || '').split(',')[0];
+    if (!host) return url;
+    return `${proto}://${host}${url.startsWith('/') ? '' : '/'}${url}`;
+  } catch {
+    return url;
+  }
+}
+
+function resolveImageUrl(req, rawUrl) {
+  if (typeof rawUrl !== 'string') return undefined;
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return undefined;
+  return toAbsolute(req, trimmed);
+}
+
+function shapePayloadData(data, nid, imageUrl) {
+  const isObject = Object.prototype.toString.call(data) === '[object Object]';
+  const base = isObject ? { ...data, nid } : { value: data != null ? String(data) : '', nid };
+  if (imageUrl) {
+    if (!base.imageUrl) base.imageUrl = imageUrl;
+    base.richImageUrl = imageUrl;
+  }
+  return base;
+}
+
 export async function registerToken(req, res) {
   try {
     const userId = req.user?._id || null;
@@ -43,8 +77,9 @@ export async function sendTestToMe(req, res) {
     const expoTokens = tokens.map(t => t.expoPushToken);
     if (!expoTokens.length) return res.status(404).json({ message: 'no_tokens' });
     const nid = 'nid_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-    const { badge, sound, channelId } = req.body || {};
-    const mkData = (d) => (Object.prototype.toString.call(d) === '[object Object]' ? { ...d, nid } : { value: d != null ? String(d) : '', nid });
+    const { badge, sound, channelId, imageUrl } = req.body || {};
+    const resolvedImage = resolveImageUrl(req, imageUrl);
+    const payloadData = shapePayloadData({ type: 'test', at: Date.now() }, nid, resolvedImage);
     let badges;
     if (typeof badge !== 'number') {
       // auto-compute per-user unread + 1 for each token
@@ -55,13 +90,27 @@ export async function sendTestToMe(req, res) {
       tokens: expoTokens,
       title: 'Hello from My Pet',
       body: 'This is a test push notification',
-      data: mkData({ type: 'test', at: Date.now() }),
+      data: payloadData,
       badge: typeof badge === 'number' ? badge : undefined,
       badges,
       sound: sound || undefined,
-      channelId: channelId || undefined
+      channelId: channelId || undefined,
+      imageUrl: resolvedImage
     });
-    try { await PushLog.create({ title: 'Test to me', body: 'Test push', data: { type: 'test', nid }, audience: { type: 'user', userId: userId?.toString() }, tokensCount: expoTokens.length, nid, result, sentAt: new Date(), createdBy: userId }); } catch {}
+    try {
+      await PushLog.create({
+        title: 'Test to me',
+        body: 'Test push',
+        data: payloadData,
+        imageUrl: resolvedImage,
+        audience: { type: 'user', userId: userId?.toString() },
+        tokensCount: expoTokens.length,
+        nid,
+        result,
+        sentAt: new Date(),
+        createdBy: userId
+      });
+    } catch {}
     return res.json({ ok: true, result });
   } catch (e) {
     console.error('[mobilePush][test] error', e);
@@ -71,8 +120,8 @@ export async function sendTestToMe(req, res) {
 
 export async function broadcastToAdmins(req, res) {
   try {
-    const { title, body, data, badge, sound, channelId } = req.body || {};
-    const mkData = (d) => (Object.prototype.toString.call(d) === '[object Object]' ? { ...d, nid } : { value: d != null ? String(d) : '', nid });
+    const { title, body, data, badge, sound, channelId, imageUrl } = req.body || {};
+    const resolvedImage = resolveImageUrl(req, imageUrl);
     if (!title || !body) return res.status(400).json({ message: 'title_and_body_required' });
     // Fetch tokens for users with admin role
     const q = await MobilePushToken.aggregate([
@@ -84,13 +133,29 @@ export async function broadcastToAdmins(req, res) {
     const tokens = q.map(d => d.expoPushToken);
     if (!tokens.length) return res.json({ ok: true, delivered: 0 });
     const nid = 'nid_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    const payloadData = shapePayloadData(data || {}, nid, resolvedImage);
     let badges;
     if (typeof badge !== 'number') {
       const tokenDocs = await MobilePushToken.find({ user: { $in: q.map(d => d.u._id) } }).lean().select('expoPushToken user');
       badges = await computeBadgesForTokens(tokenDocs);
     }
-    const result = await sendExpoPush({ tokens, title, body, data: mkData(data||{}), badge: typeof badge === 'number' ? badge : undefined, badges, sound: sound || undefined, channelId: channelId || undefined });
-    try { await PushLog.create({ title, body, data: { ...(data||{}), nid }, audience: { type: 'admins' }, tokensCount: tokens.length, nid, result, sentAt: new Date(), createdBy: req.user?._id, ...(sound? { sound }: {}) , ...(channelId? { channelId }: {}) }); } catch {}
+    const result = await sendExpoPush({ tokens, title, body, data: payloadData, badge: typeof badge === 'number' ? badge : undefined, badges, sound: sound || undefined, channelId: channelId || undefined, imageUrl: resolvedImage });
+    try {
+      await PushLog.create({
+        title,
+        body,
+        data: payloadData,
+        imageUrl: resolvedImage,
+        audience: { type: 'admins' },
+        tokensCount: tokens.length,
+        nid,
+        result,
+        sentAt: new Date(),
+        createdBy: req.user?._id,
+        ...(sound ? { sound } : {}),
+        ...(channelId ? { channelId } : {})
+      });
+    } catch {}
     return res.json({ ok: true, delivered: tokens.length, result });
   } catch (e) {
     console.error('[mobilePush][broadcastAdmins] error', e);
@@ -100,17 +165,33 @@ export async function broadcastToAdmins(req, res) {
 
 export async function broadcastAll(req, res) {
   try {
-    const { title, body, data, badge, sound, channelId } = req.body || {};
-    const mkData = (d) => (Object.prototype.toString.call(d) === '[object Object]' ? { ...d, nid } : { value: d != null ? String(d) : '', nid });
+    const { title, body, data, badge, sound, channelId, imageUrl } = req.body || {};
+    const resolvedImage = resolveImageUrl(req, imageUrl);
     if (!title || !body) return res.status(400).json({ message: 'title_and_body_required' });
     const docs = await MobilePushToken.find({}).lean().select('expoPushToken user');
     const tokens = docs.map(d => d.expoPushToken);
     if (!tokens.length) return res.json({ ok: true, delivered: 0 });
     const nid = 'nid_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    const payloadData = shapePayloadData(data || {}, nid, resolvedImage);
     let badges;
     if (typeof badge !== 'number') badges = await computeBadgesForTokens(docs);
-    const result = await sendExpoPush({ tokens, title, body, data: mkData(data||{}), badge: typeof badge === 'number' ? badge : undefined, badges, sound: sound || undefined, channelId: channelId || undefined });
-    try { await PushLog.create({ title, body, data: { ...(data||{}), nid }, audience: { type: 'all' }, tokensCount: tokens.length, nid, result, sentAt: new Date(), createdBy: req.user?._id, ...(sound? { sound }: {}) , ...(channelId? { channelId }: {}) }); } catch {}
+    const result = await sendExpoPush({ tokens, title, body, data: payloadData, badge: typeof badge === 'number' ? badge : undefined, badges, sound: sound || undefined, channelId: channelId || undefined, imageUrl: resolvedImage });
+    try {
+      await PushLog.create({
+        title,
+        body,
+        data: payloadData,
+        imageUrl: resolvedImage,
+        audience: { type: 'all' },
+        tokensCount: tokens.length,
+        nid,
+        result,
+        sentAt: new Date(),
+        createdBy: req.user?._id,
+        ...(sound ? { sound } : {}),
+        ...(channelId ? { channelId } : {})
+      });
+    } catch {}
     return res.json({ ok: true, delivered: tokens.length, result });
   } catch (e) {
     console.error('[mobilePush][broadcastAll] error', e);
@@ -120,13 +201,12 @@ export async function broadcastAll(req, res) {
 
 export async function sendToUser(req, res) {
   try {
-    const { title, body, data, userId, email, badge, sound, channelId } = req.body || {};
+    const { title, body, data, userId, email, badge, sound, channelId, imageUrl } = req.body || {};
     if (!title || !body) return res.status(400).json({ message: 'title_and_body_required' });
     if (!userId && !email) return res.status(400).json({ message: 'userId_or_email_required' });
-    const mkData = (d) => (Object.prototype.toString.call(d) === '[object Object]' ? { ...d, nid } : { value: d != null ? String(d) : '', nid });
-    const match = userId ? { user: userId } : {};
+    const resolvedImage = resolveImageUrl(req, imageUrl);
+
     if (email) {
-      // join users by email using aggregation to avoid circular import
       const q = await MobilePushToken.aggregate([
         { $lookup: { from: 'users', localField: 'user', foreignField: '_id', as: 'u' } },
         { $unwind: '$u' },
@@ -141,23 +221,55 @@ export async function sendToUser(req, res) {
         const tokenDocs = await MobilePushToken.find({ expoPushToken: { $in: tokens } }).lean().select('expoPushToken user');
         badges = await computeBadgesForTokens(tokenDocs);
       }
-      const result = await sendExpoPush({ tokens, title, body, data: mkData(data||{}), badge: typeof badge === 'number' ? badge : undefined, badges, sound: sound || undefined, channelId: channelId || undefined });
-      try { await PushLog.create({ title, body, data: { ...(data||{}), nid }, audience: { type: 'user', email }, tokensCount: tokens.length, nid, result, sentAt: new Date(), createdBy: req.user?._id, ...(sound? { sound }: {}) , ...(channelId? { channelId }: {}) }); } catch {}
-      return res.json({ ok: true, delivered: tokens.length, result });
-    } else {
-      const docs = await MobilePushToken.find(match).lean().select('expoPushToken');
-      const tokens = docs.map(d => d.expoPushToken);
-      if (!tokens.length) return res.status(404).json({ message: 'no_tokens_for_user' });
-      const nid = 'nid_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-      let badges;
-      if (typeof badge !== 'number') {
-        const tokenDocs = await MobilePushToken.find({ expoPushToken: { $in: tokens } }).lean().select('expoPushToken user');
-        badges = await computeBadgesForTokens(tokenDocs);
-      }
-      const result = await sendExpoPush({ tokens, title, body, data: mkData(data||{}), badge: typeof badge === 'number' ? badge : undefined, badges, sound: sound || undefined, channelId: channelId || undefined });
-      try { await PushLog.create({ title, body, data: { ...(data||{}), nid }, audience: { type: 'user', userId }, tokensCount: tokens.length, nid, result, sentAt: new Date(), createdBy: req.user?._id, ...(sound? { sound }: {}) , ...(channelId? { channelId }: {}) }); } catch {}
+      const payloadData = shapePayloadData(data || {}, nid, resolvedImage);
+      const result = await sendExpoPush({ tokens, title, body, data: payloadData, badge: typeof badge === 'number' ? badge : undefined, badges, sound: sound || undefined, channelId: channelId || undefined, imageUrl: resolvedImage });
+      try {
+        await PushLog.create({
+          title,
+          body,
+          data: payloadData,
+          imageUrl: resolvedImage,
+          audience: { type: 'user', email },
+          tokensCount: tokens.length,
+          nid,
+          result,
+          sentAt: new Date(),
+          createdBy: req.user?._id,
+          ...(sound ? { sound } : {}),
+          ...(channelId ? { channelId } : {})
+        });
+      } catch {}
       return res.json({ ok: true, delivered: tokens.length, result });
     }
+
+    const docs = await MobilePushToken.find({ user: userId }).lean().select('expoPushToken');
+    const tokens = docs.map(d => d.expoPushToken);
+    if (!tokens.length) return res.status(404).json({ message: 'no_tokens_for_user' });
+    const nid = 'nid_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    let badges;
+    if (typeof badge !== 'number') {
+      const tokenDocs = await MobilePushToken.find({ expoPushToken: { $in: tokens } }).lean().select('expoPushToken user');
+      badges = await computeBadgesForTokens(tokenDocs);
+    }
+    const payloadData = shapePayloadData(data || {}, nid, resolvedImage);
+    const result = await sendExpoPush({ tokens, title, body, data: payloadData, badge: typeof badge === 'number' ? badge : undefined, badges, sound: sound || undefined, channelId: channelId || undefined, imageUrl: resolvedImage });
+    try {
+      await PushLog.create({
+        title,
+        body,
+        data: payloadData,
+        imageUrl: resolvedImage,
+        audience: { type: 'user', userId },
+        tokensCount: tokens.length,
+        nid,
+        result,
+        sentAt: new Date(),
+        createdBy: req.user?._id,
+        ...(sound ? { sound } : {}),
+        ...(channelId ? { channelId } : {})
+      });
+    } catch {}
+    return res.json({ ok: true, delivered: tokens.length, result });
   } catch (e) {
     console.error('[mobilePush][sendToUser] error', e);
     return res.status(500).json({ message: 'send_failed' });
@@ -247,12 +359,13 @@ export async function getStats(req, res) {
 
 export async function schedulePush(req, res) {
   try {
-    const { title, body, data, audience, scheduleAt, badge, sound, channelId } = req.body || {};
+    const { title, body, data, audience, scheduleAt, badge, sound, channelId, imageUrl } = req.body || {};
     if (!title || !body) return res.status(400).json({ message: 'title_and_body_required' });
     if (!audience || !audience.type) return res.status(400).json({ message: 'audience_required' });
     const when = new Date(scheduleAt);
     if (isNaN(when.getTime())) return res.status(400).json({ message: 'invalid_scheduleAt' });
-    const doc = await ScheduledPush.create({ title, body, data, badge: typeof badge === 'number' ? badge : undefined, sound: sound || undefined, audience: channelId ? { ...audience, channelId } : audience, scheduleAt: when, createdBy: req.user?._id });
+    const resolvedImage = resolveImageUrl(req, imageUrl);
+    const doc = await ScheduledPush.create({ title, body, data, imageUrl: resolvedImage, badge: typeof badge === 'number' ? badge : undefined, sound: sound || undefined, audience: channelId ? { ...audience, channelId } : audience, scheduleAt: when, createdBy: req.user?._id });
     return res.json({ ok: true, scheduled: doc });
   } catch (e) {
     console.error('[mobilePush][schedule] error', e);
@@ -303,7 +416,7 @@ export async function listHistory(req, res) {
     pipeline.push({ $sort: { sentAt: -1 } });
     pipeline.push({ $skip: skip });
     pipeline.push({ $limit: lim });
-    pipeline.push({ $project: { _id: 1, title: 1, body: 1, data: 1, audience: 1, tokensCount: 1, nid: 1, sentAt: 1, createdBy: 1 } });
+    pipeline.push({ $project: { _id: 1, title: 1, body: 1, data: 1, imageUrl: 1, audience: 1, tokensCount: 1, nid: 1, sentAt: 1, createdBy: 1 } });
     const [rows, total] = await Promise.all([
       PushLog.aggregate(pipeline),
       PushLog.countDocuments(match)
