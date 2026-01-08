@@ -10,6 +10,7 @@ import Warehouse from '../models/Warehouse.js';
 import { getItemsList } from './mcgService.js';
 import { inventoryService } from './inventoryService.js';
 import McgItemBlock from '../models/McgItemBlock.js';
+import McgArchivedItem from '../models/McgArchivedItem.js';
 
 let _timer = null;
 let _inFlight = false;
@@ -64,8 +65,11 @@ async function oneRun() {
       blockedItemIds: new Set()
     };
     try {
-      const blockDocs = await McgItemBlock.find({}, 'barcode mcgItemId').lean();
-      for (const doc of blockDocs || []) {
+      const [blockDocs, archivedDocs] = await Promise.all([
+        McgItemBlock.find({}, 'barcode mcgItemId').lean(),
+        McgArchivedItem.find({}, 'barcode mcgItemId').lean()
+      ]);
+      for (const doc of [...(blockDocs || []), ...(archivedDocs || [])]) {
         const barcode = typeof doc?.barcode === 'string' ? doc.barcode.trim().toLowerCase() : '';
         const mcgId = typeof doc?.mcgItemId === 'string' ? doc.mcgItemId.trim().toLowerCase() : '';
         if (barcode) blockCtx.blockedBarcodes.add(barcode);

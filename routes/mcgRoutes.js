@@ -4,13 +4,14 @@ import Settings from '../models/Settings.js';
 import Product from '../models/Product.js';
 import Category from '../models/Category.js';
 import { getItemsList, setItemsList } from '../services/mcgService.js';
-import { collectMcgIdentifiers, persistMcgBlocklistEntries, propagateMcgDeletion } from '../services/mcgDeletionService.js';
+import { collectMcgIdentifiers, persistMcgBlocklistEntries, persistMcgArchiveEntries, propagateMcgDeletion } from '../services/mcgDeletionService.js';
 import Inventory from '../models/Inventory.js';
 import InventoryHistory from '../models/InventoryHistory.js';
 import Warehouse from '../models/Warehouse.js';
 import { inventoryService } from '../services/inventoryService.js';
 import { runMcgSyncOnce } from '../services/mcgSyncScheduler.js';
 import McgItemBlock from '../models/McgItemBlock.js';
+import McgArchivedItem from '../models/McgArchivedItem.js';
 
 const router = express.Router();
 
@@ -412,15 +413,18 @@ router.post('/sync-items', adminAuth, async (req, res) => {
 
     const taxMultiplier = Number(s?.mcg?.taxMultiplier || 1.18);
 
-    // Load blocklisted identifiers to avoid recreating deleted products
-    const blockDocs = await McgItemBlock.find({}, 'barcode mcgItemId').lean();
+    // Load blocklisted + archived identifiers to avoid recreating deleted products
+    const [blockDocs, archivedDocs] = await Promise.all([
+      McgItemBlock.find({}, 'barcode mcgItemId').lean(),
+      McgArchivedItem.find({}, 'barcode mcgItemId').lean()
+    ]);
     const blockedBarcodes = new Set();
     const blockedItemIds = new Set();
     const normalizeBlockKey = (value) => {
       if (value === undefined || value === null) return '';
       return String(value).trim().toLowerCase();
     };
-    for (const doc of blockDocs || []) {
+    for (const doc of [...(blockDocs || []), ...(archivedDocs || [])]) {
       const bc = normalizeBlockKey(doc?.barcode);
       const id = normalizeBlockKey(doc?.mcgItemId);
       if (bc) blockedBarcodes.add(bc);
@@ -962,6 +966,7 @@ router.post('/delete-product/:productId', adminAuth, async (req, res) => {
     const { productId } = req.params;
     const includeVariants = req.body?.includeVariants !== false;
     const blocklist = req.body?.blocklist !== false;
+    const archive = req.body?.archive !== false;
     const reasonRaw = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
     const reason = reasonRaw || 'manual_delete';
     const overrideMcgItemId = (req.body?.mcgItemId || '').toString().trim();
@@ -999,6 +1004,16 @@ router.post('/delete-product/:productId', adminAuth, async (req, res) => {
 
     if (blocklist) {
       await persistMcgBlocklistEntries(product, req.user?._id, reason, {
+        identifiers,
+        includeVariants,
+        additionalIdentifiers,
+        overrideMcgItemId: overrideMcgItemId || undefined,
+        overrideBarcode: overrideBarcode || undefined
+      });
+    }
+
+    if (archive) {
+      await persistMcgArchiveEntries(product, req.user?._id, reason, {
         identifiers,
         includeVariants,
         additionalIdentifiers,

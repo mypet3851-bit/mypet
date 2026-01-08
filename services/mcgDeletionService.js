@@ -1,4 +1,5 @@
 import McgItemBlock from '../models/McgItemBlock.js';
+import McgArchivedItem from '../models/McgArchivedItem.js';
 import Settings from '../models/Settings.js';
 import { deleteItems as deleteMcgItems } from './mcgService.js';
 
@@ -176,6 +177,59 @@ export async function persistMcgBlocklistEntries(productDoc, userId, reason = 'h
         {
           $set: { ...updateBase, barcode },
           $setOnInsert: { ...insertBase, barcode }
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      )
+    );
+  }
+
+  await Promise.allSettled(ops);
+}
+
+export async function persistMcgArchiveEntries(productDoc, userId, reason = 'manual_archive', options = {}) {
+  const { identifiers, includeVariants = true, additionalIdentifiers, overrideMcgItemId, overrideBarcode, noteOverride } = options;
+  const collected = identifiers || collectMcgIdentifiers(productDoc, {
+    includeVariants,
+    additionalIdentifiers,
+    overrideMcgItemId,
+    overrideBarcode
+  });
+  const { mcgIds, barcodes } = collected;
+  if (!mcgIds.size && !barcodes.size) return;
+
+  const now = new Date();
+  const defaultNote = 'Archived via admin delete';
+  const note = typeof noteOverride === 'string' && noteOverride.trim() ? noteOverride.trim() : defaultNote;
+
+  const base = {
+    reason,
+    notes: note,
+    lastProductId: productDoc?._id,
+    lastProductName: productDoc?.name || '',
+    archivedAt: now,
+    ...(userId ? { archivedBy: userId } : {})
+  };
+
+  const ops = [];
+  for (const mcgId of mcgIds) {
+    ops.push(
+      McgArchivedItem.findOneAndUpdate(
+        { mcgItemId: mcgId },
+        {
+          $set: { ...base, mcgItemId: mcgId },
+          $setOnInsert: { ...base, mcgItemId: mcgId }
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      )
+    );
+  }
+  for (const barcode of barcodes) {
+    ops.push(
+      McgArchivedItem.findOneAndUpdate(
+        { barcode },
+        {
+          $set: { ...base, barcode },
+          $setOnInsert: { ...base, barcode }
         },
         { upsert: true, new: true, setDefaultsOnInsert: true }
       )
