@@ -12,6 +12,7 @@ import { inventoryService } from '../services/inventoryService.js';
 import { runMcgSyncOnce } from '../services/mcgSyncScheduler.js';
 import McgItemBlock from '../models/McgItemBlock.js';
 import McgArchivedItem from '../models/McgArchivedItem.js';
+import { hasArchivedAttribute } from '../utils/mcgAttributes.js';
 
 const router = express.Router();
 
@@ -392,6 +393,7 @@ router.post('/sync-items', adminAuth, async (req, res) => {
   let skippedByMissingKey = 0;
   let skippedAsDuplicate = 0;
   let skippedByBlocklist = 0;
+  let skippedByArchivedAttribute = 0;
   let incomingTotal = 0;
   // Maintain seen set across the whole run to avoid duplicates across pages (by mcgItemId only)
   const seenIds = new Set();
@@ -453,6 +455,10 @@ router.post('/sync-items', adminAuth, async (req, res) => {
       const toInsert = [];
       const reactivated = [];
       for (const it of items) {
+        if (hasArchivedAttribute(it)) {
+          skippedByArchivedAttribute++;
+          continue;
+        }
       const mcgId = ((it?.ItemID ?? it?.id ?? it?.itemId ?? it?.item_id ?? '') + '').trim();
       const barcode = ((it?.Barcode ?? it?.barcode ?? it?.item_code ?? '') + '').trim();
         if (!mcgId && !barcode) { skippedByMissingKey++; continue; }
@@ -612,6 +618,7 @@ router.post('/sync-items', adminAuth, async (req, res) => {
         existingByBarcode: undefined,
         toInsert: createdAll.length,
         skippedByMissingKey,
+        skippedByArchivedAttribute,
         skippedByBlocklist,
         skippedAsDuplicate,
         sampleNew: createdAll.slice(0, 3).map(x => ({ name: x.name, mcgItemId: x.mcgItemId, mcgBarcode: x.mcgBarcode })),
@@ -699,6 +706,7 @@ router.post('/sync-items', adminAuth, async (req, res) => {
       reactivated: reactivatedAll.length,
       skipped: Math.max(0, incomingTotal - createdAll.length - reactivatedAll.length),
       skippedByMissingKey,
+      skippedByArchivedAttribute,
       skippedByBlocklist,
       skippedAsDuplicate,
       sampleNew: createdAll.slice(0, 3).map(x => ({ name: x.name, mcgItemId: x.mcgItemId, mcgBarcode: x.mcgBarcode })),

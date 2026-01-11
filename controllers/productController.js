@@ -118,7 +118,7 @@ import { realTimeEventService } from '../services/realTimeEventService.js';
 import { deepseekTranslate, deepseekTranslateBatch, isDeepseekConfigured } from '../services/translate/deepseek.js';
 import { getItemQuantity as rivhitGetQty, testConnectivity as rivhitTest } from '../services/rivhitService.js';
 import { setItemsList } from '../services/mcgService.js';
-import { collectMcgIdentifiers, persistMcgBlocklistEntries, persistMcgArchiveEntries, propagateMcgDeletion } from '../services/mcgDeletionService.js';
+import { collectMcgIdentifiers, persistMcgBlocklistEntries, persistMcgArchiveEntries, propagateMcgDeletion, markMcgItemsArchived } from '../services/mcgDeletionService.js';
 // Currency conversion disabled for product storage/display; prices are stored and served as-is in store currency
 
 // Get all products
@@ -1688,6 +1688,25 @@ async function mirrorDeletionInMcg(productDoc, userId, reason = 'hard_delete', o
     };
   }
 
+  let archiveResult = null;
+  try {
+    const archiveAds = reason === 'soft_delete'
+      ? 'Archived product (soft delete)'
+      : 'Archived product (removed from catalog)';
+    archiveResult = await markMcgItemsArchived(productDoc, {
+      identifiers,
+      groupOverride,
+      allowWhenDisabled: true,
+      itemAds: archiveAds
+    });
+  } catch (archiveError) {
+    archiveResult = {
+      attempted: true,
+      ok: false,
+      error: archiveError?.message || 'mcg_archive_failed'
+    };
+  }
+
   try {
     const response = await propagateMcgDeletion(productDoc, { identifiers, allowWhenDisabled: true, groupOverride });
     return {
@@ -1695,7 +1714,8 @@ async function mirrorDeletionInMcg(productDoc, userId, reason = 'hard_delete', o
       ok: !response?.skipped && response?.ok !== false,
       skipped: !!response?.skipped,
       identifiers: { mcgItemIds, barcodes, total },
-      response
+      response,
+      archive: archiveResult
     };
   } catch (error) {
     try { console.warn('[products][delete] mcg propagation failed:', error?.message || error); } catch {}
@@ -1703,7 +1723,8 @@ async function mirrorDeletionInMcg(productDoc, userId, reason = 'hard_delete', o
       attempted: true,
       ok: false,
       error: error?.message || 'mcg_delete_failed',
-      identifiers: { mcgItemIds, barcodes, total }
+      identifiers: { mcgItemIds, barcodes, total },
+      archive: archiveResult
     };
   }
 }
