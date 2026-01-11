@@ -434,6 +434,11 @@ settingsSchema.add({
       type: [String],
       default: ['07:00','08:00','09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00']
     },
+    // Optional per-day overrides: map of YYYY-MM-DD -> custom slot list
+    dateSlotOverrides: {
+      type: mongoose.Schema.Types.Mixed,
+      default: () => ({})
+    },
     // Optional override for per-slot capacity; defaults to env BOOKING_SLOT_CAPACITY when empty
     slotCapacity: { type: Number, default: 4, min: 1, max: 50 }
   }
