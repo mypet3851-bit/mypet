@@ -428,7 +428,14 @@ settingsSchema.add({
     // Explicit list of dates (YYYY-MM-DD) that are blocked when `useDateWhitelist` is false
     disabledDates: { type: [String], default: [] },
     // How many days ahead to expose by default when generating availability (fallback)
-    bookingWindowDays: { type: Number, default: 30 }
+    bookingWindowDays: { type: Number, default: 30 },
+    // Optional custom slot list (HH:mm). When empty, fallback slots are used server-side
+    slots: {
+      type: [String],
+      default: ['07:00','08:00','09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00']
+    },
+    // Optional override for per-slot capacity; defaults to env BOOKING_SLOT_CAPACITY when empty
+    slotCapacity: { type: Number, default: 4, min: 1, max: 50 }
   }
 });
 
