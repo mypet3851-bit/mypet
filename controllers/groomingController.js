@@ -9,7 +9,6 @@ const SERVICES = [
   { id: 'nails', name: 'Nail Trim', durationMin: 15, price: 10 },
 ];
 
-// Generate next 14 days availability (simple static slots)
 function generateDates(days = 14) {
   const out = [];
   const start = new Date();
@@ -20,15 +19,37 @@ function generateDates(days = 14) {
   return out;
 }
 
-const BASE_SLOTS = ['07:00','08:00','09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00'];
-// Capacity per slot (can override via env BOOKING_SLOT_CAPACITY)
-const SLOT_CAPACITY = parseInt(process.env.BOOKING_SLOT_CAPACITY || '4', 10);
+const DEFAULT_SLOTS = ['07:00','08:00','09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00'];
+const DEFAULT_SLOT_CAPACITY = parseInt(process.env.BOOKING_SLOT_CAPACITY || '4', 10);
 
-// Compute available dates considering admin-configured settings
-async function computeAvailableDates(days = 14) {
+const sanitizeSlotList = (list) => {
+  if (!Array.isArray(list)) return [];
+  return list
+    .map(v => (v == null ? '' : String(v).trim()))
+    .filter(Boolean)
+    .filter(v => /^\d{2}:\d{2}$/.test(v));
+};
+
+async function loadGroomingConfig() {
   try {
     const settings = await Settings.findOne().select('grooming');
     const grooming = settings?.grooming || {};
+    const slots = sanitizeSlotList(grooming.slots);
+    const slotCapacity = Number(grooming.slotCapacity) > 0 ? Number(grooming.slotCapacity) : DEFAULT_SLOT_CAPACITY;
+    return { grooming, slots: slots.length ? slots : DEFAULT_SLOTS, slotCapacity };
+  } catch {
+    return { grooming: {}, slots: DEFAULT_SLOTS, slotCapacity: DEFAULT_SLOT_CAPACITY };
+  }
+}
+
+// Compute available dates considering admin-configured settings
+async function computeAvailableDates(days = 14, groomingOverride) {
+  try {
+    let grooming = groomingOverride;
+    if (!grooming) {
+      const settings = await Settings.findOne().select('grooming');
+      grooming = settings?.grooming || {};
+    }
     // Base window
     const windowDays = typeof grooming.bookingWindowDays === 'number' && grooming.bookingWindowDays > 0 ? grooming.bookingWindowDays : days;
     const baseDates = generateDates(windowDays);
@@ -48,7 +69,8 @@ async function computeAvailableDates(days = 14) {
 
 export async function getAvailability(req, res) {
   try {
-    const dates = await computeAvailableDates(14);
+    const { grooming, slots: slotList, slotCapacity } = await loadGroomingConfig();
+    const dates = await computeAvailableDates(14, grooming);
     // Fetch existing bookings to compute remaining capacity (exclude cancelled)
     const existing = await Booking.find({ date: { $in: dates }, status: { $ne: 'cancelled' } }).select('date time').lean();
     // Build count map
@@ -60,15 +82,15 @@ export async function getAvailability(req, res) {
     const slots = {};
     const slotRemaining = {};
     dates.forEach(d => {
-      slots[d] = BASE_SLOTS; // keep legacy array of strings for compatibility
+      slots[d] = slotList;
       slotRemaining[d] = {};
-      BASE_SLOTS.forEach(t => {
+      slotList.forEach(t => {
         const used = countMap[d]?.[t] || 0;
-        const remaining = Math.max(SLOT_CAPACITY - used, 0);
+        const remaining = Math.max(slotCapacity - used, 0);
         slotRemaining[d][t] = remaining;
       });
     });
-    res.json({ dates, slots, slotRemaining, capacity: SLOT_CAPACITY, services: SERVICES });
+    res.json({ dates, slots, slotRemaining, capacity: slotCapacity, services: SERVICES });
   } catch (e) {
     res.status(500).json({ message: 'Failed to load availability', error: e?.message || e });
   }
@@ -80,18 +102,18 @@ export async function createBooking(req, res) {
     if (!date || !time || !Array.isArray(services) || !services.length) {
       return res.status(400).json({ message: 'Missing required fields' });
     }
-    // Basic validation: ensure date is in availability range
+    const { slots: slotList, slotCapacity } = await loadGroomingConfig();
     const dates = await computeAvailableDates(30);
     if (!dates.includes(date)) {
       return res.status(400).json({ message: 'Date out of range' });
     }
-    if (!BASE_SLOTS.includes(time)) {
+    if (!slotList.includes(time)) {
       return res.status(400).json({ message: 'Invalid time slot' });
     }
     // Capacity check (exclude cancelled bookings)
     const existingCount = await Booking.countDocuments({ date, time, status: { $ne: 'cancelled' } });
-    if (existingCount >= SLOT_CAPACITY) {
-      return res.status(409).json({ message: 'Slot full', capacity: SLOT_CAPACITY, remaining: 0 });
+    if (existingCount >= slotCapacity) {
+      return res.status(409).json({ message: 'Slot full', capacity: slotCapacity, remaining: 0 });
     }
     // Map incoming service ids or objects
     let normalizedServices = [];
@@ -126,8 +148,8 @@ export async function createBooking(req, res) {
       });
     } catch {}
     // Compute remaining after creation
-    const remainingAfter = Math.max(SLOT_CAPACITY - (existingCount + 1), 0);
-    res.status(201).json({ booking, capacity: SLOT_CAPACITY, remaining: remainingAfter });
+    const remainingAfter = Math.max(slotCapacity - (existingCount + 1), 0);
+    res.status(201).json({ booking, capacity: slotCapacity, remaining: remainingAfter });
   } catch (e) {
     console.error('[booking][error]', e);
     res.status(500).json({ message: 'Failed to create booking', error: e?.message || e });
@@ -289,13 +311,14 @@ export async function rescheduleBooking(req, res) {
       return res.status(400).json({ message: 'Cannot reschedule a completed or cancelled booking' });
     }
     // Validate new date/time in availability range
+    const { slots: slotList, slotCapacity } = await loadGroomingConfig();
     const dates = await computeAvailableDates(30);
     if (!dates.includes(newDate)) return res.status(400).json({ message: 'Date out of range' });
-    if (!BASE_SLOTS.includes(newTime)) return res.status(400).json({ message: 'Invalid time slot' });
+    if (!slotList.includes(newTime)) return res.status(400).json({ message: 'Invalid time slot' });
     // Capacity check (exclude cancelled) for target slot excluding current booking if same slot
     const existingCount = await Booking.countDocuments({ date: newDate, time: newTime, status: { $ne: 'cancelled' }, _id: { $ne: booking._id } });
-    if (existingCount >= SLOT_CAPACITY) {
-      return res.status(409).json({ message: 'Target slot full', capacity: SLOT_CAPACITY, remaining: 0 });
+    if (existingCount >= slotCapacity) {
+      return res.status(409).json({ message: 'Target slot full', capacity: slotCapacity, remaining: 0 });
     }
     const beforeDate = booking.date;
     const beforeTime = booking.time;
@@ -312,8 +335,8 @@ export async function rescheduleBooking(req, res) {
         meta: { from: { date: beforeDate, time: beforeTime }, to: { date: newDate, time: newTime } }
       });
     } catch {}
-    const remainingAfter = Math.max(SLOT_CAPACITY - (existingCount + 1), 0);
-    res.json({ booking, capacity: SLOT_CAPACITY, remaining: remainingAfter });
+    const remainingAfter = Math.max(slotCapacity - (existingCount + 1), 0);
+    res.json({ booking, capacity: slotCapacity, remaining: remainingAfter });
   } catch (e) {
     res.status(500).json({ message: 'Failed to reschedule booking', error: e?.message || e });
   }

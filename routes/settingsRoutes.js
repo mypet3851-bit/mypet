@@ -396,12 +396,22 @@ router.get('/grooming', adminAuth, async (req, res) => {
     let settings = await Settings.findOne();
     if (!settings) settings = await Settings.create({});
     const g = settings.grooming || { useDateWhitelist: false, enabledDates: [], disabledDates: [], bookingWindowDays: 30 };
+    const toSlotList = (arr) => {
+      if (!Array.isArray(arr)) return [];
+      return arr
+        .map(v => (v == null ? '' : String(v).trim()))
+        .filter(Boolean)
+        .filter(v => /^\d{2}:\d{2}$/.test(v));
+    };
+    const slots = toSlotList(g.slots);
     // Normalize arrays and values
     const norm = {
       useDateWhitelist: !!g.useDateWhitelist,
       enabledDates: Array.isArray(g.enabledDates) ? g.enabledDates.map(String) : [],
       disabledDates: Array.isArray(g.disabledDates) ? g.disabledDates.map(String) : [],
-      bookingWindowDays: Number(g.bookingWindowDays) || 30
+      bookingWindowDays: Number(g.bookingWindowDays) || 30,
+      slots: slots.length ? slots : ['07:00','08:00','09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00'],
+      slotCapacity: Number(g.slotCapacity) > 0 ? Number(g.slotCapacity) : 4
     };
     res.json(norm);
   } catch (error) {
@@ -422,11 +432,23 @@ router.put('/grooming', settingsWriteGuard, async (req, res) => {
         .filter(Boolean)
         .filter(s => /^\d{4}-\d{2}-\d{2}$/.test(s));
     };
+    const toSlotList = (arr) => {
+      if (!Array.isArray(arr)) return [];
+      return arr
+        .map(v => (v == null ? '' : String(v).trim()))
+        .filter(Boolean)
+        .filter(v => /^\d{2}:\d{2}$/.test(v));
+    };
+    const sanitizedSlots = toSlotList(inc.slots);
+    const existingSlots = toSlotList(settings.grooming?.slots);
+    const slotsFinal = sanitizedSlots.length ? sanitizedSlots : (existingSlots.length ? existingSlots : ['07:00','08:00','09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00']);
     const next = {
       useDateWhitelist: !!inc.useDateWhitelist,
       enabledDates: toDateList(inc.enabledDates),
       disabledDates: toDateList(inc.disabledDates),
-      bookingWindowDays: Number(inc.bookingWindowDays) > 0 ? Number(inc.bookingWindowDays) : (settings.grooming?.bookingWindowDays || 30)
+      bookingWindowDays: Number(inc.bookingWindowDays) > 0 ? Number(inc.bookingWindowDays) : (settings.grooming?.bookingWindowDays || 30),
+      slots: slotsFinal,
+      slotCapacity: Number(inc.slotCapacity) > 0 ? Number(inc.slotCapacity) : (settings.grooming?.slotCapacity || 4)
     };
     settings.grooming = next;
     try { settings.markModified('grooming'); } catch {}
@@ -443,7 +465,19 @@ router.get('/grooming', adminAuth, async (req, res) => {
     let settings = await Settings.findOne();
     if (!settings) settings = await Settings.create({});
     const grooming = settings.grooming || { useDateWhitelist: false, enabledDates: [], disabledDates: [], bookingWindowDays: 30 };
-    res.json(grooming);
+    const toSlotList = (arr) => {
+      if (!Array.isArray(arr)) return [];
+      return arr
+        .map(v => (v == null ? '' : String(v).trim()))
+        .filter(Boolean)
+        .filter(v => /^\d{2}:\d{2}$/.test(v));
+    };
+    const slots = toSlotList(grooming.slots);
+    res.json({
+      ...grooming,
+      slots: slots.length ? slots : ['07:00','08:00','09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00'],
+      slotCapacity: Number(grooming.slotCapacity) > 0 ? Number(grooming.slotCapacity) : 4
+    });
   } catch (e) {
     res.status(500).json({ message: e.message });
   }
@@ -461,6 +495,18 @@ router.put('/grooming', settingsWriteGuard, async (req, res) => {
     if (typeof inc.bookingWindowDays !== 'undefined') {
       const n = Number(inc.bookingWindowDays);
       settings.grooming.bookingWindowDays = Number.isFinite(n) && n > 0 ? n : settings.grooming.bookingWindowDays || 30;
+    }
+    if (Array.isArray(inc.slots)) {
+      settings.grooming.slots = inc.slots
+        .map(v => (v == null ? '' : String(v).trim()))
+        .filter(Boolean)
+        .filter(v => /^\d{2}:\d{2}$/.test(v));
+    }
+    if (typeof inc.slotCapacity !== 'undefined') {
+      const c = Number(inc.slotCapacity);
+      if (Number.isFinite(c) && c > 0) {
+        settings.grooming.slotCapacity = Math.min(Math.max(1, Math.round(c)), 50);
+      }
     }
     try { settings.markModified('grooming'); } catch {}
     await settings.save();
