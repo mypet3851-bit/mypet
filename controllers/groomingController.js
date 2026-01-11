@@ -52,7 +52,7 @@ const getSlotsForDate = (date, fallbackSlots, overridesMap) => {
 
 async function loadGroomingConfig() {
   try {
-    const settings = await Settings.findOne().select('grooming');
+    const settings = await Settings.findOne().sort({ updatedAt: -1 }).select('grooming');
     const grooming = settings?.grooming || {};
     const slots = sanitizeSlotList(grooming.slots);
     const slotList = slots.length ? slots : DEFAULT_SLOTS;
@@ -69,7 +69,7 @@ async function computeAvailableDates(days = 14, groomingOverride) {
   try {
     let grooming = groomingOverride;
     if (!grooming) {
-      const settings = await Settings.findOne().select('grooming');
+      const settings = await Settings.findOne().sort({ updatedAt: -1 }).select('grooming');
       grooming = settings?.grooming || {};
     }
     // Base window

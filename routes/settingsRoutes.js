@@ -424,7 +424,7 @@ router.put('/inventory', settingsWriteGuard, async (req, res) => {
 // Grooming availability settings: GET (admin only)
 router.get('/grooming', adminAuth, async (req, res) => {
   try {
-    let settings = await Settings.findOne();
+    let settings = await Settings.findOne().sort({ updatedAt: -1 });
     if (!settings) settings = await Settings.create({});
     const g = settings.grooming || { useDateWhitelist: false, enabledDates: [], disabledDates: [], bookingWindowDays: 30 };
     const slots = normalizeSlotList(g.slots);
@@ -477,7 +477,7 @@ router.put('/grooming', settingsWriteGuard, async (req, res) => {
 // Grooming availability settings (admin)
 router.get('/grooming', adminAuth, async (req, res) => {
   try {
-    let settings = await Settings.findOne();
+    let settings = await Settings.findOne().sort({ updatedAt: -1 });
     if (!settings) settings = await Settings.create({});
     const grooming = settings.grooming || { useDateWhitelist: false, enabledDates: [], disabledDates: [], bookingWindowDays: 30 };
     const slots = normalizeSlotList(grooming.slots);
