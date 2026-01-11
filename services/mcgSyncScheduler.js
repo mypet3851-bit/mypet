@@ -11,6 +11,7 @@ import { getItemsList } from './mcgService.js';
 import { inventoryService } from './inventoryService.js';
 import McgItemBlock from '../models/McgItemBlock.js';
 import McgArchivedItem from '../models/McgArchivedItem.js';
+import { hasArchivedAttribute } from '../utils/mcgAttributes.js';
 
 let _timer = null;
 let _inFlight = false;
@@ -58,7 +59,7 @@ async function oneRun() {
     const baseUrl = String(mcg.baseUrl || '').trim();
     const isUpli = apiFlavor === 'uplicali' || /apis\.uplicali\.com/i.test(baseUrl) || /SuperMCG\/MCG_API/i.test(baseUrl);
 
-    let processed = 0, updated = 0, created = 0, skippedNoMatch = 0, errors = 0, autoCreated = 0, skippedBlocked = 0;
+    let processed = 0, updated = 0, created = 0, skippedNoMatch = 0, errors = 0, autoCreated = 0, skippedBlocked = 0, skippedArchivedAttr = 0;
 
     const blockCtx = {
       blockedBarcodes: new Set(),
@@ -102,6 +103,11 @@ async function oneRun() {
       for (const it of items) {
         try {
           processed++;
+          if (hasArchivedAttribute(it)) {
+            skippedArchivedAttr++;
+            continue;
+          }
+
           const mcgId = ((it?.ItemID ?? it?.id ?? it?.itemId ?? it?.item_id ?? '') + '').trim();
           const barcode = ((it?.Barcode ?? it?.barcode ?? it?.item_code ?? '') + '').trim();
           const qty = Number(it?.StockQuantity ?? it?.stock ?? it?.item_inventory ?? 0);
@@ -264,7 +270,7 @@ async function oneRun() {
       }
     }
 
-  try { console.log('[mcg][auto-pull] processed=%d updated=%d createdInv=%d autoCreatedProducts=%d skipped=%d skippedBlocklist=%d errors=%d', processed, updated, created, autoCreated, skippedNoMatch, skippedBlocked, errors); } catch {}
+  try { console.log('[mcg][auto-pull] processed=%d updated=%d createdInv=%d autoCreatedProducts=%d skipped=%d skippedBlocklist=%d skippedArchived=%d errors=%d', processed, updated, created, autoCreated, skippedNoMatch, skippedBlocked, skippedArchivedAttr, errors); } catch {}
     _lastRunAt = Date.now();
   } catch (e) {
     try { console.warn('[mcg][auto-pull] failed:', e?.message || e); } catch {}

@@ -1,7 +1,7 @@
 import McgItemBlock from '../models/McgItemBlock.js';
 import McgArchivedItem from '../models/McgArchivedItem.js';
 import Settings from '../models/Settings.js';
-import { deleteItems as deleteMcgItems } from './mcgService.js';
+import { deleteItems as deleteMcgItems, setItemsList as setMcgItemsList } from './mcgService.js';
 
 const normalize = (value) => {
   if (value === undefined || value === null) return '';
@@ -321,4 +321,123 @@ export async function propagateMcgDeletion(productDoc, options = {}) {
   } catch {}
   const base = (res && typeof res === 'object') ? res : {};
   return { ...base, ...normalized };
+}
+
+export async function markMcgItemsArchived(productDoc, options = {}) {
+  const {
+    identifiers,
+    includeVariants = true,
+    additionalIdentifiers,
+    overrideMcgItemId,
+    overrideBarcode,
+    settingsDoc,
+    groupOverride,
+    allowWhenDisabled = false,
+    attributes,
+    extraAttributes,
+    archiveTag = 'archived',
+    itemAds
+  } = options;
+
+  const collected = identifiers || collectMcgIdentifiers(productDoc, {
+    includeVariants,
+    additionalIdentifiers,
+    overrideMcgItemId,
+    overrideBarcode
+  });
+  const entries = Array.isArray(collected?.entries) ? collected.entries : [];
+  if (!entries.length) {
+    return { skipped: true, reason: 'no_identifiers' };
+  }
+
+  const seen = new Set();
+  const unique = [];
+  for (const entry of entries) {
+    const mcgId = normalize(entry?.mcgItemId);
+    const barcode = normalize(entry?.barcode);
+    if (!mcgId && !barcode) continue;
+    const key = `${mcgId || ''}::${barcode || ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push({ mcgId, barcode });
+  }
+  if (!unique.length) {
+    return { skipped: true, reason: 'no_identifiers' };
+  }
+
+  let resolvedGroup = Number.isFinite(Number(groupOverride)) ? Number(groupOverride) : undefined;
+  let mcgConfig = settingsDoc?.mcg ?? settingsDoc ?? null;
+  if (!mcgConfig) {
+    const settings = await Settings.findOne().select('mcg').lean();
+    mcgConfig = settings?.mcg || null;
+  }
+  let disabled = false;
+  if (mcgConfig) {
+    if (mcgConfig.enabled === false) disabled = true;
+    if (resolvedGroup === undefined) {
+      const parsed = Number(mcgConfig.group);
+      if (Number.isFinite(parsed)) resolvedGroup = parsed;
+    }
+  }
+  if (disabled && !allowWhenDisabled) {
+    return { skipped: true, reason: 'mcg_disabled' };
+  }
+
+  const attrSet = new Set();
+  const ingestAttr = (value) => {
+    if (value === undefined || value === null) return;
+    if (Array.isArray(value)) {
+      value.forEach((val) => ingestAttr(val));
+      return;
+    }
+    if (typeof value === 'string') {
+      value
+        .split(/[,;|]/)
+        .map((segment) => segment.trim().toLowerCase())
+        .filter(Boolean)
+        .forEach((segment) => attrSet.add(segment));
+      return;
+    }
+    ingestAttr(String(value));
+  };
+  ingestAttr(attributes);
+  ingestAttr(extraAttributes);
+  const normalizedArchiveTag = String(archiveTag || 'archived').trim().toLowerCase();
+  if (normalizedArchiveTag) attrSet.add(normalizedArchiveTag);
+  if (!attrSet.size) attrSet.add('archived');
+  const attributeValue = Array.from(attrSet).join(',');
+
+  const adsValue = typeof itemAds === 'string' && itemAds.trim()
+    ? itemAds.trim()
+    : 'Archived product (removed from catalog)';
+
+  const payload = unique.map(({ mcgId, barcode }) => {
+    const doc = { item_inventory: 0 };
+    if (mcgId) doc.item_id = mcgId;
+    if (barcode) doc.item_code = barcode;
+    doc.item_attribute = attributeValue;
+    doc.item_ads = adsValue;
+    return doc;
+  });
+
+  try {
+    const mcgResponse = await setMcgItemsList(payload, resolvedGroup);
+    try { console.log('[mcg][archive] tagged=%d attrs=%s', payload.length, attributeValue); } catch {}
+    return {
+      attempted: true,
+      ok: true,
+      updatedCount: payload.length,
+      attributes: attributeValue,
+      itemAds: adsValue,
+      identifiers: { total: unique.length },
+      mcgResponse
+    };
+  } catch (error) {
+    try { console.warn('[mcg][archive] failed:', error?.message || error); } catch {}
+    return {
+      attempted: true,
+      ok: false,
+      error: error?.message || 'mcg_archive_failed'
+    };
+  }
 }
