@@ -21,6 +21,7 @@ function generateDates(days = 14) {
 
 const DEFAULT_SLOTS = ['07:00','08:00','09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00'];
 const DEFAULT_SLOT_CAPACITY = parseInt(process.env.BOOKING_SLOT_CAPACITY || '4', 10);
+const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 const sanitizeSlotList = (list) => {
   if (!Array.isArray(list)) return [];
@@ -30,15 +31,36 @@ const sanitizeSlotList = (list) => {
     .filter(v => /^\d{2}:\d{2}$/.test(v));
 };
 
+const sanitizeDateSlotOverrides = (value) => {
+  if (!value || typeof value !== 'object') return {};
+  const source = value instanceof Map ? Object.fromEntries(value) : value;
+  return Object.entries(source).reduce((acc, [date, slots]) => {
+    if (!DATE_PATTERN.test(date)) return acc;
+    const normalizedSlots = sanitizeSlotList(slots);
+    if (!normalizedSlots.length) return acc;
+    acc[date] = normalizedSlots;
+    return acc;
+  }, {});
+};
+
+const getSlotsForDate = (date, fallbackSlots, overridesMap) => {
+  if (!overridesMap) return fallbackSlots;
+  const override = overridesMap[date];
+  if (Array.isArray(override) && override.length) return override;
+  return fallbackSlots;
+};
+
 async function loadGroomingConfig() {
   try {
     const settings = await Settings.findOne().select('grooming');
     const grooming = settings?.grooming || {};
     const slots = sanitizeSlotList(grooming.slots);
+    const slotList = slots.length ? slots : DEFAULT_SLOTS;
     const slotCapacity = Number(grooming.slotCapacity) > 0 ? Number(grooming.slotCapacity) : DEFAULT_SLOT_CAPACITY;
-    return { grooming, slots: slots.length ? slots : DEFAULT_SLOTS, slotCapacity };
+    const dateSlotOverrides = sanitizeDateSlotOverrides(grooming.dateSlotOverrides);
+    return { grooming, slots: slotList, slotCapacity, dateSlotOverrides };
   } catch {
-    return { grooming: {}, slots: DEFAULT_SLOTS, slotCapacity: DEFAULT_SLOT_CAPACITY };
+    return { grooming: {}, slots: DEFAULT_SLOTS, slotCapacity: DEFAULT_SLOT_CAPACITY, dateSlotOverrides: {} };
   }
 }
 
@@ -69,7 +91,7 @@ async function computeAvailableDates(days = 14, groomingOverride) {
 
 export async function getAvailability(req, res) {
   try {
-    const { grooming, slots: slotList, slotCapacity } = await loadGroomingConfig();
+    const { grooming, slots: slotList, slotCapacity, dateSlotOverrides } = await loadGroomingConfig();
     const dates = await computeAvailableDates(14, grooming);
     // Fetch existing bookings to compute remaining capacity (exclude cancelled)
     const existing = await Booking.find({ date: { $in: dates }, status: { $ne: 'cancelled' } }).select('date time').lean();
@@ -82,9 +104,10 @@ export async function getAvailability(req, res) {
     const slots = {};
     const slotRemaining = {};
     dates.forEach(d => {
-      slots[d] = slotList;
+      const dailySlots = getSlotsForDate(d, slotList, dateSlotOverrides);
+      slots[d] = dailySlots;
       slotRemaining[d] = {};
-      slotList.forEach(t => {
+      dailySlots.forEach(t => {
         const used = countMap[d]?.[t] || 0;
         const remaining = Math.max(slotCapacity - used, 0);
         slotRemaining[d][t] = remaining;
@@ -102,12 +125,13 @@ export async function createBooking(req, res) {
     if (!date || !time || !Array.isArray(services) || !services.length) {
       return res.status(400).json({ message: 'Missing required fields' });
     }
-    const { slots: slotList, slotCapacity } = await loadGroomingConfig();
+    const { slots: slotList, slotCapacity, dateSlotOverrides } = await loadGroomingConfig();
     const dates = await computeAvailableDates(30);
     if (!dates.includes(date)) {
       return res.status(400).json({ message: 'Date out of range' });
     }
-    if (!slotList.includes(time)) {
+    const slotsForDay = getSlotsForDate(date, slotList, dateSlotOverrides);
+    if (!slotsForDay.includes(time)) {
       return res.status(400).json({ message: 'Invalid time slot' });
     }
     // Capacity check (exclude cancelled bookings)
@@ -311,10 +335,11 @@ export async function rescheduleBooking(req, res) {
       return res.status(400).json({ message: 'Cannot reschedule a completed or cancelled booking' });
     }
     // Validate new date/time in availability range
-    const { slots: slotList, slotCapacity } = await loadGroomingConfig();
+    const { slots: slotList, slotCapacity, dateSlotOverrides } = await loadGroomingConfig();
     const dates = await computeAvailableDates(30);
     if (!dates.includes(newDate)) return res.status(400).json({ message: 'Date out of range' });
-    if (!slotList.includes(newTime)) return res.status(400).json({ message: 'Invalid time slot' });
+    const slotsForDay = getSlotsForDate(newDate, slotList, dateSlotOverrides);
+    if (!slotsForDay.includes(newTime)) return res.status(400).json({ message: 'Invalid time slot' });
     // Capacity check (exclude cancelled) for target slot excluding current booking if same slot
     const existingCount = await Booking.countDocuments({ date: newDate, time: newTime, status: { $ne: 'cancelled' }, _id: { $ne: booking._id } });
     if (existingCount >= slotCapacity) {

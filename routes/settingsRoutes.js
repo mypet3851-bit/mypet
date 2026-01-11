@@ -68,6 +68,37 @@ const buildCityTable = (checkoutForm) => {
   return rows;
 };
 
+const SLOT_PATTERN = /^\d{2}:\d{2}$/;
+const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+const normalizeSlotList = (arr) => {
+  if (!Array.isArray(arr)) return [];
+  return arr
+    .map(v => (v == null ? '' : String(v).trim()))
+    .filter(Boolean)
+    .filter(v => SLOT_PATTERN.test(v));
+};
+
+const normalizeDateList = (value) => {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map(v => (v == null ? '' : String(v).trim()))
+    .filter(Boolean)
+    .filter(v => DATE_PATTERN.test(v));
+};
+
+const normalizeDateSlotOverrides = (input) => {
+  if (!input || typeof input !== 'object') return {};
+  const source = input instanceof Map ? Object.fromEntries(input) : input;
+  return Object.entries(source).reduce((acc, [date, slots]) => {
+    if (!DATE_PATTERN.test(date)) return acc;
+    const normalizedSlots = normalizeSlotList(slots);
+    if (!normalizedSlots.length) return acc;
+    acc[date] = normalizedSlots;
+    return acc;
+  }, {});
+};
+
 // Configure multer for uploads (project-level /uploads)
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -396,21 +427,15 @@ router.get('/grooming', adminAuth, async (req, res) => {
     let settings = await Settings.findOne();
     if (!settings) settings = await Settings.create({});
     const g = settings.grooming || { useDateWhitelist: false, enabledDates: [], disabledDates: [], bookingWindowDays: 30 };
-    const toSlotList = (arr) => {
-      if (!Array.isArray(arr)) return [];
-      return arr
-        .map(v => (v == null ? '' : String(v).trim()))
-        .filter(Boolean)
-        .filter(v => /^\d{2}:\d{2}$/.test(v));
-    };
-    const slots = toSlotList(g.slots);
+    const slots = normalizeSlotList(g.slots);
     // Normalize arrays and values
     const norm = {
       useDateWhitelist: !!g.useDateWhitelist,
-      enabledDates: Array.isArray(g.enabledDates) ? g.enabledDates.map(String) : [],
-      disabledDates: Array.isArray(g.disabledDates) ? g.disabledDates.map(String) : [],
+      enabledDates: normalizeDateList(g.enabledDates),
+      disabledDates: normalizeDateList(g.disabledDates),
       bookingWindowDays: Number(g.bookingWindowDays) || 30,
       slots: slots.length ? slots : ['07:00','08:00','09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00'],
+      dateSlotOverrides: normalizeDateSlotOverrides(g.dateSlotOverrides),
       slotCapacity: Number(g.slotCapacity) > 0 ? Number(g.slotCapacity) : 4
     };
     res.json(norm);
@@ -425,29 +450,19 @@ router.put('/grooming', settingsWriteGuard, async (req, res) => {
     let settings = await Settings.findOne().sort({ updatedAt: -1 });
     if (!settings) settings = new Settings();
     const inc = req.body || {};
-    const toDateList = (v) => {
-      if (!Array.isArray(v)) return [];
-      return v
-        .map(x => (x == null ? '' : String(x).trim()))
-        .filter(Boolean)
-        .filter(s => /^\d{4}-\d{2}-\d{2}$/.test(s));
-    };
-    const toSlotList = (arr) => {
-      if (!Array.isArray(arr)) return [];
-      return arr
-        .map(v => (v == null ? '' : String(v).trim()))
-        .filter(Boolean)
-        .filter(v => /^\d{2}:\d{2}$/.test(v));
-    };
-    const sanitizedSlots = toSlotList(inc.slots);
-    const existingSlots = toSlotList(settings.grooming?.slots);
+    const sanitizedSlots = normalizeSlotList(inc.slots);
+    const existingSlots = normalizeSlotList(settings.grooming?.slots);
     const slotsFinal = sanitizedSlots.length ? sanitizedSlots : (existingSlots.length ? existingSlots : ['07:00','08:00','09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00']);
+    const nextOverrides = typeof inc.dateSlotOverrides === 'undefined'
+      ? normalizeDateSlotOverrides(settings.grooming?.dateSlotOverrides)
+      : normalizeDateSlotOverrides(inc.dateSlotOverrides);
     const next = {
       useDateWhitelist: !!inc.useDateWhitelist,
-      enabledDates: toDateList(inc.enabledDates),
-      disabledDates: toDateList(inc.disabledDates),
+      enabledDates: normalizeDateList(inc.enabledDates),
+      disabledDates: normalizeDateList(inc.disabledDates),
       bookingWindowDays: Number(inc.bookingWindowDays) > 0 ? Number(inc.bookingWindowDays) : (settings.grooming?.bookingWindowDays || 30),
       slots: slotsFinal,
+      dateSlotOverrides: nextOverrides,
       slotCapacity: Number(inc.slotCapacity) > 0 ? Number(inc.slotCapacity) : (settings.grooming?.slotCapacity || 4)
     };
     settings.grooming = next;
@@ -465,16 +480,15 @@ router.get('/grooming', adminAuth, async (req, res) => {
     let settings = await Settings.findOne();
     if (!settings) settings = await Settings.create({});
     const grooming = settings.grooming || { useDateWhitelist: false, enabledDates: [], disabledDates: [], bookingWindowDays: 30 };
-    const toSlotList = (arr) => {
-      if (!Array.isArray(arr)) return [];
-      return arr
-        .map(v => (v == null ? '' : String(v).trim()))
-        .filter(Boolean)
-        .filter(v => /^\d{2}:\d{2}$/.test(v));
-    };
-    const slots = toSlotList(grooming.slots);
+    const slots = normalizeSlotList(grooming.slots);
+    const enabledDates = normalizeDateList(grooming.enabledDates);
+    const disabledDates = normalizeDateList(grooming.disabledDates);
+    const overrides = normalizeDateSlotOverrides(grooming.dateSlotOverrides);
     res.json({
       ...grooming,
+      enabledDates,
+      disabledDates,
+      dateSlotOverrides: overrides,
       slots: slots.length ? slots : ['07:00','08:00','09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00'],
       slotCapacity: Number(grooming.slotCapacity) > 0 ? Number(grooming.slotCapacity) : 4
     });
@@ -487,30 +501,36 @@ router.put('/grooming', settingsWriteGuard, async (req, res) => {
   try {
     let settings = await Settings.findOne().sort({ updatedAt: -1 });
     if (!settings) settings = new Settings();
-    settings.grooming = settings.grooming || { useDateWhitelist: false, enabledDates: [], disabledDates: [], bookingWindowDays: 30 };
     const inc = req.body || {};
-    if (typeof inc.useDateWhitelist !== 'undefined') settings.grooming.useDateWhitelist = !!inc.useDateWhitelist;
-    if (Array.isArray(inc.enabledDates)) settings.grooming.enabledDates = inc.enabledDates.map(String);
-    if (Array.isArray(inc.disabledDates)) settings.grooming.disabledDates = inc.disabledDates.map(String);
-    if (typeof inc.bookingWindowDays !== 'undefined') {
-      const n = Number(inc.bookingWindowDays);
-      settings.grooming.bookingWindowDays = Number.isFinite(n) && n > 0 ? n : settings.grooming.bookingWindowDays || 30;
-    }
-    if (Array.isArray(inc.slots)) {
-      settings.grooming.slots = inc.slots
-        .map(v => (v == null ? '' : String(v).trim()))
-        .filter(Boolean)
-        .filter(v => /^\d{2}:\d{2}$/.test(v));
-    }
-    if (typeof inc.slotCapacity !== 'undefined') {
-      const c = Number(inc.slotCapacity);
-      if (Number.isFinite(c) && c > 0) {
-        settings.grooming.slotCapacity = Math.min(Math.max(1, Math.round(c)), 50);
-      }
-    }
+    const existing = settings.grooming || { useDateWhitelist: false, enabledDates: [], disabledDates: [], bookingWindowDays: 30 };
+    const sanitizedSlots = normalizeSlotList(inc.slots);
+    const existingSlots = normalizeSlotList(existing.slots);
+    const slotsFinal = sanitizedSlots.length ? sanitizedSlots : (existingSlots.length ? existingSlots : ['07:00','08:00','09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00']);
+    const nextOverrides = typeof inc.dateSlotOverrides === 'undefined'
+      ? normalizeDateSlotOverrides(existing.dateSlotOverrides)
+      : normalizeDateSlotOverrides(inc.dateSlotOverrides);
+    const next = {
+      useDateWhitelist: typeof inc.useDateWhitelist === 'undefined' ? !!existing.useDateWhitelist : !!inc.useDateWhitelist,
+      enabledDates: typeof inc.enabledDates === 'undefined' ? normalizeDateList(existing.enabledDates) : normalizeDateList(inc.enabledDates),
+      disabledDates: typeof inc.disabledDates === 'undefined' ? normalizeDateList(existing.disabledDates) : normalizeDateList(inc.disabledDates),
+      bookingWindowDays: (() => {
+        if (typeof inc.bookingWindowDays === 'undefined') return Number(existing.bookingWindowDays) > 0 ? Number(existing.bookingWindowDays) : 30;
+        const n = Number(inc.bookingWindowDays);
+        return Number.isFinite(n) && n > 0 ? n : (Number(existing.bookingWindowDays) || 30);
+      })(),
+      slots: slotsFinal,
+      dateSlotOverrides: nextOverrides,
+      slotCapacity: (() => {
+        if (typeof inc.slotCapacity === 'undefined') return Number(existing.slotCapacity) > 0 ? Number(existing.slotCapacity) : 4;
+        const c = Number(inc.slotCapacity);
+        if (!Number.isFinite(c) || c <= 0) return Number(existing.slotCapacity) > 0 ? Number(existing.slotCapacity) : 4;
+        return Math.min(Math.max(1, Math.round(c)), 50);
+      })()
+    };
+    settings.grooming = next;
     try { settings.markModified('grooming'); } catch {}
     await settings.save();
-    res.json(settings.grooming);
+    res.json(next);
   } catch (e) {
     res.status(500).json({ message: e.message });
   }
