@@ -4,7 +4,7 @@ import Settings from '../models/Settings.js';
 import Product from '../models/Product.js';
 import Category from '../models/Category.js';
 import { getItemsList, setItemsList } from '../services/mcgService.js';
-import { collectMcgIdentifiers, persistMcgBlocklistEntries, persistMcgArchiveEntries, propagateMcgDeletion } from '../services/mcgDeletionService.js';
+import { collectMcgIdentifiers, persistMcgBlocklistEntries, persistMcgArchiveEntries, propagateMcgDeletion, markMcgItemsArchived } from '../services/mcgDeletionService.js';
 import Inventory from '../models/Inventory.js';
 import InventoryHistory from '../models/InventoryHistory.js';
 import Warehouse from '../models/Warehouse.js';
@@ -999,6 +999,20 @@ router.post('/delete-product/:productId', adminAuth, async (req, res) => {
       return res.status(400).json({ message: 'Product is not linked to MCG (missing barcode/item id)' });
     }
 
+    let mcgArchive = null;
+    if (archive) {
+      mcgArchive = await markMcgItemsArchived(product, {
+        identifiers,
+        includeVariants,
+        additionalIdentifiers,
+        overrideMcgItemId: overrideMcgItemId || undefined,
+        overrideBarcode: overrideBarcode || undefined,
+        settingsDoc: settings,
+        allowWhenDisabled,
+        groupOverride: req.body?.group
+      });
+    }
+
     const mcgResp = await propagateMcgDeletion(product, {
       identifiers,
       includeVariants,
@@ -1030,12 +1044,26 @@ router.post('/delete-product/:productId', adminAuth, async (req, res) => {
       });
     }
 
+    if (product && (product.mcgItemId || product.mcgBarcode)) {
+      const unsetPayload = {};
+      if (product.mcgItemId) unsetPayload.mcgItemId = '';
+      if (product.mcgBarcode) unsetPayload.mcgBarcode = '';
+      try {
+        if (Object.keys(unsetPayload).length) {
+          await Product.updateOne({ _id: product._id }, { $unset: unsetPayload });
+        }
+      } catch (clearErr) {
+        try { console.warn('[mcg][delete-product] failed to clear mcg mappings', clearErr?.message || clearErr); } catch {}
+      }
+    }
+
     res.json({
       ok: mcgResp?.skipped ? false : mcgResp?.ok !== false,
       deletedCount: identifiers.mcgIds.size + identifiers.barcodes.size,
       mcgItemIds: Array.from(identifiers.mcgIds),
       barcodes: Array.from(identifiers.barcodes),
-      mcgResponse: mcgResp
+      mcgResponse: mcgResp,
+      mcgArchive
     });
   } catch (e) {
     const status = e?.status || e?.response?.status || 500;
