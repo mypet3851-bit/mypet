@@ -823,6 +823,9 @@ router.post('/sync-product/:productId', adminAuth, async (req, res) => {
     const { productId } = req.params;
     const product = await Product.findById(productId);
     if (!product) return res.status(404).json({ message: 'Product not found' });
+    if (product.isActive === false) {
+      return res.status(409).json({ message: 'Archived products cannot be synced from MCG' });
+    }
 
     // Determine lookup keys: prefer explicit override, then saved mapping on product
     let mcgItemId = (req.body?.mcgItemId || product.mcgItemId || '').toString().trim();
