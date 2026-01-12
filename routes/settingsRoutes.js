@@ -8,6 +8,8 @@ import Settings from '../models/Settings.js';
 import { ensureCloudinaryConfig, hasCloudinaryCredentials } from '../services/cloudinaryConfigService.js';
 import cloudinary from '../services/cloudinaryClient.js';
 
+const fsp = fs.promises;
+
 const router = express.Router();
 
 // Helper: convert relative asset path (e.g. /uploads/xxx.png) to absolute URL for client consumption
@@ -107,6 +109,62 @@ if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
 
+const projectRoot = path.resolve(__dirname, '..', '..');
+const sharedLocalesDir = path.join(projectRoot, 'shared', 'locales');
+const publicLocalesDir = path.join(projectRoot, 'public', 'locales');
+const mobileLocalesDir = path.join(projectRoot, 'mobile', 'mobile-app', 'src', 'locales');
+const LOCALE_FILE_NAME = 'translation.json';
+const LANG_PATTERN = /^[a-z0-9_-]{2,32}$/i;
+
+const toPosix = (value = '') => value.replace(/\\/g, '/');
+const relToProject = (absPath) => toPosix(path.relative(projectRoot, absPath));
+const pathExists = (target) => {
+  try {
+    return fs.existsSync(target);
+  } catch {
+    return false;
+  }
+};
+const statIfExists = async (target) => {
+  try {
+    return await fsp.stat(target);
+  } catch {
+    return null;
+  }
+};
+async function writeJsonAtomic(destPath, contents) {
+  await fsp.mkdir(path.dirname(destPath), { recursive: true });
+  const tmpPath = `${destPath}.${Date.now()}.tmp`;
+  await fsp.writeFile(tmpPath, contents, 'utf8');
+  await fsp.rename(tmpPath, destPath);
+}
+
+const buildLocaleMeta = (filePath, stat) => ({
+  path: relToProject(filePath),
+  exists: !!stat,
+  updatedAt: stat ? stat.mtime.toISOString() : null,
+  bytes: stat?.size || 0
+});
+
+async function collectLocaleLanguages() {
+  const langs = new Set();
+  const scan = async (dir) => {
+    if (!pathExists(dir)) return;
+    try {
+      const entries = await fsp.readdir(dir, { withFileTypes: true });
+      entries.forEach(entry => {
+        if (entry.isDirectory()) langs.add(entry.name);
+      });
+    } catch {}
+  };
+  await Promise.all([
+    scan(sharedLocalesDir),
+    scan(publicLocalesDir),
+    scan(mobileLocalesDir)
+  ]);
+  return Array.from(langs).sort((a, b) => a.localeCompare(b));
+}
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, uploadDir);
@@ -118,6 +176,21 @@ const storage = multer.diskStorage({
   }
 });
 const upload = multer({ storage });
+
+const localeUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 2 * 1024 * 1024 } // 2 MB guard for translation bundles
+});
+
+const runLocaleUpload = (req, res, next) => {
+  localeUpload.single('file')(req, res, (err) => {
+    if (err) {
+      const status = err?.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
+      return res.status(status).json({ message: err?.message || 'Upload failed' });
+    }
+    next();
+  });
+};
 
 // Optional: allow non-admins to edit general settings when ALLOW_NON_ADMIN_SETTINGS=1
 // This is intended for development only. Sensitive endpoints remain admin-only.
@@ -310,6 +383,86 @@ router.put('/translations/deepseek', adminAuth, async (req, res) => {
     res.json({ enabled: next.enabled, apiKey: next.apiKey ? '***' : '', apiUrl: next.apiUrl, model: next.model });
   } catch (e) {
     res.status(500).json({ message: e.message });
+  }
+});
+
+// Mobile app translation bundles (JSON) – list metadata
+router.get('/translations/mobile/locales', adminAuth, async (req, res) => {
+  try {
+    const codes = await collectLocaleLanguages();
+    const languages = [];
+    for (const code of codes) {
+      const sharedFile = path.join(sharedLocalesDir, code, LOCALE_FILE_NAME);
+      const webFile = path.join(publicLocalesDir, code, LOCALE_FILE_NAME);
+      const mobileFile = path.join(mobileLocalesDir, code, LOCALE_FILE_NAME);
+      const [sharedStat, webStat, mobileStat] = await Promise.all([
+        statIfExists(sharedFile),
+        statIfExists(webFile),
+        statIfExists(mobileFile)
+      ]);
+      languages.push({
+        code,
+        shared: buildLocaleMeta(sharedFile, sharedStat),
+        web: buildLocaleMeta(webFile, webStat),
+        mobile: buildLocaleMeta(mobileFile, mobileStat)
+      });
+    }
+    res.json({
+      sharedRoot: relToProject(sharedLocalesDir),
+      webRoot: pathExists(publicLocalesDir) ? relToProject(publicLocalesDir) : null,
+      mobileRoot: pathExists(mobileLocalesDir) ? relToProject(mobileLocalesDir) : null,
+      languages
+    });
+  } catch (e) {
+    res.status(500).json({ message: e?.message || 'Failed to read mobile locales' });
+  }
+});
+
+// Upload JSON translation bundle for mobile/web (admin only)
+router.post('/translations/mobile/upload', adminAuth, runLocaleUpload, async (req, res) => {
+  try {
+    const langInput = (req.body?.lang || '').trim();
+    if (!langInput || !LANG_PATTERN.test(langInput)) {
+      return res.status(400).json({ message: 'Language code must be 2-32 characters (letters, numbers, dash or underscore).' });
+    }
+    if (!req.file || !req.file.buffer || !req.file.buffer.length) {
+      return res.status(400).json({ message: 'JSON translation file is required.' });
+    }
+    const lang = langInput.toLowerCase();
+    let parsed;
+    try {
+      parsed = JSON.parse(req.file.buffer.toString('utf8'));
+    } catch {
+      return res.status(400).json({ message: 'Invalid JSON file. Please upload a valid translation bundle.' });
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return res.status(400).json({ message: 'Translation JSON must be an object.' });
+    }
+    const normalizedJson = JSON.stringify(parsed, null, 2) + '\n';
+    const bytes = Buffer.byteLength(normalizedJson, 'utf8');
+    const sharedFile = path.join(sharedLocalesDir, lang, LOCALE_FILE_NAME);
+    await writeJsonAtomic(sharedFile, normalizedJson);
+    let webSynced = false;
+    if (pathExists(publicLocalesDir)) {
+      await writeJsonAtomic(path.join(publicLocalesDir, lang, LOCALE_FILE_NAME), normalizedJson);
+      webSynced = true;
+    }
+    let mobileSynced = false;
+    if (pathExists(mobileLocalesDir)) {
+      await writeJsonAtomic(path.join(mobileLocalesDir, lang, LOCALE_FILE_NAME), normalizedJson);
+      mobileSynced = true;
+    }
+    res.json({
+      message: 'Locale uploaded',
+      lang,
+      sharedPath: relToProject(sharedFile),
+      bytes,
+      webSynced,
+      mobileSynced
+    });
+  } catch (e) {
+    console.error('[settings] mobile locale upload failed', e);
+    res.status(500).json({ message: 'Failed to save translation file.' });
   }
 });
 
