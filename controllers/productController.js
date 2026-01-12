@@ -1533,6 +1533,21 @@ export const updateProduct = async (req, res) => {
       return res.status(404).json({ message: 'Product not found' });
     }
 
+    // If the update just archived the product, persist identifiers so MCG importer skips it
+    const wasActiveBefore = productBefore?.isActive !== false;
+    const isArchivedNow = product.isActive === false;
+    if (wasActiveBefore && isArchivedNow) {
+      try {
+        const identifiers = collectMcgIdentifiers(product);
+        await Promise.all([
+          persistMcgBlocklistEntries(product, req.user?._id, 'manual_archive', { identifiers }),
+          persistMcgArchiveEntries(product, req.user?._id, 'manual_archive', { identifiers })
+        ]);
+      } catch (archiveError) {
+        try { console.warn('[products][update] failed to persist archive identifiers', archiveError?.message || archiveError); } catch {}
+      }
+    }
+
     // Update inventory if sizes or colors changed (legacy path; prefer color-level sizes now)
     if (Array.isArray(sizes) && Array.isArray(incomingColors)) {
       // Get current inventory
