@@ -466,6 +466,42 @@ router.post('/translations/mobile/upload', adminAuth, runLocaleUpload, async (re
   }
 });
 
+router.get('/translations/mobile/download/:lang', adminAuth, async (req, res) => {
+  try {
+    const langInput = (req.params?.lang || req.query?.lang || '').trim();
+    if (!langInput || !LANG_PATTERN.test(langInput)) {
+      return res.status(400).json({ message: 'Invalid language code.' });
+    }
+    const lang = langInput.toLowerCase();
+    const candidates = [
+      path.join(sharedLocalesDir, lang, LOCALE_FILE_NAME),
+      path.join(publicLocalesDir, lang, LOCALE_FILE_NAME),
+      path.join(mobileLocalesDir, lang, LOCALE_FILE_NAME)
+    ];
+    let filePath = '';
+    for (const candidate of candidates) {
+      if (candidate && pathExists(candidate)) {
+        filePath = candidate;
+        break;
+      }
+    }
+    if (!filePath) {
+      return res.status(404).json({ message: 'Translation file not found for the requested language.' });
+    }
+    const downloadName = `${lang}-${LOCALE_FILE_NAME}`;
+    return res.download(filePath, downloadName, (err) => {
+      if (err) {
+        if (!res.headersSent) {
+          res.status(500).json({ message: 'Failed to download translation file.' });
+        }
+      }
+    });
+  } catch (e) {
+    console.error('[settings] mobile locale download failed', e);
+    return res.status(500).json({ message: 'Failed to download translation file.' });
+  }
+});
+
 // Get analytics config (subset of settings)
 router.get('/analytics', async (req, res) => {
   try {
