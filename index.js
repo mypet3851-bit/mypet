@@ -211,11 +211,58 @@ app.use(cookieParser());
 const publicDir = path.resolve(__dirname, '../public');
 app.use(express.static(publicDir));
 
-// Explicit ZCredit mobile success page route so Cloud Run serves it even when static fallback misses
+const buildZCreditDeepLinkHtml = (params = {}) => {
+  const getFirst = (value) => {
+    if (Array.isArray(value)) return value[0];
+    return value;
+  };
+  const rawStatus = getFirst(params.status) || 'success';
+  const status = String(rawStatus).toLowerCase() === 'cancel' ? 'cancel' : 'success';
+  const session = getFirst(params.session) || getFirst(params.sessionId) || '';
+  const orderNumber = getFirst(params.order) || getFirst(params.orderNumber) || getFirst(params.orderId) || '';
+  const qp = [`status=${encodeURIComponent(status)}`];
+  if (session) qp.push(`session=${encodeURIComponent(session)}`);
+  if (orderNumber) qp.push(`order=${encodeURIComponent(orderNumber)}`);
+  const deepLink = `mypets://zcredit-return?${qp.join('&')}`;
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Payment Result</title>
+  <style>
+    body { font-family: system-ui, Arial, sans-serif; padding:40px; max-width:600px; margin:auto; }
+    h1 { font-size:1.6rem; margin-bottom:.75rem; }
+    .box { background:#f8fafc; border:1px solid #e2e8f0; padding:24px; border-radius:12px; }
+    a.btn { display:inline-block; margin-top:18px; background:#111; color:#fff; text-decoration:none; padding:12px 18px; border-radius:8px; }
+    .small { font-size:.8rem; color:#64748b; margin-top:32px; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h1>Payment Completed</h1>
+    <p>We are redirecting you back to the app to view your order. If nothing happens, tap the button below.</p>
+    <a class="btn" href="${deepLink}" rel="noopener">Open App</a>
+    <p class="small">If the app did not open automatically, tap the button.</p>
+  </div>
+  <script>
+    setTimeout(function(){ try { window.location.href = ${JSON.stringify(deepLink)}; } catch(e){} }, 350);
+  </script>
+</body>
+</html>`;
+};
+
+// Explicit ZCredit mobile success page route so Cloud Run serves it even when static assets are missing
 const zcreditSuccessFile = path.join(publicDir, 'zcredit-mobile-success.html');
 app.get(['/zcredit-mobile-success', '/zcredit-mobile-success.html'], (req, res, next) => {
-  res.sendFile(zcreditSuccessFile, (err) => {
-    if (err) next(err);
+  fs.access(zcreditSuccessFile, fs.constants.R_OK, (err) => {
+    if (!err) {
+      res.sendFile(zcreditSuccessFile, (sendErr) => {
+        if (sendErr) next(sendErr);
+      });
+      return;
+    }
+    res.status(200).type('html').send(buildZCreditDeepLinkHtml(req.query));
   });
 });
 
