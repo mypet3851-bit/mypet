@@ -1548,6 +1548,52 @@ export const updateProduct = async (req, res) => {
       }
     }
 
+    // If admin cleared MCG identifiers (common “unlink/delete barcode” UX), block those identifiers too
+    // so MCG auto-pull / sync-items cannot recreate the product as a new import.
+    if (!isArchivedNow) {
+      try {
+        const norm = (v) => (v === undefined || v === null) ? '' : String(v).trim().toLowerCase();
+        const beforeIdentifiers = collectMcgIdentifiers(productBefore);
+        const afterIdentifiers = collectMcgIdentifiers(product);
+        const beforeKeys = new Set([
+          ...Array.from(beforeIdentifiers.mcgIds || []).map(norm).filter(Boolean),
+          ...Array.from(beforeIdentifiers.barcodes || []).map(norm).filter(Boolean)
+        ]);
+        const afterKeys = new Set([
+          ...Array.from(afterIdentifiers.mcgIds || []).map(norm).filter(Boolean),
+          ...Array.from(afterIdentifiers.barcodes || []).map(norm).filter(Boolean)
+        ]);
+        let removedCount = 0;
+        for (const key of beforeKeys) {
+          if (!afterKeys.has(key)) removedCount++;
+        }
+
+        if (beforeKeys.size > 0 && removedCount > 0) {
+          await Promise.all([
+            persistMcgBlocklistEntries(product, req.user?._id, 'manual_unlink', {
+              identifiers: beforeIdentifiers,
+              noteOverride: 'Auto-blocked because MCG identifiers were removed from the product'
+            }),
+            persistMcgArchiveEntries(product, req.user?._id, 'manual_unlink', {
+              identifiers: beforeIdentifiers,
+              noteOverride: 'Auto-archived because MCG identifiers were removed from the product'
+            })
+          ]);
+          try {
+            await markMcgItemsArchived(product, {
+              identifiers: beforeIdentifiers,
+              allowWhenDisabled: true,
+              itemAds: 'Archived product (unlinked from catalog)',
+              sendUpdateItemRequest: true
+            });
+          } catch {}
+          try { console.log('[products][update] blocked removed MCG identifiers count=%d product=%s', removedCount, String(product?._id || '')); } catch {}
+        }
+      } catch (unlinkErr) {
+        try { console.warn('[products][update] unlink mcg guard failed', unlinkErr?.message || unlinkErr); } catch {}
+      }
+    }
+
     // Update inventory if sizes or colors changed (legacy path; prefer color-level sizes now)
     if (Array.isArray(sizes) && Array.isArray(incomingColors)) {
       // Get current inventory
