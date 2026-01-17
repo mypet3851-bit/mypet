@@ -427,17 +427,32 @@ router.post('/sync-items', adminAuth, async (req, res) => {
       if (value === undefined || value === null) return '';
       return String(value).trim().toLowerCase();
     };
+    const stripLeadingZerosNumeric = (value) => {
+      const s = normalizeBlockKey(value);
+      if (!s) return '';
+      if (!/^\d+$/.test(s)) return '';
+      const stripped = s.replace(/^0+/, '');
+      return stripped || '0';
+    };
     for (const doc of [...(blockDocs || []), ...(archivedDocs || [])]) {
       const bc = normalizeBlockKey(doc?.barcode);
       const id = normalizeBlockKey(doc?.mcgItemId);
+      const bcNoZeros = stripLeadingZerosNumeric(doc?.barcode);
+      const idNoZeros = stripLeadingZerosNumeric(doc?.mcgItemId);
       if (bc) blockedBarcodes.add(bc);
+      if (bcNoZeros) blockedBarcodes.add(bcNoZeros);
       if (id) blockedItemIds.add(id);
+      if (idNoZeros) blockedItemIds.add(idNoZeros);
     }
     const isBlockedIdentifier = (mcgId, barcode) => {
       const idKey = normalizeBlockKey(mcgId);
+      const idKeyNoZeros = stripLeadingZerosNumeric(mcgId);
       if (idKey && blockedItemIds.has(idKey)) return true;
+      if (idKeyNoZeros && blockedItemIds.has(idKeyNoZeros)) return true;
       const bcKey = normalizeBlockKey(barcode);
+      const bcKeyNoZeros = stripLeadingZerosNumeric(barcode);
       if (bcKey && blockedBarcodes.has(bcKey)) return true;
+      if (bcKeyNoZeros && blockedBarcodes.has(bcKeyNoZeros)) return true;
       return false;
     };
 

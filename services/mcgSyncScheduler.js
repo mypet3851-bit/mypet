@@ -18,6 +18,19 @@ let _inFlight = false;
 let _lastRunAt = 0;
 let _logBlockedSamples = 0;
 
+function normalizeBlockKey(value) {
+  if (value === undefined || value === null) return '';
+  return String(value).trim().toLowerCase();
+}
+
+function stripLeadingZerosNumeric(value) {
+  const s = normalizeBlockKey(value);
+  if (!s) return '';
+  if (!/^\d+$/.test(s)) return '';
+  const stripped = s.replace(/^0+/, '');
+  return stripped || '0';
+}
+
 async function ensureMainWarehouse() {
   let wh = await Warehouse.findOne({ name: 'Main Warehouse' });
   if (!wh) {
@@ -73,10 +86,14 @@ async function oneRun() {
         McgArchivedItem.find({}, 'barcode mcgItemId').lean()
       ]);
       for (const doc of [...(blockDocs || []), ...(archivedDocs || [])]) {
-        const barcode = typeof doc?.barcode === 'string' ? doc.barcode.trim().toLowerCase() : '';
-        const mcgId = typeof doc?.mcgItemId === 'string' ? doc.mcgItemId.trim().toLowerCase() : '';
+        const barcode = normalizeBlockKey(doc?.barcode);
+        const mcgId = normalizeBlockKey(doc?.mcgItemId);
+        const barcodeNoZeros = stripLeadingZerosNumeric(doc?.barcode);
+        const mcgIdNoZeros = stripLeadingZerosNumeric(doc?.mcgItemId);
         if (barcode) blockCtx.blockedBarcodes.add(barcode);
+        if (barcodeNoZeros) blockCtx.blockedBarcodes.add(barcodeNoZeros);
         if (mcgId) blockCtx.blockedItemIds.add(mcgId);
+        if (mcgIdNoZeros) blockCtx.blockedItemIds.add(mcgIdNoZeros);
       }
     } catch (blockErr) {
       try { console.warn('[mcg][auto-pull] blocklist load failed:', blockErr?.message || blockErr); } catch {}
@@ -133,11 +150,15 @@ async function oneRun() {
             if (prod) matchedByMcgId = true;
           }
 
-          const normalizedBarcode = barcode ? barcode.toLowerCase() : '';
-          const normalizedMcgId = mcgId ? mcgId.toLowerCase() : '';
+          const normalizedBarcode = normalizeBlockKey(barcode);
+          const normalizedMcgId = normalizeBlockKey(mcgId);
+          const normalizedBarcodeNoZeros = stripLeadingZerosNumeric(barcode);
+          const normalizedMcgIdNoZeros = stripLeadingZerosNumeric(mcgId);
           const isBlockedIdentifier = (
             (normalizedBarcode && blockCtx.blockedBarcodes.has(normalizedBarcode)) ||
-            (normalizedMcgId && blockCtx.blockedItemIds.has(normalizedMcgId))
+            (normalizedBarcodeNoZeros && blockCtx.blockedBarcodes.has(normalizedBarcodeNoZeros)) ||
+            (normalizedMcgId && blockCtx.blockedItemIds.has(normalizedMcgId)) ||
+            (normalizedMcgIdNoZeros && blockCtx.blockedItemIds.has(normalizedMcgIdNoZeros))
           );
           if (isBlockedIdentifier) {
             skippedBlocked++;
