@@ -834,6 +834,16 @@ router.post('/sync-product/:productId', adminAuth, async (req, res) => {
       return res.status(400).json({ message: 'Provide mcgItemId or mcgBarcode on the product or in request body' });
     }
 
+    const archivedFilters = [];
+    if (mcgItemId) archivedFilters.push({ mcgItemId });
+    if (mcgBarcode) archivedFilters.push({ barcode: mcgBarcode });
+    if (archivedFilters.length) {
+      const archivedMatch = await McgArchivedItem.findOne({ $or: archivedFilters }).lean();
+      if (archivedMatch) {
+        return res.status(409).json({ message: 'This MCG item was archived and cannot be synced' });
+      }
+    }
+
     // Fetch items. For Uplîcali flavor the service ignores Filter and returns the whole list,
     // so we must match client-side by id/barcode.
     const Filter = mcgItemId ? { ItemID: mcgItemId } : { Barcode: mcgBarcode };
@@ -849,6 +859,9 @@ router.post('/sync-product/:productId', adminAuth, async (req, res) => {
       return (wantedId && id && id === wantedId) || (wantedBarcode && bc && bc === wantedBarcode);
     }) || {};
     if (!Object.keys(it).length) return res.status(404).json({ message: 'No matching item found in MCG' });
+    if (hasArchivedAttribute(it)) {
+      return res.status(409).json({ message: 'This MCG item is marked as archived and cannot be synced' });
+    }
 
     // Map fields
   const nameFromMcg = (it?.Name ?? it?.name ?? it?.item_name ?? '').toString();
