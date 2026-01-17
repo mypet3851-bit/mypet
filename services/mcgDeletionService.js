@@ -413,8 +413,11 @@ export async function markMcgItemsArchived(productDoc, options = {}) {
 
   const payload = unique.map(({ mcgId, barcode }) => {
     const doc = { item_inventory: 0 };
-    if (mcgId) doc.item_id = mcgId;
-    if (barcode) doc.item_code = barcode;
+    if (mcgId) {
+      doc.item_id = mcgId;
+    } else if (barcode) {
+      doc.item_code = barcode;
+    }
     doc.item_attribute = attributeValue;
     doc.item_ads = adsValue;
     return doc;
