@@ -1713,7 +1713,8 @@ async function mirrorDeletionInMcg(productDoc, userId, reason = 'hard_delete', o
       identifiers,
       groupOverride,
       allowWhenDisabled: true,
-      itemAds: archiveAds
+      itemAds: archiveAds,
+      sendUpdateItemRequest: true
     });
   } catch (archiveError) {
     archiveResult = {
