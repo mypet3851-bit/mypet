@@ -164,13 +164,14 @@ export function collectMcgIdentifiers(productDoc, options = {}) {
 }
 
 export async function persistMcgBlocklistEntries(productDoc, userId, reason = 'hard_delete', options = {}) {
-  const { identifiers, includeVariants = true, additionalIdentifiers, overrideMcgItemId, overrideBarcode, noteOverride } = options;
-  const collected = identifiers || collectMcgIdentifiers(productDoc, {
+  const { identifiers, includeVariants = true, additionalIdentifiers, overrideMcgItemId, overrideBarcode, noteOverride, groupOverride } = options;
+  const collectedRaw = identifiers || collectMcgIdentifiers(productDoc, {
     includeVariants,
     additionalIdentifiers,
     overrideMcgItemId,
     overrideBarcode
   });
+  const collected = await ensureIdentifiersHaveMcgIds(collectedRaw, { groupOverride });
   const { mcgIds, barcodes } = collected;
   if (!mcgIds.size && !barcodes.size) return;
 
@@ -226,13 +227,14 @@ export async function persistMcgBlocklistEntries(productDoc, userId, reason = 'h
 }
 
 export async function persistMcgArchiveEntries(productDoc, userId, reason = 'manual_archive', options = {}) {
-  const { identifiers, includeVariants = true, additionalIdentifiers, overrideMcgItemId, overrideBarcode, noteOverride } = options;
-  const collected = identifiers || collectMcgIdentifiers(productDoc, {
+  const { identifiers, includeVariants = true, additionalIdentifiers, overrideMcgItemId, overrideBarcode, noteOverride, groupOverride } = options;
+  const collectedRaw = identifiers || collectMcgIdentifiers(productDoc, {
     includeVariants,
     additionalIdentifiers,
     overrideMcgItemId,
     overrideBarcode
   });
+  const collected = await ensureIdentifiersHaveMcgIds(collectedRaw, { groupOverride });
   const { mcgIds, barcodes } = collected;
   if (!mcgIds.size && !barcodes.size) return;
 
@@ -290,12 +292,13 @@ export async function propagateMcgDeletion(productDoc, options = {}) {
     allowWhenDisabled = false
   } = options;
 
-  const collected = identifiers || collectMcgIdentifiers(productDoc, {
+  const collectedRaw = identifiers || collectMcgIdentifiers(productDoc, {
     includeVariants,
     additionalIdentifiers,
     overrideMcgItemId,
     overrideBarcode
   });
+  const collected = await ensureIdentifiersHaveMcgIds(collectedRaw, { groupOverride });
   const { mcgIds, barcodes, entries = [] } = collected;
   if (!mcgIds.size && !barcodes.size) {
     return { skipped: true, reason: 'no_identifiers' };
@@ -378,12 +381,13 @@ export async function markMcgItemsArchived(productDoc, options = {}) {
     itemAds
   } = options;
 
-  const collected = identifiers || collectMcgIdentifiers(productDoc, {
+  const collectedRaw = identifiers || collectMcgIdentifiers(productDoc, {
     includeVariants,
     additionalIdentifiers,
     overrideMcgItemId,
     overrideBarcode
   });
+  const collected = await ensureIdentifiersHaveMcgIds(collectedRaw, { groupOverride });
   const entries = Array.isArray(collected?.entries) ? collected.entries : [];
   if (!entries.length) {
     return { skipped: true, reason: 'no_identifiers' };
