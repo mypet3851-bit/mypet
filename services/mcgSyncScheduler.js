@@ -23,8 +23,15 @@ function normalizeBlockKey(value) {
   return String(value).trim().toLowerCase();
 }
 
-function stripLeadingZerosNumeric(value) {
+function canonicalKey(value) {
   const s = normalizeBlockKey(value);
+  if (!s) return '';
+  // remove spaces, hyphens, and any non-alphanumeric noise
+  return s.replace(/[^a-z0-9]/g, '');
+}
+
+function stripLeadingZerosNumeric(value) {
+  const s = canonicalKey(value);
   if (!s) return '';
   if (!/^\d+$/.test(s)) return '';
   const stripped = s.replace(/^0+/, '');
@@ -88,11 +95,15 @@ async function oneRun() {
       for (const doc of [...(blockDocs || []), ...(archivedDocs || [])]) {
         const barcode = normalizeBlockKey(doc?.barcode);
         const mcgId = normalizeBlockKey(doc?.mcgItemId);
+        const barcodeCanonical = canonicalKey(doc?.barcode);
+        const mcgIdCanonical = canonicalKey(doc?.mcgItemId);
         const barcodeNoZeros = stripLeadingZerosNumeric(doc?.barcode);
         const mcgIdNoZeros = stripLeadingZerosNumeric(doc?.mcgItemId);
         if (barcode) blockCtx.blockedBarcodes.add(barcode);
+        if (barcodeCanonical) blockCtx.blockedBarcodes.add(barcodeCanonical);
         if (barcodeNoZeros) blockCtx.blockedBarcodes.add(barcodeNoZeros);
         if (mcgId) blockCtx.blockedItemIds.add(mcgId);
+        if (mcgIdCanonical) blockCtx.blockedItemIds.add(mcgIdCanonical);
         if (mcgIdNoZeros) blockCtx.blockedItemIds.add(mcgIdNoZeros);
       }
     } catch (blockErr) {
@@ -152,12 +163,16 @@ async function oneRun() {
 
           const normalizedBarcode = normalizeBlockKey(barcode);
           const normalizedMcgId = normalizeBlockKey(mcgId);
+          const normalizedBarcodeCanonical = canonicalKey(barcode);
+          const normalizedMcgIdCanonical = canonicalKey(mcgId);
           const normalizedBarcodeNoZeros = stripLeadingZerosNumeric(barcode);
           const normalizedMcgIdNoZeros = stripLeadingZerosNumeric(mcgId);
           const isBlockedIdentifier = (
             (normalizedBarcode && blockCtx.blockedBarcodes.has(normalizedBarcode)) ||
+            (normalizedBarcodeCanonical && blockCtx.blockedBarcodes.has(normalizedBarcodeCanonical)) ||
             (normalizedBarcodeNoZeros && blockCtx.blockedBarcodes.has(normalizedBarcodeNoZeros)) ||
             (normalizedMcgId && blockCtx.blockedItemIds.has(normalizedMcgId)) ||
+            (normalizedMcgIdCanonical && blockCtx.blockedItemIds.has(normalizedMcgIdCanonical)) ||
             (normalizedMcgIdNoZeros && blockCtx.blockedItemIds.has(normalizedMcgIdNoZeros))
           );
           if (isBlockedIdentifier) {

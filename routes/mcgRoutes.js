@@ -427,8 +427,13 @@ router.post('/sync-items', adminAuth, async (req, res) => {
       if (value === undefined || value === null) return '';
       return String(value).trim().toLowerCase();
     };
-    const stripLeadingZerosNumeric = (value) => {
+    const canonicalKey = (value) => {
       const s = normalizeBlockKey(value);
+      if (!s) return '';
+      return s.replace(/[^a-z0-9]/g, '');
+    };
+    const stripLeadingZerosNumeric = (value) => {
+      const s = canonicalKey(value);
       if (!s) return '';
       if (!/^\d+$/.test(s)) return '';
       const stripped = s.replace(/^0+/, '');
@@ -437,21 +442,29 @@ router.post('/sync-items', adminAuth, async (req, res) => {
     for (const doc of [...(blockDocs || []), ...(archivedDocs || [])]) {
       const bc = normalizeBlockKey(doc?.barcode);
       const id = normalizeBlockKey(doc?.mcgItemId);
+      const bcCanonical = canonicalKey(doc?.barcode);
+      const idCanonical = canonicalKey(doc?.mcgItemId);
       const bcNoZeros = stripLeadingZerosNumeric(doc?.barcode);
       const idNoZeros = stripLeadingZerosNumeric(doc?.mcgItemId);
       if (bc) blockedBarcodes.add(bc);
+      if (bcCanonical) blockedBarcodes.add(bcCanonical);
       if (bcNoZeros) blockedBarcodes.add(bcNoZeros);
       if (id) blockedItemIds.add(id);
+      if (idCanonical) blockedItemIds.add(idCanonical);
       if (idNoZeros) blockedItemIds.add(idNoZeros);
     }
     const isBlockedIdentifier = (mcgId, barcode) => {
       const idKey = normalizeBlockKey(mcgId);
+      const idKeyCanonical = canonicalKey(mcgId);
       const idKeyNoZeros = stripLeadingZerosNumeric(mcgId);
       if (idKey && blockedItemIds.has(idKey)) return true;
+      if (idKeyCanonical && blockedItemIds.has(idKeyCanonical)) return true;
       if (idKeyNoZeros && blockedItemIds.has(idKeyNoZeros)) return true;
       const bcKey = normalizeBlockKey(barcode);
+      const bcKeyCanonical = canonicalKey(barcode);
       const bcKeyNoZeros = stripLeadingZerosNumeric(barcode);
       if (bcKey && blockedBarcodes.has(bcKey)) return true;
+      if (bcKeyCanonical && blockedBarcodes.has(bcKeyCanonical)) return true;
       if (bcKeyNoZeros && blockedBarcodes.has(bcKeyNoZeros)) return true;
       return false;
     };
