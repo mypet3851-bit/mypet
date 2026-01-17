@@ -234,19 +234,17 @@ const buildZCreditDeepLinkHtml = (params = {}) => {
     body { font-family: system-ui, Arial, sans-serif; padding:40px; max-width:600px; margin:auto; }
     h1 { font-size:1.6rem; margin-bottom:.75rem; }
     .box { background:#f8fafc; border:1px solid #e2e8f0; padding:24px; border-radius:12px; }
-    a.btn { display:inline-block; margin-top:18px; background:#111; color:#fff; text-decoration:none; padding:12px 18px; border-radius:8px; }
     .small { font-size:.8rem; color:#64748b; margin-top:32px; }
   </style>
 </head>
 <body>
   <div class="box">
     <h1>Payment Completed</h1>
-    <p>We are redirecting you back to the app to view your order. If nothing happens, tap the button below.</p>
-    <a class="btn" href="${deepLink}" rel="noopener">Open App</a>
-    <p class="small">If the app did not open automatically, tap the button.</p>
+    <p>Hold tight, we are sending you back to the app to finalize your order.</p>
+    <p class="small">Not redirected automatically? <a href="${deepLink}" rel="noopener">Tap here</a>.</p>
   </div>
   <script>
-    setTimeout(function(){ try { window.location.href = ${JSON.stringify(deepLink)}; } catch(e){} }, 350);
+    setTimeout(function(){ try { window.location.href = ${JSON.stringify(deepLink)}; } catch(e){} }, 200);
   </script>
 </body>
 </html>`;
