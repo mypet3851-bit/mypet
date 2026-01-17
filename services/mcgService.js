@@ -285,9 +285,21 @@ export async function setItemsList(items = [], group) {
     if (!item_id && !item_code) continue;
     const payload = { };
     // Include both identifiers when available so MCG can match on either
-    if (item_id) payload.item_id = item_id;
-    if (item_code) payload.item_code = item_code;
-    if (item_inventory !== undefined) payload.item_inventory = item_inventory;
+    if (item_id) {
+      payload.item_id = item_id;
+      payload.itemId = item_id;
+      payload.ItemID = item_id;
+    }
+    if (item_code) {
+      payload.item_code = item_code;
+      payload.itemCode = item_code;
+      payload.ItemCode = item_code;
+    }
+    if (item_inventory !== undefined) {
+      payload.item_inventory = item_inventory;
+      payload.itemInventory = item_inventory;
+      payload.ItemInventory = item_inventory;
+    }
     // pass-through optional known fields if provided
     for (const k of ['item_name','item_price','item_department','item_image','item_weight','item_ads','item_attribute']) {
       if (it[k] !== undefined) payload[k] = it[k];
@@ -349,8 +361,16 @@ export async function deleteItems(items = [], group) {
     if (seen.has(key)) continue;
     seen.add(key);
     const payload = {};
-    if (code) payload.item_code = code;
-    if (id) payload.item_id = id;
+    if (code) {
+      payload.item_code = code;
+      payload.itemCode = code;
+      payload.ItemCode = code;
+    }
+    if (id) {
+      payload.item_id = id;
+      payload.itemId = id;
+      payload.ItemID = id;
+    }
     cleanItems.push(payload);
   }
   if (!cleanItems.length) return { ok: false, reason: 'no_valid_items' };
