@@ -223,7 +223,13 @@ export async function persistMcgBlocklistEntries(productDoc, userId, reason = 'h
     );
   }
 
-  await Promise.allSettled(ops);
+  const results = await Promise.allSettled(ops);
+  const rejected = results.filter((r) => r.status === 'rejected');
+  if (rejected.length) {
+    try {
+      console.warn('[mcg][blocklist] upsert failures=%d (reason=%s) first=%s', rejected.length, reason, rejected[0]?.reason?.message || rejected[0]?.reason);
+    } catch {}
+  }
 }
 
 export async function persistMcgArchiveEntries(productDoc, userId, reason = 'manual_archive', options = {}) {
@@ -277,7 +283,13 @@ export async function persistMcgArchiveEntries(productDoc, userId, reason = 'man
     );
   }
 
-  await Promise.allSettled(ops);
+  const results = await Promise.allSettled(ops);
+  const rejected = results.filter((r) => r.status === 'rejected');
+  if (rejected.length) {
+    try {
+      console.warn('[mcg][archived] upsert failures=%d (reason=%s) first=%s', rejected.length, reason, rejected[0]?.reason?.message || rejected[0]?.reason);
+    } catch {}
+  }
 }
 
 export async function propagateMcgDeletion(productDoc, options = {}) {

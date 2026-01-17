@@ -16,6 +16,7 @@ import { hasArchivedAttribute } from '../utils/mcgAttributes.js';
 let _timer = null;
 let _inFlight = false;
 let _lastRunAt = 0;
+let _logBlockedSamples = 0;
 
 async function ensureMainWarehouse() {
   let wh = await Warehouse.findOne({ name: 'Main Warehouse' });
@@ -51,6 +52,7 @@ async function oneRun() {
   if (_inFlight) return;
   _inFlight = true;
   try {
+    _logBlockedSamples = 0;
     const s = await Settings.findOne().lean();
     const mcg = s?.mcg || {};
     if (!mcg.enabled || !mcg.autoPullEnabled) return;
@@ -139,6 +141,10 @@ async function oneRun() {
           );
           if (isBlockedIdentifier) {
             skippedBlocked++;
+            if (_logBlockedSamples < 10) {
+              _logBlockedSamples++;
+              try { console.log('[mcg][auto-pull] skip blocked: item_id=%s barcode=%s', normalizedMcgId || '', normalizedBarcode || ''); } catch {}
+            }
             continue;
           }
 

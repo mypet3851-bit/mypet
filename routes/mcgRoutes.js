@@ -465,6 +465,7 @@ router.post('/sync-items', adminAuth, async (req, res) => {
         if (!mcgId && !barcode) { skippedByMissingKey++; continue; }
         if (isBlockedIdentifier(mcgId, barcode)) {
           skippedByBlocklist++;
+          try { console.log('[mcg][sync-items] skip blocked: item_id=%s barcode=%s', String(mcgId || ''), String(barcode || '')); } catch {}
           continue;
         }
         if (mcgId) {
