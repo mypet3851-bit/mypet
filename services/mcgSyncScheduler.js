@@ -131,18 +131,19 @@ async function oneRun() {
             if (prod) matchedByMcgId = true;
           }
 
-          if (prod && prod.isActive === false) {
-            skippedArchivedProducts++;
+          const normalizedBarcode = barcode ? barcode.toLowerCase() : '';
+          const normalizedMcgId = mcgId ? mcgId.toLowerCase() : '';
+          const isBlockedIdentifier = (
+            (normalizedBarcode && blockCtx.blockedBarcodes.has(normalizedBarcode)) ||
+            (normalizedMcgId && blockCtx.blockedItemIds.has(normalizedMcgId))
+          );
+          if (isBlockedIdentifier) {
+            skippedBlocked++;
             continue;
           }
 
-          const normalizedBarcode = barcode ? barcode.toLowerCase() : '';
-          const normalizedMcgId = mcgId ? mcgId.toLowerCase() : '';
-          if (!prod && (
-            (normalizedBarcode && blockCtx.blockedBarcodes.has(normalizedBarcode)) ||
-            (normalizedMcgId && blockCtx.blockedItemIds.has(normalizedMcgId))
-          )) {
-            skippedBlocked++;
+          if (prod && prod.isActive === false) {
+            skippedArchivedProducts++;
             continue;
           }
 
