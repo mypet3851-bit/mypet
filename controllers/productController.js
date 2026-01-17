@@ -118,7 +118,7 @@ import { realTimeEventService } from '../services/realTimeEventService.js';
 import { deepseekTranslate, deepseekTranslateBatch, isDeepseekConfigured } from '../services/translate/deepseek.js';
 import { getItemQuantity as rivhitGetQty, testConnectivity as rivhitTest } from '../services/rivhitService.js';
 import { setItemsList } from '../services/mcgService.js';
-import { collectMcgIdentifiers, persistMcgBlocklistEntries, persistMcgArchiveEntries, propagateMcgDeletion, markMcgItemsArchived } from '../services/mcgDeletionService.js';
+import { collectMcgIdentifiers, persistMcgBlocklistEntries, persistMcgArchiveEntries, propagateMcgDeletion, markMcgItemsArchived, ensureIdentifiersHaveMcgIds } from '../services/mcgDeletionService.js';
 // Currency conversion disabled for product storage/display; prices are stored and served as-is in store currency
 
 // Get all products
@@ -1687,6 +1687,7 @@ async function mirrorDeletionInMcg(productDoc, userId, reason = 'hard_delete', o
 
   const { identifiers: identifiersOverride, groupOverride } = options || {};
   const identifiers = identifiersOverride || collectMcgIdentifiers(productDoc);
+  await ensureIdentifiersHaveMcgIds(identifiers, { groupOverride });
   const mcgItemIds = Array.from(identifiers.mcgIds);
   const barcodes = Array.from(identifiers.barcodes);
   const total = mcgItemIds.length + barcodes.length;
