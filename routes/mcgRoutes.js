@@ -4,7 +4,7 @@ import Settings from '../models/Settings.js';
 import Product from '../models/Product.js';
 import Category from '../models/Category.js';
 import { getItemsList, setItemsList } from '../services/mcgService.js';
-import { collectMcgIdentifiers, persistMcgBlocklistEntries, persistMcgArchiveEntries, propagateMcgDeletion, markMcgItemsArchived } from '../services/mcgDeletionService.js';
+import { collectMcgIdentifiers, persistMcgBlocklistEntries, persistMcgArchiveEntries, propagateMcgDeletion, markMcgItemsArchived, ensureIdentifiersHaveMcgIds } from '../services/mcgDeletionService.js';
 import Inventory from '../models/Inventory.js';
 import InventoryHistory from '../models/InventoryHistory.js';
 import Warehouse from '../models/Warehouse.js';
@@ -1002,6 +1002,7 @@ router.post('/delete-product/:productId', adminAuth, async (req, res) => {
       overrideBarcode: overrideBarcode || undefined
     };
     const identifiers = collectMcgIdentifiers(product, identifierOptions);
+    await ensureIdentifiersHaveMcgIds(identifiers, { groupOverride: req.body?.group });
 
     if (!product && !identifiers.mcgIds.size && !identifiers.barcodes.size) {
       return res.status(404).json({ message: 'Product not found' });

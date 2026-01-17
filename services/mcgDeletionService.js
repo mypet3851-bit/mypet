@@ -1,12 +1,51 @@
 import McgItemBlock from '../models/McgItemBlock.js';
 import McgArchivedItem from '../models/McgArchivedItem.js';
 import Settings from '../models/Settings.js';
-import { deleteItems as deleteMcgItems, setItemsList as setMcgItemsList } from './mcgService.js';
+import { deleteItems as deleteMcgItems, setItemsList as setMcgItemsList, getItemsList as fetchMcgItemsList } from './mcgService.js';
 
 const normalize = (value) => {
   if (value === undefined || value === null) return '';
   return String(value).trim();
 };
+
+const normalizeLower = (value) => normalize(value).toLowerCase();
+
+async function resolveRemoteMcgItemId(barcode, options = {}) {
+  const normalizedBarcode = normalize(barcode);
+  if (!normalizedBarcode) return '';
+  try {
+    const payload = { PageNumber: 1, PageSize: 50 };
+    if (options.groupOverride !== undefined) payload.group = options.groupOverride;
+    const data = await fetchMcgItemsList({ ...payload, Filter: { Barcode: normalizedBarcode } });
+    const list = Array.isArray(data?.Items) ? data.Items : (Array.isArray(data?.items) ? data.items : (Array.isArray(data) ? data : []));
+    const match = list.find((entry) => normalizeLower(entry?.Barcode ?? entry?.barcode ?? entry?.item_code) === normalizeLower(normalizedBarcode));
+    const fallback = list[0];
+    const picked = match || fallback;
+    if (!picked) return '';
+    return normalize(picked?.ItemID ?? picked?.id ?? picked?.itemId ?? picked?.item_id);
+  } catch (error) {
+    try {
+      console.warn('[mcg][resolve-item-id] lookup failed:', error?.message || error);
+    } catch {}
+    return '';
+  }
+}
+
+export async function ensureIdentifiersHaveMcgIds(identifiers, options = {}) {
+  if (!identifiers || (identifiers.mcgIds && identifiers.mcgIds.size)) {
+    return identifiers;
+  }
+  const firstBarcode = identifiers && identifiers.barcodes ? Array.from(identifiers.barcodes)[0] : null;
+  if (!firstBarcode) return identifiers;
+  const remoteId = await resolveRemoteMcgItemId(firstBarcode, options);
+  if (remoteId) {
+    identifiers.mcgIds.add(remoteId);
+    if (Array.isArray(identifiers.entries)) {
+      identifiers.entries.push({ mcgItemId: remoteId, barcode: firstBarcode });
+    }
+  }
+  return identifiers;
+}
 
 function coerceArray(input) {
   if (!input) return [];
