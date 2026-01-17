@@ -286,8 +286,8 @@ router.post('/sync-inventory', adminAuth, async (req, res) => {
       for (const it of items) {
         try {
           processed++;
-          const mcgId = ((it?.ItemID ?? it?.id ?? it?.itemId ?? it?.item_id ?? '') + '').trim();
-          const barcode = ((it?.Barcode ?? it?.barcode ?? it?.item_code ?? '') + '').trim();
+          const mcgId = ((it?.ItemID ?? it?.ItemId ?? it?.itemID ?? it?.id ?? it?.itemId ?? it?.item_id ?? '') + '').trim();
+          const barcode = ((it?.Barcode ?? it?.BarCode ?? it?.ItemCode ?? it?.ItemCODE ?? it?.itemCode ?? it?.barcode ?? it?.item_code ?? it?.code ?? '') + '').trim();
           const qty = Number(it?.StockQuantity ?? it?.stock ?? it?.item_inventory ?? 0);
           const qtySafe = Number.isFinite(qty) ? qty : 0;
 
@@ -459,7 +459,10 @@ router.post('/sync-items', adminAuth, async (req, res) => {
     // Helper to process a single page of results
     const processPage = async (items) => {
       // Build per-page dedupe sets and fetch existing once per page
-      const ids = items.map(it => (it?.ItemID ?? it?.id ?? it?.itemId ?? it?.item_id ?? '') + '').map(v => v.trim()).filter(Boolean);
+      const ids = items
+        .map(it => (it?.ItemID ?? it?.ItemId ?? it?.itemID ?? it?.id ?? it?.itemId ?? it?.item_id ?? '') + '')
+        .map(v => v.trim())
+        .filter(Boolean);
       const uniqueIds = Array.from(new Set(ids));
 
       const existing = await Product.find({ $or: [
@@ -475,8 +478,8 @@ router.post('/sync-items', adminAuth, async (req, res) => {
           skippedByArchivedAttribute++;
           continue;
         }
-      const mcgId = ((it?.ItemID ?? it?.id ?? it?.itemId ?? it?.item_id ?? '') + '').trim();
-      const barcode = ((it?.Barcode ?? it?.barcode ?? it?.item_code ?? '') + '').trim();
+      const mcgId = ((it?.ItemID ?? it?.ItemId ?? it?.itemID ?? it?.id ?? it?.itemId ?? it?.item_id ?? '') + '').trim();
+      const barcode = ((it?.Barcode ?? it?.BarCode ?? it?.ItemCode ?? it?.ItemCODE ?? it?.itemCode ?? it?.barcode ?? it?.item_code ?? it?.code ?? '') + '').trim();
         if (!mcgId && !barcode) { skippedByMissingKey++; continue; }
         if (isBlockedIdentifier(mcgId, barcode)) {
           skippedByBlocklist++;
