@@ -1749,11 +1749,30 @@ export const deleteProduct = async (req, res) => {
     const { hard } = req.query;
     const mcgGroupRaw = req.query?.mcgGroup ?? req.query?.group;
     const mcgGroup = Number.isFinite(Number(mcgGroupRaw)) ? Number(mcgGroupRaw) : undefined;
+    const normalizeIdentifierToken = (value) => {
+      if (value === undefined || value === null) return '';
+      return String(value).trim();
+    };
+    const resolveIdentifierOverride = (...fields) => {
+      for (const field of fields) {
+        const fromQuery = normalizeIdentifierToken(req.query?.[field]);
+        if (fromQuery) return fromQuery;
+        const fromBody = normalizeIdentifierToken(req.body?.[field]);
+        if (fromBody) return fromBody;
+      }
+      return '';
+    };
+    const overrideMcgItemId = resolveIdentifierOverride('mcgItemId', 'itemId');
+    const overrideMcgBarcode = resolveIdentifierOverride('mcgBarcode', 'barcode');
+    const identifierOptions = {
+      overrideMcgItemId: overrideMcgItemId || undefined,
+      overrideBarcode: overrideMcgBarcode || undefined
+    };
     if (hard === 'true') {
       const product = await Product.findById(req.params.id);
       if (!product) return res.status(404).json({ message: 'Product not found' });
 
-      const identifiers = collectMcgIdentifiers(product);
+      const identifiers = collectMcgIdentifiers(product, identifierOptions);
       await product.deleteOne();
       await Inventory.deleteMany({ product: product._id });
 
@@ -1776,7 +1795,7 @@ export const deleteProduct = async (req, res) => {
       { new: true }
     );
     if (!product) return res.status(404).json({ message: 'Product not found' });
-    const identifiers = collectMcgIdentifiers(product);
+    const identifiers = collectMcgIdentifiers(product, identifierOptions);
     // Block identifiers on soft delete as well to prevent auto-pull from recreating it
     const mcgDeletion = await mirrorDeletionInMcg(product, req.user?._id, 'soft_delete', { identifiers, groupOverride: mcgGroup });
     // Remove inventory rows so the product disappears from Inventory page
