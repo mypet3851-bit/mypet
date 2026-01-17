@@ -1,7 +1,7 @@
 import McgItemBlock from '../models/McgItemBlock.js';
 import McgArchivedItem from '../models/McgArchivedItem.js';
 import Settings from '../models/Settings.js';
-import { deleteItems as deleteMcgItems, setItemsList as setMcgItemsList, getItemsList as fetchMcgItemsList } from './mcgService.js';
+import { deleteItems as deleteMcgItems, setItemsList as setMcgItemsList, getItemsList as fetchMcgItemsList, updateItem as updateMcgItem } from './mcgService.js';
 
 const normalize = (value) => {
   if (value === undefined || value === null) return '';
@@ -378,7 +378,8 @@ export async function markMcgItemsArchived(productDoc, options = {}) {
     attributes,
     extraAttributes,
     archiveTag = 'archived',
-    itemAds
+    itemAds,
+    sendUpdateItemRequest = false
   } = options;
 
   const collectedRaw = identifiers || collectMcgIdentifiers(productDoc, {
@@ -468,6 +469,15 @@ export async function markMcgItemsArchived(productDoc, options = {}) {
 
   try {
     const mcgResponse = await setMcgItemsList(payload, resolvedGroup);
+    let updateItemResponses = null;
+    if (sendUpdateItemRequest) {
+      try {
+        updateItemResponses = await pushUpdateItemArchiveTag(unique, attributeValue, adsValue, resolvedGroup);
+      } catch (updateErr) {
+        try { console.warn('[mcg][update-item] archive tag push failed:', updateErr?.message || updateErr); } catch {}
+        updateItemResponses = { ok: false, error: updateErr?.message || 'mcg_update_item_failed' };
+      }
+    }
     try { console.log('[mcg][archive] tagged=%d attrs=%s', payload.length, attributeValue); } catch {}
     return {
       attempted: true,
@@ -476,7 +486,8 @@ export async function markMcgItemsArchived(productDoc, options = {}) {
       attributes: attributeValue,
       itemAds: adsValue,
       identifiers: { total: unique.length },
-      mcgResponse
+      mcgResponse,
+      updateItem: updateItemResponses
     };
   } catch (error) {
     try { console.warn('[mcg][archive] failed:', error?.message || error); } catch {}
@@ -486,4 +497,26 @@ export async function markMcgItemsArchived(productDoc, options = {}) {
       error: error?.message || 'mcg_archive_failed'
     };
   }
+}
+
+async function pushUpdateItemArchiveTag(entries, attributeValue, adsValue, group) {
+  if (!Array.isArray(entries) || !entries.length) return [];
+  const jobs = entries.map(async ({ mcgId, barcode }) => {
+    const payload = { item_attribute: attributeValue };
+    if (adsValue) payload.item_ads = adsValue;
+    if (mcgId) payload.item_id = mcgId;
+    else if (barcode) payload.item_code = barcode;
+    if (!payload.item_id && !payload.item_code) {
+      return { ok: false, skipped: true, reason: 'no_identifier', mcgId, barcode };
+    }
+    try {
+      const response = await updateMcgItem(payload, group);
+      const ok = response?.ok !== false && !response?.skipped;
+      return { ok, response, mcgId, barcode };
+    } catch (error) {
+      try { console.warn('[mcg][update-item] failed for %s/%s: %s', mcgId || '', barcode || '', error?.message || error); } catch {}
+      return { ok: false, error: error?.message || 'mcg_update_item_failed', mcgId, barcode };
+    }
+  });
+  return await Promise.all(jobs);
 }

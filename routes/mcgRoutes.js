@@ -972,99 +972,6 @@ router.post('/sync-product/:productId', adminAuth, async (req, res) => {
   }
 });
 
-// Archive an item in MCG by tagging it with the archived attribute/zero stock
-router.post('/archive-item', adminAuth, async (req, res) => {
-  try {
-    const rawAllow = req.body?.allowWhenDisabled;
-    const allowWhenDisabled = rawAllow === undefined
-      ? true
-      : (typeof rawAllow === 'string'
-          ? rawAllow.trim().toLowerCase() !== 'false'
-          : rawAllow !== false);
-
-    const includeVariants = req.body?.includeVariants !== false;
-    const additionalIdentifiers = Array.isArray(req.body?.identifiers) ? req.body.identifiers : [];
-    const overrideMcgItemId = (req.body?.mcgItemId ?? req.body?.itemId ?? '').toString().trim();
-    const overrideBarcode = (req.body?.mcgBarcode ?? req.body?.barcode ?? req.body?.itemCode ?? '').toString().trim();
-    const reasonRaw = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
-    const noteOverride = typeof req.body?.note === 'string' ? req.body.note : undefined;
-    const reason = reasonRaw || 'manual_archive';
-    const groupOverride = req.body?.group;
-    const attributes = req.body?.attributes;
-    const extraAttributes = req.body?.extraAttributes;
-    const archiveTag = req.body?.archiveTag;
-    const itemAds = req.body?.itemAds;
-    const productId = req.body?.productId || req.params?.productId;
-
-    let product = null;
-    if (productId) {
-      product = await Product.findById(productId).select('name mcgItemId mcgBarcode barcode variants.mcgItemId variants.barcode');
-      if (!product) {
-        return res.status(404).json({ message: 'Product not found' });
-      }
-    }
-
-    const identifierOptions = {
-      includeVariants,
-      additionalIdentifiers,
-      overrideMcgItemId: overrideMcgItemId || undefined,
-      overrideBarcode: overrideBarcode || undefined
-    };
-    const identifiers = collectMcgIdentifiers(product, identifierOptions);
-    const hasAnyIdentifier = (identifiers?.entries?.length || 0) > 0 || (identifiers?.mcgIds?.size || 0) > 0 || (identifiers?.barcodes?.size || 0) > 0;
-    if (!hasAnyIdentifier) {
-      return res.status(400).json({ message: 'Provide mcgItemId, barcode, or linked product identifiers' });
-    }
-
-    const settings = await Settings.findOne();
-
-    const archiveResult = await markMcgItemsArchived(product, {
-      identifiers,
-      includeVariants,
-      additionalIdentifiers,
-      overrideMcgItemId: identifierOptions.overrideMcgItemId,
-      overrideBarcode: identifierOptions.overrideBarcode,
-      settingsDoc: settings,
-      allowWhenDisabled,
-      groupOverride,
-      attributes,
-      extraAttributes,
-      archiveTag,
-      itemAds
-    });
-
-    if (archiveResult?.skipped && archiveResult.reason === 'mcg_disabled' && !allowWhenDisabled) {
-      return res.status(412).json({ message: 'MCG integration disabled' });
-    }
-    if (archiveResult?.skipped && archiveResult.reason === 'no_identifiers') {
-      return res.status(400).json({ message: 'Product is not linked to MCG (missing barcode/item id)' });
-    }
-
-    await persistMcgArchiveEntries(product, req.user?._id, reason, {
-      identifiers,
-      includeVariants,
-      additionalIdentifiers,
-      overrideMcgItemId: identifierOptions.overrideMcgItemId,
-      overrideBarcode: identifierOptions.overrideBarcode,
-      noteOverride,
-      groupOverride
-    });
-
-    res.json({
-      ok: archiveResult?.ok !== false,
-      archive: archiveResult,
-      identifiers: {
-        mcgItemIds: Array.from(identifiers.mcgIds),
-        barcodes: Array.from(identifiers.barcodes),
-        total: (identifiers.mcgIds?.size || 0) + (identifiers.barcodes?.size || 0)
-      }
-    });
-  } catch (e) {
-    const status = e?.status || e?.response?.status || 500;
-    res.status(status).json({ message: e?.message || 'mcg_archive_failed' });
-  }
-});
-
 // Delete mapped identifiers from MCG without removing the local product
 router.post('/delete-product/:productId', adminAuth, async (req, res) => {
   try {
@@ -1115,7 +1022,8 @@ router.post('/delete-product/:productId', adminAuth, async (req, res) => {
         overrideBarcode: overrideBarcode || undefined,
         settingsDoc: settings,
         allowWhenDisabled,
-        groupOverride: req.body?.group
+        groupOverride: req.body?.group,
+        sendUpdateItemRequest: true
       });
     }
 

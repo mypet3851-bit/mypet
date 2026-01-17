@@ -345,6 +345,73 @@ export async function setItemsList(items = [], group) {
   }
 }
 
+export async function updateItem(item = {}, group) {
+  if (!item || typeof item !== 'object') {
+    return { ok: false, reason: 'invalid_item' };
+  }
+  const resolveId = (value) => (value === undefined || value === null) ? '' : String(value).trim();
+  const item_id = resolveId(item.item_id ?? item.ItemID ?? item.itemId ?? item.id);
+  const item_code = resolveId(item.item_code ?? item.ItemCode ?? item.itemCode ?? item.barcode ?? item.code);
+  if (!item_id && !item_code) {
+    return { ok: false, reason: 'no_identifier' };
+  }
+  const payload = {};
+  if (item_id) {
+    payload.item_id = item_id;
+    payload.itemId = item_id;
+    payload.ItemID = item_id;
+  }
+  if (item_code) {
+    payload.item_code = item_code;
+    payload.itemCode = item_code;
+    payload.ItemCode = item_code;
+  }
+  const passthroughKeys = ['item_name', 'item_price', 'item_department', 'item_image', 'item_weight', 'item_ads', 'item_attribute', 'item_inventory'];
+  for (const key of passthroughKeys) {
+    if (item[key] !== undefined) {
+      payload[key] = item[key];
+    }
+  }
+  const cfg = await getConfig();
+  const normalizedGroup = (group !== undefined && group !== null && !Number.isNaN(Number(group))) ? Number(group) : undefined;
+  if (isUpliFlavor(cfg)) {
+    const body = { req: 'update_item', ...payload };
+    if (normalizedGroup !== undefined) body.group = normalizedGroup;
+    return await mcgRequestUpli(body);
+  }
+
+  const { base, version, extraHeaderName, extraHeaderValue } = cfg;
+  const url = `${base}/api/${version}/update_item`;
+  let token = await getAccessToken();
+  const body = { ...payload, ...(normalizedGroup !== undefined ? { group: normalizedGroup } : {}) };
+  try {
+    const resp = await axios.post(url, body, {
+      headers: { 'Content-Type': 'application/json', ...buildAuthHeader(token), ...(extraHeaderName && extraHeaderValue ? { [extraHeaderName]: extraHeaderValue } : {}) },
+      timeout: 20000
+    });
+    return resp?.data || { ok: true };
+  } catch (e) {
+    const status = e?.response?.status;
+    if (status === 401) {
+      token = await fetchAccessToken();
+      const resp2 = await axios.post(url, body, {
+        headers: { 'Content-Type': 'application/json', ...buildAuthHeader(token), ...(extraHeaderName && extraHeaderValue ? { [extraHeaderName]: extraHeaderValue } : {}) },
+        timeout: 20000
+      });
+      return resp2?.data || { ok: true };
+    }
+    let detail = '';
+    try {
+      const d = e?.response?.data;
+      if (d && typeof d === 'object') detail = d.message || d.error || '';
+      else if (typeof e?.response?.data === 'string') detail = e.response.data;
+    } catch {}
+    const err = new Error(`MCG update_item failed${status ? ` (${status})` : ''}${detail ? `: ${String(detail).slice(0,160)}` : ''}`);
+    err.status = status;
+    throw err;
+  }
+}
+
 export async function deleteItems(items = [], group) {
   if (!Array.isArray(items) || !items.length) return { ok: false, reason: 'no_items' };
   const cfg = await getConfig();
