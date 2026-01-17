@@ -208,7 +208,16 @@ app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 app.use(cookieParser());
 // Serve static for service worker if behind express (especially in production)
-app.use(express.static(path.resolve(__dirname, '../public')));
+const publicDir = path.resolve(__dirname, '../public');
+app.use(express.static(publicDir));
+
+// Explicit ZCredit mobile success page route so Cloud Run serves it even when static fallback misses
+const zcreditSuccessFile = path.join(publicDir, 'zcredit-mobile-success.html');
+app.get(['/zcredit-mobile-success', '/zcredit-mobile-success.html'], (req, res, next) => {
+  res.sendFile(zcreditSuccessFile, (err) => {
+    if (err) next(err);
+  });
+});
 
 // Serve uploaded files with CORS headers to prevent CORB issues
 app.use('/uploads', (req, res, next) => {
