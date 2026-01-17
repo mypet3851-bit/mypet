@@ -59,7 +59,7 @@ async function oneRun() {
     const baseUrl = String(mcg.baseUrl || '').trim();
     const isUpli = apiFlavor === 'uplicali' || /apis\.uplicali\.com/i.test(baseUrl) || /SuperMCG\/MCG_API/i.test(baseUrl);
 
-    let processed = 0, updated = 0, created = 0, skippedNoMatch = 0, errors = 0, autoCreated = 0, skippedBlocked = 0, skippedArchivedAttr = 0;
+    let processed = 0, updated = 0, created = 0, skippedNoMatch = 0, errors = 0, autoCreated = 0, skippedBlocked = 0, skippedArchivedAttr = 0, skippedArchivedProducts = 0;
 
     const blockCtx = {
       blockedBarcodes: new Set(),
@@ -116,19 +116,24 @@ async function oneRun() {
           // Variant by barcode
           let prod = null; let variant = null; let matchedByMcgId = false;
           if (barcode) {
-            prod = await Product.findOne({ 'variants.barcode': barcode }).select('_id variants');
+            prod = await Product.findOne({ 'variants.barcode': barcode }).select('_id variants isActive');
             if (prod?.variants) {
               variant = prod.variants.find(v => String(v?.barcode || '').trim() === barcode);
             }
           }
           // Product barcode
           if (!prod && barcode) {
-            prod = await Product.findOne({ mcgBarcode: barcode }).select('_id');
+            prod = await Product.findOne({ mcgBarcode: barcode }).select('_id isActive');
           }
           // Fallback non-variant by mcgItemId
           if (!prod && mcgId) {
-            prod = await Product.findOne({ mcgItemId: mcgId }).select('_id mcgBarcode');
+            prod = await Product.findOne({ mcgItemId: mcgId }).select('_id mcgBarcode isActive');
             if (prod) matchedByMcgId = true;
+          }
+
+          if (prod && prod.isActive === false) {
+            skippedArchivedProducts++;
+            continue;
           }
 
           const normalizedBarcode = barcode ? barcode.toLowerCase() : '';
@@ -270,7 +275,7 @@ async function oneRun() {
       }
     }
 
-  try { console.log('[mcg][auto-pull] processed=%d updated=%d createdInv=%d autoCreatedProducts=%d skipped=%d skippedBlocklist=%d skippedArchived=%d errors=%d', processed, updated, created, autoCreated, skippedNoMatch, skippedBlocked, skippedArchivedAttr, errors); } catch {}
+  try { console.log('[mcg][auto-pull] processed=%d updated=%d createdInv=%d autoCreatedProducts=%d skipped=%d skippedBlocklist=%d skippedArchivedAttr=%d skippedArchivedProducts=%d errors=%d', processed, updated, created, autoCreated, skippedNoMatch, skippedBlocked, skippedArchivedAttr, skippedArchivedProducts, errors); } catch {}
     _lastRunAt = Date.now();
   } catch (e) {
     try { console.warn('[mcg][auto-pull] failed:', e?.message || e); } catch {}

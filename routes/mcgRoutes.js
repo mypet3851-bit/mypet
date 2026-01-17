@@ -394,6 +394,7 @@ router.post('/sync-items', adminAuth, async (req, res) => {
   let skippedAsDuplicate = 0;
   let skippedByBlocklist = 0;
   let skippedByArchivedAttribute = 0;
+  let skippedArchivedProducts = 0;
   let incomingTotal = 0;
   // Maintain seen set across the whole run to avoid duplicates across pages (by mcgItemId only)
   const seenIds = new Set();
@@ -465,6 +466,13 @@ router.post('/sync-items', adminAuth, async (req, res) => {
         if (isBlockedIdentifier(mcgId, barcode)) {
           skippedByBlocklist++;
           continue;
+        }
+        if (mcgId) {
+          const existingDoc = existById.get(mcgId);
+          if (existingDoc && existingDoc.isActive === false) {
+            skippedArchivedProducts++;
+            continue;
+          }
         }
   // Duplicate rule (updated): dedupe ONLY by mcgItemId. Barcode duplicates are allowed by request.
   const isDupById = mcgId && (existId.has(mcgId) || seenIds.has(mcgId));
@@ -549,20 +557,6 @@ router.post('/sync-items', adminAuth, async (req, res) => {
         ...(name_i18n ? { name_i18n } : {}),
         ...(description_i18n ? { description_i18n } : {})
       };
-      // If an inactive product exists with same mcgItemId, reactivate and update instead of inserting new
-      if (mcgId && existById.has(mcgId) && existById.get(mcgId)?.isActive === false) {
-        if (!dry) {
-          const updated = await Product.findOneAndUpdate(
-            { _id: existById.get(mcgId)._id },
-            { $set: doc },
-            { new: true }
-          );
-          if (updated) reactivated.push(updated);
-        }
-        // Mark as seen to avoid re-processing same id in this run
-        if (mcgId) seenIds.add(mcgId);
-        continue;
-      }
         toInsert.push(doc);
         // Mark keys as seen to prevent duplicates within the same run
   if (mcgId) seenIds.add(mcgId);
@@ -620,6 +614,7 @@ router.post('/sync-items', adminAuth, async (req, res) => {
         skippedByMissingKey,
         skippedByArchivedAttribute,
         skippedByBlocklist,
+        skippedArchivedProducts,
         skippedAsDuplicate,
         sampleNew: createdAll.slice(0, 3).map(x => ({ name: x.name, mcgItemId: x.mcgItemId, mcgBarcode: x.mcgBarcode })),
         updatedNames,
@@ -708,6 +703,7 @@ router.post('/sync-items', adminAuth, async (req, res) => {
       skippedByMissingKey,
       skippedByArchivedAttribute,
       skippedByBlocklist,
+      skippedArchivedProducts,
       skippedAsDuplicate,
       sampleNew: createdAll.slice(0, 3).map(x => ({ name: x.name, mcgItemId: x.mcgItemId, mcgBarcode: x.mcgBarcode })),
       updatedNames,
