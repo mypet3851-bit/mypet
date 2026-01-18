@@ -2336,6 +2336,7 @@ export const updateVariant = async (req, res) => {
   const { sku, barcode, price, originalPrice, stock, images, isActive, rivhitItemId } = req.body || {};
     const product = await Product.findById(id);
     if (!product) return res.status(404).json({ message: 'Product not found' });
+    const identifiersBefore = collectMcgIdentifiers(product);
     const v = (product.variants || []).id(variantId);
     if (!v) return res.status(404).json({ message: 'Variant not found' });
     if (sku !== undefined) v.sku = sku;
@@ -2409,6 +2410,48 @@ export const updateVariant = async (req, res) => {
     if (Array.isArray(images)) v.images = images.filter((i)=> typeof i === 'string' && i.trim());
     if (isActive !== undefined) v.isActive = !!isActive;
     await product.save();
+
+    // If barcode/mcg identifiers were removed from this product/variant, prevent MCG import from recreating it.
+    try {
+      const norm = (val) => (val === undefined || val === null) ? '' : String(val).trim().toLowerCase();
+      const identifiersAfter = collectMcgIdentifiers(product);
+      const beforeKeys = new Set([
+        ...Array.from(identifiersBefore.mcgIds || []).map(norm).filter(Boolean),
+        ...Array.from(identifiersBefore.barcodes || []).map(norm).filter(Boolean)
+      ]);
+      const afterKeys = new Set([
+        ...Array.from(identifiersAfter.mcgIds || []).map(norm).filter(Boolean),
+        ...Array.from(identifiersAfter.barcodes || []).map(norm).filter(Boolean)
+      ]);
+      let removedCount = 0;
+      for (const key of beforeKeys) {
+        if (!afterKeys.has(key)) removedCount++;
+      }
+      if (beforeKeys.size > 0 && removedCount > 0) {
+        await Promise.all([
+          persistMcgBlocklistEntries(product, req.user?._id, 'manual_unlink', {
+            identifiers: identifiersBefore,
+            noteOverride: 'Auto-blocked because MCG identifiers were removed from a variant'
+          }),
+          persistMcgArchiveEntries(product, req.user?._id, 'manual_unlink', {
+            identifiers: identifiersBefore,
+            noteOverride: 'Auto-archived because MCG identifiers were removed from a variant'
+          })
+        ]);
+        try {
+          await markMcgItemsArchived(product, {
+            identifiers: identifiersBefore,
+            allowWhenDisabled: true,
+            itemAds: 'Archived product (variant unlinked from catalog)',
+            sendUpdateItemRequest: true
+          });
+        } catch {}
+        try { console.log('[variants][update] blocked removed MCG identifiers count=%d product=%s variant=%s', removedCount, String(product?._id || ''), String(variantId || '')); } catch {}
+      }
+    } catch (unlinkErr) {
+      try { console.warn('[variants][update] unlink mcg guard failed', unlinkErr?.message || unlinkErr); } catch {}
+    }
+
     const populated = await Product.findById(id).select('variants').populate('variants.attributes.attribute').populate('variants.attributes.value');
     const updated = (populated && populated.variants ? populated.variants.find((x)=> x._id.toString()===variantId) : null);
     res.json(updated);
@@ -2463,6 +2506,7 @@ export const deleteVariant = async (req, res) => {
 
     const product = await Product.findById(id);
     if (!product) return res.status(404).json({ message: 'Product not found' });
+    const identifiersBefore = collectMcgIdentifiers(product);
     const v = (product.variants || []).id(variantId);
     if (!v) return res.status(404).json({ message: 'Variant not found' });
 
@@ -2488,6 +2532,48 @@ export const deleteVariant = async (req, res) => {
       product.variants = (product.variants || []).filter((vv) => String(vv._id) !== String(variantId));
     }
     await product.save();
+
+    // If removing the variant removed the last MCG mapping, block it so MCG can't re-import it.
+    try {
+      const norm = (val) => (val === undefined || val === null) ? '' : String(val).trim().toLowerCase();
+      const identifiersAfter = collectMcgIdentifiers(product);
+      const beforeKeys = new Set([
+        ...Array.from(identifiersBefore.mcgIds || []).map(norm).filter(Boolean),
+        ...Array.from(identifiersBefore.barcodes || []).map(norm).filter(Boolean)
+      ]);
+      const afterKeys = new Set([
+        ...Array.from(identifiersAfter.mcgIds || []).map(norm).filter(Boolean),
+        ...Array.from(identifiersAfter.barcodes || []).map(norm).filter(Boolean)
+      ]);
+      let removedCount = 0;
+      for (const key of beforeKeys) {
+        if (!afterKeys.has(key)) removedCount++;
+      }
+      if (beforeKeys.size > 0 && removedCount > 0) {
+        await Promise.all([
+          persistMcgBlocklistEntries(product, req.user?._id, 'manual_unlink', {
+            identifiers: identifiersBefore,
+            noteOverride: 'Auto-blocked because a variant was deleted (MCG identifiers removed)'
+          }),
+          persistMcgArchiveEntries(product, req.user?._id, 'manual_unlink', {
+            identifiers: identifiersBefore,
+            noteOverride: 'Auto-archived because a variant was deleted (MCG identifiers removed)'
+          })
+        ]);
+        try {
+          await markMcgItemsArchived(product, {
+            identifiers: identifiersBefore,
+            allowWhenDisabled: true,
+            itemAds: 'Archived product (variant deleted from catalog)',
+            sendUpdateItemRequest: true
+          });
+        } catch {}
+        try { console.log('[variants][delete] blocked removed MCG identifiers count=%d product=%s variant=%s', removedCount, String(product?._id || ''), String(variantId || '')); } catch {}
+      }
+    } catch (unlinkErr) {
+      try { console.warn('[variants][delete] unlink mcg guard failed', unlinkErr?.message || unlinkErr); } catch {}
+    }
+
     // Return updated variants (populated) so client can refresh list
     const populated = await Product.findById(id)
       .select('variants')
