@@ -415,7 +415,6 @@ router.post('/sync-items', adminAuth, async (req, res) => {
     // Track name updates for existing products whose MCG name changed
     const updatedNames = [];
     const updatedBarcodes = [];
-    const updatedPrices = [];
 
     // Determine category
     let categoryId = null;
@@ -492,31 +491,12 @@ router.post('/sync-items', adminAuth, async (req, res) => {
         .map(v => v.trim())
         .filter(Boolean);
       const uniqueIds = Array.from(new Set(ids));
-      const barcodes = items
-        .map(it => (it?.Barcode ?? it?.BarCode ?? it?.ItemCode ?? it?.ItemCODE ?? it?.itemCode ?? it?.barcode ?? it?.item_code ?? it?.code ?? '') + '')
-        .map(v => v.trim())
-        .filter(Boolean);
-      const uniqueBarcodes = Array.from(new Set(barcodes));
 
-      const queryOr = [];
-      if (uniqueIds.length) queryOr.push({ mcgItemId: { $in: uniqueIds } });
-      if (uniqueBarcodes.length) queryOr.push({ mcgBarcode: { $in: uniqueBarcodes } });
-
-      const existing = queryOr.length
-        ? await Product.find({ $or: queryOr }).select('mcgItemId mcgBarcode isActive _id name price')
-        : [];
-
-      const existById = new Map();
-      const existByBarcode = new Map();
-      for (const doc of existing) {
-        const idKey = ((doc?.mcgItemId || '') + '').trim();
-        if (idKey) existById.set(idKey, doc);
-        const bcKey = ((doc?.mcgBarcode || '') + '').trim();
-        if (bcKey) {
-          if (!existByBarcode.has(bcKey)) existByBarcode.set(bcKey, []);
-          existByBarcode.get(bcKey).push(doc);
-        }
-      }
+      const existing = await Product.find({ $or: [
+        uniqueIds.length ? { mcgItemId: { $in: uniqueIds } } : null
+      ].filter(Boolean) }).select('mcgItemId mcgBarcode isActive _id name');
+      const existId = new Set(existing.filter(p => p.isActive !== false).map(p => (p.mcgItemId || '').toString()));
+      const existById = new Map(existing.map(p => [ (p.mcgItemId || '').toString(), p ]));
 
       const toInsert = [];
       const reactivated = [];
@@ -525,147 +505,107 @@ router.post('/sync-items', adminAuth, async (req, res) => {
           skippedByArchivedAttribute++;
           continue;
         }
-        const mcgId = ((it?.ItemID ?? it?.ItemId ?? it?.itemID ?? it?.id ?? it?.itemId ?? it?.item_id ?? '') + '').trim();
-        const barcode = ((it?.Barcode ?? it?.BarCode ?? it?.ItemCode ?? it?.ItemCODE ?? it?.itemCode ?? it?.barcode ?? it?.item_code ?? it?.code ?? '') + '').trim();
+      const mcgId = ((it?.ItemID ?? it?.ItemId ?? it?.itemID ?? it?.id ?? it?.itemId ?? it?.item_id ?? '') + '').trim();
+      const barcode = ((it?.Barcode ?? it?.BarCode ?? it?.ItemCode ?? it?.ItemCODE ?? it?.itemCode ?? it?.barcode ?? it?.item_code ?? it?.code ?? '') + '').trim();
         if (!mcgId && !barcode) { skippedByMissingKey++; continue; }
         if (isBlockedIdentifier(mcgId, barcode)) {
           skippedByBlocklist++;
           try { console.log('[mcg][sync-items] skip blocked: item_id=%s barcode=%s', String(mcgId || ''), String(barcode || '')); } catch {}
           continue;
         }
-
-        const numericLike = (s) => /^\d{8,}$/.test(String(s || ''));
-        let name = (it?.ItemName ?? it?.Name ?? it?.name ?? it?.item_name ?? it?.ItemDescription ?? it?.Description ?? '') + '';
-        name = name.trim();
-        const desc = (it?.ItemDescription ?? it?.Description ?? it?.description ?? (it?.item_department ? `Department: ${it.item_department}` : 'Imported from MCG')) + '';
-        const descTrimmed = desc.trim();
-        if (!name || numericLike(name)) {
-          name = (descTrimmed || barcode || mcgId || 'MCG Item') + '';
-        }
-        const langGuess = detectLangFromText(`${name} ${descTrimmed}`);
-
-        // Prefer provider's final (VAT-inclusive) price when available; otherwise apply configured tax multiplier
-        let price = 0;
-        if (it && (it.item_final_price !== undefined && it.item_final_price !== null)) {
-          const pf = Number(it.item_final_price);
-          price = Number.isFinite(pf) && pf >= 0 ? pf : 0;
-        } else {
-          const priceRaw = Number(it?.Price ?? it?.price ?? it?.item_price ?? 0);
-          const base = Number.isFinite(priceRaw) && priceRaw >= 0 ? priceRaw : 0;
-          price = Math.round(base * taxMultiplier * 100) / 100;
-        }
-        // Apply normalization rule (e.g., 9.92 -> 9.99, 9.96 -> 10.00)
-        price = normalizeMcgImportedPrice(price);
-
-        const stockRaw = Number(it?.StockQuantity ?? it?.stock ?? it?.item_inventory ?? 0);
-        const stock = Number.isFinite(stockRaw) ? Math.max(0, stockRaw) : 0;
-        const img = (it?.ImageURL ?? it?.imageUrl ?? (it?.item_image || '')) + '';
-        const imgOk = /^(https?:\/\/|\/)/i.test(img) ? img : '';
-        const images = imgOk ? [imgOk] : ['/placeholder-image.svg'];
-        // Detect language and seed i18n maps so Quick Translate tabs show the right values
-        const name_i18n = (langGuess === 'en') ? undefined : new Map([[langGuess, name]]);
-        const description_i18n = (langGuess === 'en') ? undefined : new Map([[langGuess, desc]]);
-
-        const attemptExistingUpdate = async (targetDoc, matchedBy) => {
-          const setPayload = {};
-          if (name && name !== targetDoc.name && name.toLowerCase() !== String(targetDoc.name || '').toLowerCase()) {
-            setPayload.name = name;
-            if (langGuess && langGuess !== 'en') {
-              setPayload[`name_i18n.${langGuess}`] = name;
-              if (descTrimmed) setPayload[`description_i18n.${langGuess}`] = descTrimmed;
-            }
-            const entry = { mcgItemId: mcgId || null, before: targetDoc.name, after: name, lang: langGuess || 'en' };
-            if (dry) entry.dryRun = true;
-            updatedNames.push(entry);
-          }
-          const currentBarcode = (targetDoc.mcgBarcode || '').trim();
-          if (barcode && barcode !== currentBarcode) {
-            setPayload.mcgBarcode = barcode;
-            const entry = { mcgItemId: mcgId || null, before: currentBarcode || null, after: barcode };
-            if (dry) entry.dryRun = true;
-            updatedBarcodes.push(entry);
-          }
-          if (!targetDoc.mcgItemId && mcgId) {
-            setPayload.mcgItemId = mcgId;
-          }
-          const incomingPriceCents = Math.round(Number(price || 0) * 100);
-          const currentPriceCents = Math.round(Number(targetDoc.price || 0) * 100);
-          if (Number.isFinite(incomingPriceCents) && incomingPriceCents >= 0 && incomingPriceCents !== currentPriceCents) {
-            setPayload.price = price;
-            const entry = { mcgItemId: mcgId || null, barcode: barcode || null, before: targetDoc.price ?? null, after: price, matchedBy };
-            if (dry) entry.dryRun = true;
-            updatedPrices.push(entry);
-          }
-          if (Object.keys(setPayload).length === 0) return false;
-          if (!dry) {
-            await Product.updateOne({ _id: targetDoc._id }, { $set: setPayload });
-          }
-          Object.assign(targetDoc, setPayload);
-          if (setPayload.mcgItemId) {
-            const key = String(setPayload.mcgItemId).trim();
-            if (key) existById.set(key, targetDoc);
-          }
-          return true;
-        };
-
-        let existingDoc = null;
         if (mcgId) {
-          const docById = existById.get(mcgId);
-          if (docById) {
-            if (docById.isActive === false) {
-              skippedArchivedProducts++;
-              continue;
-            }
-            existingDoc = docById;
-          } else if (seenIds.has(mcgId)) {
-            skippedAsDuplicate++;
+          const existingDoc = existById.get(mcgId);
+          if (existingDoc && existingDoc.isActive === false) {
+            skippedArchivedProducts++;
             continue;
           }
         }
-        if (!existingDoc && barcode) {
-          const bcCandidates = existByBarcode.get(barcode) || [];
-          let candidate = bcCandidates.find(p => p.isActive !== false && (!p.mcgItemId || !mcgId || p.mcgItemId === mcgId));
-          if (!candidate) {
-            const archivedMatch = bcCandidates.find(p => p.isActive === false && (!p.mcgItemId || !mcgId || p.mcgItemId === mcgId));
-            if (archivedMatch) {
-              skippedArchivedProducts++;
-              continue;
+  // Duplicate rule (updated): dedupe ONLY by mcgItemId. Barcode duplicates are allowed by request.
+  const isDupById = mcgId && (existId.has(mcgId) || seenIds.has(mcgId));
+  if (isDupById) {
+    // Attempt name resync for existing active product
+    try {
+      const pDoc = existById.get(mcgId);
+      if (pDoc && pDoc.isActive !== false) {
+        const numericLike = (s) => /^\d{8,}$/.test(String(s||''));
+        let remoteName = (it?.ItemName ?? it?.Name ?? it?.name ?? it?.item_name ?? it?.ItemDescription ?? it?.Description ?? '') + '';
+        remoteName = remoteName.trim();
+        const descTemp = (it?.ItemDescription ?? it?.Description ?? it?.description ?? '') + '';
+        const remoteDesc = descTemp.trim();
+        if (!remoteName || numericLike(remoteName)) remoteName = remoteDesc || remoteName;
+        const langGuess = detectLangFromText(`${remoteName} ${remoteDesc}`);
+        if (remoteName && remoteName !== pDoc.name && remoteName.toLowerCase() !== String(pDoc.name||'').toLowerCase()) {
+          if (!dry) {
+            const setPayload = { name: remoteName };
+            if (langGuess && langGuess !== 'en') {
+              setPayload[`name_i18n.${langGuess}`] = remoteName;
+              if (remoteDesc) setPayload[`description_i18n.${langGuess}`] = remoteDesc;
             }
+            await Product.updateOne({ _id: pDoc._id }, { $set: setPayload });
+            updatedNames.push({ mcgItemId: mcgId, before: pDoc.name, after: remoteName, lang: langGuess || 'en' });
+          } else {
+            updatedNames.push({ mcgItemId: mcgId, before: pDoc.name, after: remoteName, lang: langGuess || 'en', dryRun: true });
           }
-          if (candidate) {
-            existingDoc = candidate;
+        }
+        const currentBarcode = (pDoc.mcgBarcode || '').trim();
+        if (barcode && barcode !== currentBarcode) {
+          if (!dry) {
+            await Product.updateOne({ _id: pDoc._id }, { $set: { mcgBarcode: barcode } });
+            updatedBarcodes.push({ mcgItemId: mcgId, before: currentBarcode || null, after: barcode });
+          } else {
+            updatedBarcodes.push({ mcgItemId: mcgId, before: currentBarcode || null, after: barcode, dryRun: true });
           }
         }
-        if (existingDoc) {
-          await attemptExistingUpdate(existingDoc, existingDoc.mcgItemId ? 'mcgId' : 'barcode');
-          skippedAsDuplicate++;
-          continue;
-        }
-
-        const isDupById = mcgId && seenIds.has(mcgId);
-        if (isDupById) {
-          skippedAsDuplicate++;
-          continue;
-        }
-
-        const doc = {
-          name,
-          description: desc,
-          price,
-          images,
-          category: categoryId,
-          stock,
-          relatedProducts: [],
-          isActive: true,
-          mcgItemId: mcgId || undefined,
-          // Keep real barcode when present; UI will display mcgItemId if barcode is missing
-          mcgBarcode: barcode || undefined,
-          ...(name_i18n ? { name_i18n } : {}),
-          ...(description_i18n ? { description_i18n } : {})
-        };
+      }
+    } catch {}
+    skippedAsDuplicate++; continue; }
+  // Prefer human-friendly names: ItemName/Name; fall back to ItemDescription/Description when name looks numeric.
+  const numericLike = (s) => /^\d{8,}$/.test(String(s||''));
+  let name = (it?.ItemName ?? it?.Name ?? it?.name ?? it?.item_name ?? it?.ItemDescription ?? it?.Description ?? '') + '';
+  name = name.trim();
+  const desc = (it?.ItemDescription ?? it?.Description ?? it?.description ?? (it?.item_department ? `Department: ${it.item_department}` : 'Imported from MCG')) + '';
+  if (!name || numericLike(name)) {
+    name = (desc || barcode || mcgId || 'MCG Item') + '';
+  }
+      // Prefer provider's final (VAT-inclusive) price when available; otherwise apply configured tax multiplier
+      let price = 0;
+      if (it && (it.item_final_price !== undefined && it.item_final_price !== null)) {
+        const pf = Number(it.item_final_price);
+        price = Number.isFinite(pf) && pf >= 0 ? pf : 0;
+      } else {
+        const priceRaw = Number(it?.Price ?? it?.price ?? it?.item_price ?? 0);
+        const base = Number.isFinite(priceRaw) && priceRaw >= 0 ? priceRaw : 0;
+        price = Math.round(base * taxMultiplier * 100) / 100;
+      }
+      // Apply normalization rule (e.g., 9.92 -> 9.99, 9.96 -> 10.00)
+      price = normalizeMcgImportedPrice(price);
+      const stockRaw = Number(it?.StockQuantity ?? it?.stock ?? it?.item_inventory ?? 0);
+      const stock = Number.isFinite(stockRaw) ? Math.max(0, stockRaw) : 0;
+      const img = (it?.ImageURL ?? it?.imageUrl ?? (it?.item_image || '')) + '';
+      const imgOk = /^(https?:\/\/|\/)/i.test(img) ? img : '';
+      const images = imgOk ? [imgOk] : ['/placeholder-image.svg'];
+      // Detect language and seed i18n maps so Quick Translate tabs show the right values
+      const detectedLang = detectLangFromText(`${name} ${desc}`);
+      const name_i18n = (detectedLang === 'en') ? undefined : new Map([[detectedLang, name]]);
+      const description_i18n = (detectedLang === 'en') ? undefined : new Map([[detectedLang, desc]]);
+      const doc = {
+        name,
+        description: desc,
+        price,
+        images,
+        category: categoryId,
+        stock,
+        relatedProducts: [],
+        isActive: true,
+        mcgItemId: mcgId || undefined,
+        // Keep real barcode when present; UI will display mcgItemId if barcode is missing
+        mcgBarcode: barcode || undefined,
+        ...(name_i18n ? { name_i18n } : {}),
+        ...(description_i18n ? { description_i18n } : {})
+      };
         toInsert.push(doc);
         // Mark keys as seen to prevent duplicates within the same run
-        if (mcgId) seenIds.add(mcgId);
+  if (mcgId) seenIds.add(mcgId);
       }
 
       incomingTotal += items.length;
@@ -724,8 +664,7 @@ router.post('/sync-items', adminAuth, async (req, res) => {
         skippedAsDuplicate,
         sampleNew: createdAll.slice(0, 3).map(x => ({ name: x.name, mcgItemId: x.mcgItemId, mcgBarcode: x.mcgBarcode })),
         updatedNames,
-        updatedBarcodes,
-        updatedPrices
+        updatedBarcodes
       });
     }
 
@@ -814,8 +753,7 @@ router.post('/sync-items', adminAuth, async (req, res) => {
       skippedAsDuplicate,
       sampleNew: createdAll.slice(0, 3).map(x => ({ name: x.name, mcgItemId: x.mcgItemId, mcgBarcode: x.mcgBarcode })),
       updatedNames,
-      updatedBarcodes,
-      updatedPrices
+      updatedBarcodes
     });
   } catch (e) {
     const status = e?.status || e?.response?.status || 400;
