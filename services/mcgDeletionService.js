@@ -3,6 +3,9 @@ import McgArchivedItem from '../models/McgArchivedItem.js';
 import Settings from '../models/Settings.js';
 import { deleteItems as deleteMcgItems, setItemsList as setMcgItemsList, getItemsList as fetchMcgItemsList, updateItem as updateMcgItem } from './mcgService.js';
 
+const DEFAULT_ARCHIVE_ATTRIBUTE_FLAG = '1';
+const DEFAULT_RESTORE_ATTRIBUTE_FLAG = '2';
+
 const normalize = (value) => {
   if (value === undefined || value === null) return '';
   return String(value).trim();
@@ -378,6 +381,28 @@ export async function propagateMcgDeletion(productDoc, options = {}) {
 }
 
 export async function markMcgItemsArchived(productDoc, options = {}) {
+  const { archiveAttributeValue, zeroOutInventory } = options;
+  return applyMcgAttributeUpdate(productDoc, {
+    ...options,
+    attributeValue: archiveAttributeValue ?? DEFAULT_ARCHIVE_ATTRIBUTE_FLAG,
+    fallbackAttributeValue: DEFAULT_ARCHIVE_ATTRIBUTE_FLAG,
+    zeroInventory: zeroOutInventory !== undefined ? !!zeroOutInventory : true,
+    defaultAdsMessage: 'Archived product (removed from catalog)'
+  });
+}
+
+export async function restoreMcgItemsFromArchive(productDoc, options = {}) {
+  const { restoreAttributeValue } = options;
+  return applyMcgAttributeUpdate(productDoc, {
+    ...options,
+    attributeValue: restoreAttributeValue ?? DEFAULT_RESTORE_ATTRIBUTE_FLAG,
+    fallbackAttributeValue: DEFAULT_RESTORE_ATTRIBUTE_FLAG,
+    zeroInventory: false,
+    defaultAdsMessage: 'Product restored from archive'
+  });
+}
+
+async function applyMcgAttributeUpdate(productDoc, config = {}) {
   const {
     identifiers,
     includeVariants = true,
@@ -389,10 +414,13 @@ export async function markMcgItemsArchived(productDoc, options = {}) {
     allowWhenDisabled = false,
     attributes,
     extraAttributes,
-    archiveTag = 'archived',
+    attributeValue,
+    fallbackAttributeValue,
     itemAds,
+    defaultAdsMessage = '',
+    zeroInventory = false,
     sendUpdateItemRequest = false
-  } = options;
+  } = config;
 
   const collectedRaw = identifiers || collectMcgIdentifiers(productDoc, {
     includeVariants,
@@ -458,51 +486,60 @@ export async function markMcgItemsArchived(productDoc, options = {}) {
   };
   ingestAttr(attributes);
   ingestAttr(extraAttributes);
-  const normalizedArchiveTag = String(archiveTag || 'archived').trim().toLowerCase();
-  if (normalizedArchiveTag) attrSet.add(normalizedArchiveTag);
-  if (!attrSet.size) attrSet.add('archived');
-  const attributeValue = Array.from(attrSet).join(',');
+  const normalizedAttribute = String(attributeValue || fallbackAttributeValue || '').trim().toLowerCase();
+  if (normalizedAttribute) attrSet.add(normalizedAttribute);
+  if (!attrSet.size && fallbackAttributeValue) {
+    attrSet.add(String(fallbackAttributeValue).trim().toLowerCase());
+  }
+  const attributePayload = Array.from(attrSet).join(',');
 
   const adsValue = typeof itemAds === 'string' && itemAds.trim()
     ? itemAds.trim()
-    : 'Archived product (removed from catalog)';
+    : (defaultAdsMessage || '');
 
   const payload = unique.map(({ mcgId, barcode }) => {
-    const doc = { item_inventory: 0 };
+    const doc = {};
+    if (zeroInventory) {
+      doc.item_inventory = 0;
+    }
     if (mcgId) {
       doc.item_id = mcgId;
     } else if (barcode) {
       doc.item_code = barcode;
     }
-    doc.item_attribute = attributeValue;
-    doc.item_ads = adsValue;
+    if (attributePayload) doc.item_attribute = attributePayload;
+    if (adsValue) doc.item_ads = adsValue;
     return doc;
   });
+
+  if (!payload.length) {
+    return { skipped: true, reason: 'no_identifiers' };
+  }
 
   try {
     const mcgResponse = await setMcgItemsList(payload, resolvedGroup);
     let updateItemResponses = null;
     if (sendUpdateItemRequest) {
       try {
-        updateItemResponses = await pushUpdateItemArchiveTag(unique, attributeValue, adsValue, resolvedGroup);
+        updateItemResponses = await pushUpdateItemAttribute(unique, attributePayload, adsValue, resolvedGroup);
       } catch (updateErr) {
-        try { console.warn('[mcg][update-item] archive tag push failed:', updateErr?.message || updateErr); } catch {}
+        try { console.warn('[mcg][update-item] attribute push failed:', updateErr?.message || updateErr); } catch {}
         updateItemResponses = { ok: false, error: updateErr?.message || 'mcg_update_item_failed' };
       }
     }
-    try { console.log('[mcg][archive] tagged=%d attrs=%s', payload.length, attributeValue); } catch {}
+    try { console.log('[mcg][attr] updated=%d attrs=%s', payload.length, attributePayload); } catch {}
     return {
       attempted: true,
       ok: true,
       updatedCount: payload.length,
-      attributes: attributeValue,
+      attributes: attributePayload,
       itemAds: adsValue,
       identifiers: { total: unique.length },
       mcgResponse,
       updateItem: updateItemResponses
     };
   } catch (error) {
-    try { console.warn('[mcg][archive] failed:', error?.message || error); } catch {}
+    try { console.warn('[mcg][attr] failed:', error?.message || error); } catch {}
     return {
       attempted: true,
       ok: false,
@@ -511,7 +548,7 @@ export async function markMcgItemsArchived(productDoc, options = {}) {
   }
 }
 
-async function pushUpdateItemArchiveTag(entries, attributeValue, adsValue, group) {
+async function pushUpdateItemAttribute(entries, attributeValue, adsValue, group) {
   if (!Array.isArray(entries) || !entries.length) return [];
   const jobs = entries.map(async ({ mcgId, barcode }) => {
     const payload = { item_attribute: attributeValue };

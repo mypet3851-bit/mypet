@@ -109,6 +109,8 @@ import Category from '../models/Category.js';
 import Brand from '../models/Brand.js';
 import Warehouse from '../models/Warehouse.js';
 import Settings from '../models/Settings.js';
+import McgItemBlock from '../models/McgItemBlock.js';
+import McgArchivedItem from '../models/McgArchivedItem.js';
 import { validateProductData } from '../utils/validation.js';
 import { handleProductImages } from '../utils/imageHandler.js';
 import cloudinary from '../services/cloudinaryClient.js';
@@ -118,7 +120,7 @@ import { realTimeEventService } from '../services/realTimeEventService.js';
 import { deepseekTranslate, deepseekTranslateBatch, isDeepseekConfigured } from '../services/translate/deepseek.js';
 import { getItemQuantity as rivhitGetQty, testConnectivity as rivhitTest } from '../services/rivhitService.js';
 import { setItemsList } from '../services/mcgService.js';
-import { collectMcgIdentifiers, persistMcgBlocklistEntries, persistMcgArchiveEntries, propagateMcgDeletion, markMcgItemsArchived, ensureIdentifiersHaveMcgIds } from '../services/mcgDeletionService.js';
+import { collectMcgIdentifiers, persistMcgBlocklistEntries, persistMcgArchiveEntries, propagateMcgDeletion, markMcgItemsArchived, ensureIdentifiersHaveMcgIds, restoreMcgItemsFromArchive } from '../services/mcgDeletionService.js';
 // Currency conversion disabled for product storage/display; prices are stored and served as-is in store currency
 
 // Get all products
@@ -1545,6 +1547,34 @@ export const updateProduct = async (req, res) => {
         ]);
       } catch (archiveError) {
         try { console.warn('[products][update] failed to persist archive identifiers', archiveError?.message || archiveError); } catch {}
+      }
+    }
+
+    const wasArchivedBefore = productBefore?.isActive === false;
+    const isActiveNow = product.isActive !== false;
+    if (wasArchivedBefore && isActiveNow) {
+      try {
+        const identifiers = collectMcgIdentifiers(product);
+        await restoreMcgItemsFromArchive(product, {
+          identifiers,
+          allowWhenDisabled: true,
+          sendUpdateItemRequest: true,
+          itemAds: 'Product restored from archive (reactivated)'
+        });
+
+        const guardFilters = [];
+        const mcgIds = Array.from(identifiers.mcgIds || []);
+        const barcodes = Array.from(identifiers.barcodes || []);
+        if (mcgIds.length) guardFilters.push({ mcgItemId: { $in: mcgIds } });
+        if (barcodes.length) guardFilters.push({ barcode: { $in: barcodes } });
+        if (guardFilters.length) {
+          await Promise.allSettled([
+            McgItemBlock.deleteMany({ $or: guardFilters }),
+            McgArchivedItem.deleteMany({ $or: guardFilters })
+          ]);
+        }
+      } catch (restoreErr) {
+        try { console.warn('[products][update] failed to restore MCG metadata', restoreErr?.message || restoreErr); } catch {}
       }
     }
 

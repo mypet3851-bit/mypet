@@ -8,6 +8,9 @@ const ATTRIBUTE_FIELD_KEYS = [
   'Attributes'
 ];
 
+const ARCHIVE_ATTRIBUTE_TOKENS = new Set(['archived', 'archive', 'archived_product', '1']);
+const RESTORE_ATTRIBUTE_TOKENS = new Set(['2', 'active', 'restored', 'unarchived']);
+
 const ATTRIBUTE_SPLIT_REGEX = /[,;|]/;
 
 function pickRawAttributeSource(source) {
@@ -53,5 +56,9 @@ export function extractMcgAttributeTags(source) {
 }
 
 export function hasArchivedAttribute(source) {
-  return extractMcgAttributeTags(source).includes('archived');
+  const tags = extractMcgAttributeTags(source);
+  if (!tags.length) return false;
+  const hasRestoreFlag = tags.some(tag => RESTORE_ATTRIBUTE_TOKENS.has(tag));
+  if (hasRestoreFlag) return false;
+  return tags.some(tag => ARCHIVE_ATTRIBUTE_TOKENS.has(tag));
 }
