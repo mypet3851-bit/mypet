@@ -247,6 +247,8 @@ router.post('/sync-inventory', adminAuth, async (req, res) => {
     let updated = 0;
     let created = 0;
     let skippedNoMatch = 0;
+    let skippedArchivedAttr = 0;
+    let skippedArchivedProducts = 0;
     let errors = 0;
 
     const ensureMainWarehouse = async () => {
@@ -286,6 +288,11 @@ router.post('/sync-inventory', adminAuth, async (req, res) => {
       for (const it of items) {
         try {
           processed++;
+          if (hasArchivedAttribute(it)) {
+            skippedArchivedAttr++;
+            continue;
+          }
+
           const mcgId = ((it?.ItemID ?? it?.ItemId ?? it?.itemID ?? it?.id ?? it?.itemId ?? it?.item_id ?? '') + '').trim();
           const barcode = ((it?.Barcode ?? it?.BarCode ?? it?.ItemCode ?? it?.ItemCODE ?? it?.itemCode ?? it?.barcode ?? it?.item_code ?? it?.code ?? '') + '').trim();
           const qty = Number(it?.StockQuantity ?? it?.stock ?? it?.item_inventory ?? 0);
@@ -294,21 +301,26 @@ router.post('/sync-inventory', adminAuth, async (req, res) => {
           // Try variant match by barcode first
           let prod = null; let variant = null;
           if (barcode) {
-            prod = await Product.findOne({ 'variants.barcode': barcode }).select('_id variants');
+            prod = await Product.findOne({ 'variants.barcode': barcode }).select('_id variants isActive');
             if (prod && Array.isArray(prod.variants)) {
               variant = prod.variants.find(v => String(v?.barcode || '').trim() === barcode);
             }
           }
           // Fallback: product barcode
           if (!prod && barcode) {
-            prod = await Product.findOne({ mcgBarcode: barcode }).select('_id');
+            prod = await Product.findOne({ mcgBarcode: barcode }).select('_id isActive');
           }
           // Fallback: product by mcgItemId (non-variant)
           if (!prod && mcgId) {
-            prod = await Product.findOne({ mcgItemId: mcgId }).select('_id');
+            prod = await Product.findOne({ mcgItemId: mcgId }).select('_id isActive');
           }
 
           if (!prod) { skippedNoMatch++; continue; }
+
+          if (prod.isActive === false) {
+            skippedArchivedProducts++;
+            continue;
+          }
 
           if (variant && variant._id) {
             await upsertInventoryFor({ productId: prod._id, variantId: variant._id, qty: qtySafe });
@@ -346,6 +358,8 @@ router.post('/sync-inventory', adminAuth, async (req, res) => {
       updated,
       created,
       skippedNoMatch,
+      skippedArchivedAttr,
+      skippedArchivedProducts,
       errors
     });
   } catch (e) {
