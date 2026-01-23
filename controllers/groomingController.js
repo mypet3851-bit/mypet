@@ -113,7 +113,23 @@ export async function getAvailability(req, res) {
         slotRemaining[d][t] = remaining;
       });
     });
-    res.json({ dates, slots, slotRemaining, capacity: slotCapacity, services: SERVICES });
+    const heroBannerEnabled = grooming?.showHeroBanner !== false;
+    const heroBannerImage = (() => {
+      if (typeof grooming?.heroBannerImage === 'string') {
+        const trimmed = grooming.heroBannerImage.trim();
+        return trimmed.length ? trimmed : null;
+      }
+      return null;
+    })();
+    res.json({
+      dates,
+      slots,
+      slotRemaining,
+      capacity: slotCapacity,
+      services: SERVICES,
+      showHeroBanner: heroBannerEnabled,
+      heroBannerImage
+    });
   } catch (e) {
     res.status(500).json({ message: 'Failed to load availability', error: e?.message || e });
   }

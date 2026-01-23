@@ -625,7 +625,15 @@ router.get('/grooming', adminAuth, async (req, res) => {
       bookingWindowDays: Number(g.bookingWindowDays) || 30,
       slots: slots.length ? slots : ['07:00','08:00','09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00'],
       dateSlotOverrides: normalizeDateSlotOverrides(g.dateSlotOverrides),
-      slotCapacity: Number(g.slotCapacity) > 0 ? Number(g.slotCapacity) : 4
+      slotCapacity: Number(g.slotCapacity) > 0 ? Number(g.slotCapacity) : 4,
+      showHeroBanner: g.showHeroBanner !== false,
+      heroBannerImage: (() => {
+        if (typeof g.heroBannerImage === 'string') {
+          const trimmed = g.heroBannerImage.trim();
+          return trimmed.length ? trimmed : null;
+        }
+        return null;
+      })()
     };
     res.json(norm);
   } catch (error) {
@@ -652,7 +660,16 @@ router.put('/grooming', settingsWriteGuard, async (req, res) => {
       bookingWindowDays: Number(inc.bookingWindowDays) > 0 ? Number(inc.bookingWindowDays) : (settings.grooming?.bookingWindowDays || 30),
       slots: slotsFinal,
       dateSlotOverrides: nextOverrides,
-      slotCapacity: Number(inc.slotCapacity) > 0 ? Number(inc.slotCapacity) : (settings.grooming?.slotCapacity || 4)
+      slotCapacity: Number(inc.slotCapacity) > 0 ? Number(inc.slotCapacity) : (settings.grooming?.slotCapacity || 4),
+      showHeroBanner: typeof inc.showHeroBanner === 'undefined'
+        ? settings.grooming?.showHeroBanner !== false
+        : !!inc.showHeroBanner,
+      heroBannerImage: (() => {
+        if (typeof inc.heroBannerImage === 'string') return inc.heroBannerImage.trim();
+        if (inc.heroBannerImage === null) return '';
+        const existing = settings.grooming?.heroBannerImage;
+        return typeof existing === 'string' ? existing : '';
+      })()
     };
     settings.grooming = next;
     try { settings.markModified('grooming'); } catch {}
@@ -679,7 +696,15 @@ router.get('/grooming', adminAuth, async (req, res) => {
       disabledDates,
       dateSlotOverrides: overrides,
       slots: slots.length ? slots : ['07:00','08:00','09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00'],
-      slotCapacity: Number(grooming.slotCapacity) > 0 ? Number(grooming.slotCapacity) : 4
+      slotCapacity: Number(grooming.slotCapacity) > 0 ? Number(grooming.slotCapacity) : 4,
+      showHeroBanner: grooming.showHeroBanner !== false,
+      heroBannerImage: (() => {
+        if (typeof grooming.heroBannerImage === 'string') {
+          const trimmed = grooming.heroBannerImage.trim();
+          return trimmed.length ? trimmed : null;
+        }
+        return null;
+      })()
     });
   } catch (e) {
     res.status(500).json({ message: e.message });
@@ -714,6 +739,15 @@ router.put('/grooming', settingsWriteGuard, async (req, res) => {
         const c = Number(inc.slotCapacity);
         if (!Number.isFinite(c) || c <= 0) return Number(existing.slotCapacity) > 0 ? Number(existing.slotCapacity) : 4;
         return Math.min(Math.max(1, Math.round(c)), 50);
+      })(),
+      showHeroBanner: typeof inc.showHeroBanner === 'undefined'
+        ? existing.showHeroBanner !== false
+        : !!inc.showHeroBanner,
+      heroBannerImage: (() => {
+        if (typeof inc.heroBannerImage === 'string') return inc.heroBannerImage.trim();
+        if (inc.heroBannerImage === null) return '';
+        const fallback = typeof existing.heroBannerImage === 'string' ? existing.heroBannerImage : '';
+        return fallback;
       })()
     };
     settings.grooming = next;
