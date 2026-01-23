@@ -27,6 +27,16 @@ function sanitizeSlug(input) {
     .replace(/-+/g, '-');
 }
 
+function normalizeRoutePath(value) {
+  if (!value || typeof value !== 'string') return '';
+  let path = value.trim();
+  if (!path) return '';
+  if (/^https?:\/\//i.test(path)) return path;
+  if (!path.startsWith('/')) path = `/${path}`;
+  path = path.replace(/\/{2,}/g, '/');
+  return path;
+}
+
 async function ensureUniqueSlug(desired, excludeId) {
   let base = sanitizeSlug(desired) || 'nav';
   let candidate = base;
@@ -178,6 +188,10 @@ router.post('/', adminAuth, async (req, res) => {
     if (body.slug) {
       body.slug = await ensureUniqueSlug(body.slug);
     }
+    if ('route' in body) {
+      const normalizedRoute = normalizeRoutePath(body.route);
+      body.route = normalizedRoute || null;
+    }
     // If slugGroups provided, sanitize and ensure unique for each
     if (Array.isArray(body.slugGroups) && body.slugGroups.length) {
       // First sanitize
@@ -247,6 +261,10 @@ router.put('/:id([0-9a-fA-F]{24})', adminAuth, async (req, res) => {
     // Normalize/ensure unique slug if provided
     if (body.slug) {
       body.slug = await ensureUniqueSlug(body.slug, req.params.id);
+    }
+    if ('route' in body) {
+      const normalizedRoute = normalizeRoutePath(body.route);
+      body.route = normalizedRoute || null;
     }
     // Process slugGroups if provided
     if (Array.isArray(body.slugGroups)) {

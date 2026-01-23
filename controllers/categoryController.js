@@ -14,6 +14,13 @@ function normalizeLang(lang) {
   return l;
 }
 
+function normalizeRouteValue(value) {
+  const raw = typeof value === 'string' ? value.trim() : '';
+  if (!raw) return null;
+  if (/^https?:\/\//i.test(raw)) return raw;
+  return raw.startsWith('/') ? raw : `/${raw}`;
+}
+
 // Helper: localize a category object in-place for a given language
 function localizeCategoryInPlace(cat, lang) {
   const nm = cat?.name_i18n?.[lang] ?? cat?.name_i18n?.get?.(lang);
@@ -226,7 +233,8 @@ export const createCategory = async (req, res) => {
 
     const payload = {
       ...req.body,
-      name: req.body.name.trim()
+      name: req.body.name.trim(),
+      route: normalizeRouteValue(req.body.route)
     };
     // Validate parent if provided
     if (payload.parent) {
@@ -277,6 +285,9 @@ export const updateCategory = async (req, res) => {
 
     // Validate parent if supplied
     const updatePayload = { ...req.body, name: req.body.name?.trim() };
+    if (updatePayload.route !== undefined) {
+      updatePayload.route = normalizeRouteValue(updatePayload.route);
+    }
     if (updatePayload.parent !== undefined) {
       if (!updatePayload.parent) {
         updatePayload.parent = null; // allow making a root category
