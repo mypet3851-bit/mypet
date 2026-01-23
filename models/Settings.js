@@ -440,7 +440,10 @@ settingsSchema.add({
       default: () => ({})
     },
     // Optional override for per-slot capacity; defaults to env BOOKING_SLOT_CAPACITY when empty
-    slotCapacity: { type: Number, default: 4, min: 1, max: 50 }
+    slotCapacity: { type: Number, default: 4, min: 1, max: 50 },
+    // Booking hero banner controls (public booking page)
+    showHeroBanner: { type: Boolean, default: true },
+    heroBannerImage: { type: String, default: '' }
   }
 });
 
