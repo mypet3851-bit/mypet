@@ -22,6 +22,12 @@ const categorySchema = new mongoose.Schema({
     unique: true,
     lowercase: true
   },
+  // Optional custom route override for storefront navigation
+  route: {
+    type: String,
+    trim: true,
+    default: null
+  },
   // Hierarchy
   parent: {
     type: mongoose.Schema.Types.ObjectId,

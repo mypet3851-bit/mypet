@@ -15,6 +15,11 @@ const navigationCategorySchema = new mongoose.Schema({
     lowercase: true,
     index: true
   },
+  // Optional custom route override (e.g., /booking)
+  route: {
+    type: String,
+    trim: true
+  },
   isActive: {
     type: Boolean,
     default: true
