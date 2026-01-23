@@ -759,6 +759,41 @@ router.put('/grooming', settingsWriteGuard, async (req, res) => {
   }
 });
 
+// Dedicated endpoint to update only booking hero banner fields without touching other grooming settings
+router.put('/grooming/hero', settingsWriteGuard, async (req, res) => {
+  try {
+    let settings = await Settings.findOne().sort({ updatedAt: -1 });
+    if (!settings) settings = await Settings.create({});
+    const inc = req.body || {};
+    const grooming = settings.grooming || {};
+    if (typeof inc.heroBannerImage === 'string') {
+      const trimmed = inc.heroBannerImage.trim();
+      grooming.heroBannerImage = trimmed;
+    } else if (inc.heroBannerImage === null) {
+      grooming.heroBannerImage = '';
+    }
+    if (typeof inc.showHeroBanner !== 'undefined') {
+      grooming.showHeroBanner = !!inc.showHeroBanner;
+    }
+    settings.grooming = grooming;
+    try { settings.markModified('grooming'); } catch {}
+    await settings.save();
+    const response = {
+      heroBannerImage: (() => {
+        if (typeof grooming.heroBannerImage === 'string') {
+          const trimmed = grooming.heroBannerImage.trim();
+          return trimmed.length ? trimmed : null;
+        }
+        return null;
+      })(),
+      showHeroBanner: grooming.showHeroBanner !== false
+    };
+    res.json(response);
+  } catch (error) {
+    res.status(500).json({ message: error?.message || 'Failed to update hero banner' });
+  }
+});
+
 // Lightweight version endpoint for polling (no secrets, minimal payload)
 router.get('/version', async (req, res) => {
   try {
