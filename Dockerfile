@@ -10,6 +10,7 @@ FROM node:20-alpine
 ##
 
 ARG NODE_ENV=production
+ARG MONGODB_URI="mongodb+srv://omranmahmoud888:pass12345@cluster0.qaqt8ch.mongodb.net/mypets?retryWrites=true&w=majority&appName=Cluster0"
 
 WORKDIR /app/project
 
@@ -54,6 +55,7 @@ RUN set -eux; \
 
 # Environment
 ENV NODE_ENV=${NODE_ENV}
+ENV MONGODB_URI=${MONGODB_URI}
 # Cloud Run provides $PORT; default to 8080 for local runs
 ENV PORT=8080
 
