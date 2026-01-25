@@ -27,6 +27,7 @@ import Inventory from '../models/Inventory.js';
 import InventoryHistory from '../models/InventoryHistory.js';
 import { connectWithRetry } from '../services/dbManager.js';
 import { getItemsList } from '../services/mcgService.js';
+import { normalizeTaxMultiplier } from '../utils/mcgTax.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -85,7 +86,7 @@ async function run() {
     const apiFlavor = String(s?.mcg?.apiFlavor || '').trim().toLowerCase();
     const baseUrl = String(s?.mcg?.baseUrl || '').trim();
     const isUpli = apiFlavor === 'uplicali' || /apis\.uplicali\.com/i.test(baseUrl) || /SuperMCG\/MCG_API/i.test(baseUrl);
-    const taxMultiplier = Number(s?.mcg?.taxMultiplier || 1.18);
+    const taxMultiplier = normalizeTaxMultiplier(s?.mcg?.taxMultiplier ?? 1.18);
 
     // Resolve category
     let categoryId = null;
