@@ -27,6 +27,7 @@ import Inventory from '../models/Inventory.js';
 import InventoryHistory from '../models/InventoryHistory.js';
 import { connectWithRetry } from '../services/dbManager.js';
 import { getItemsList } from '../services/mcgService.js';
+import { extractFinalPrice } from '../utils/mcgPrice.js';
 import { normalizeTaxMultiplier } from '../utils/mcgTax.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -134,10 +135,10 @@ async function run() {
 
         const name = (it?.Name ?? it?.name ?? it?.item_name ?? (barcode || mcgId || 'MCG Item')) + '';
         const desc = (it?.Description ?? it?.description ?? (it?.item_department ? `Department: ${it.item_department}` : 'Imported from MCG')) + '';
-        let price = 0;
-        if (it && (it.item_final_price !== undefined && it.item_final_price !== null)) {
-          const pf = Number(it.item_final_price);
-          price = Number.isFinite(pf) && pf >= 0 ? pf : 0;
+        const finalPrice = extractFinalPrice(it);
+        let price;
+        if (finalPrice !== null) {
+          price = finalPrice;
         } else {
           const priceRaw = Number(it?.Price ?? it?.price ?? it?.item_price ?? 0);
           const base = Number.isFinite(priceRaw) && priceRaw >= 0 ? priceRaw : 0;
