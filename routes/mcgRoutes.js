@@ -13,6 +13,7 @@ import { runMcgSyncOnce } from '../services/mcgSyncScheduler.js';
 import McgItemBlock from '../models/McgItemBlock.js';
 import McgArchivedItem from '../models/McgArchivedItem.js';
 import { hasArchivedAttribute } from '../utils/mcgAttributes.js';
+import { normalizeTaxMultiplier, percentToMultiplier } from '../utils/mcgTax.js';
 
 const router = express.Router();
 
@@ -69,6 +70,7 @@ router.get('/config', adminAuth, async (req, res) => {
     let s = await Settings.findOne();
     if (!s) s = await Settings.create({});
     const m = s.mcg || {};
+    const taxMultiplier = normalizeTaxMultiplier(m.taxMultiplier ?? 1.18);
     res.json({
       enabled: !!m.enabled,
       baseUrl: m.baseUrl || 'https://api.mcgateway.com',
@@ -84,7 +86,7 @@ router.get('/config', adminAuth, async (req, res) => {
   vendorCode: m.vendorCode || '',
   retailerKey: m.retailerKey ? '***' : '',
       retailerClientId: m.retailerClientId || '',
-      taxMultiplier: typeof m.taxMultiplier === 'number' ? m.taxMultiplier : 1.18,
+      taxMultiplier,
       pushStockBackEnabled: !!m.pushStockBackEnabled,
       autoPullEnabled: !!m.autoPullEnabled,
       pullEveryMinutes: typeof m.pullEveryMinutes === 'number' ? m.pullEveryMinutes : 1,
@@ -156,8 +158,11 @@ router.put('/config', adminAuth, async (req, res) => {
       if (Number.isFinite(g)) s.mcg.group = g; else s.mcg.group = undefined;
     }
     if (typeof inc.taxMultiplier !== 'undefined') {
-      const t = Number(inc.taxMultiplier);
-      if (Number.isFinite(t) && t >= 1) s.mcg.taxMultiplier = t;
+      const normalized = normalizeTaxMultiplier(inc.taxMultiplier);
+      if (Number.isFinite(normalized) && normalized >= 1) s.mcg.taxMultiplier = normalized;
+    } else if (typeof inc.taxPercent !== 'undefined') {
+      const normalized = percentToMultiplier(inc.taxPercent);
+      if (Number.isFinite(normalized) && normalized >= 1) s.mcg.taxMultiplier = normalized;
     }
     if (typeof inc.pushStockBackEnabled !== 'undefined') s.mcg.pushStockBackEnabled = !!inc.pushStockBackEnabled;
     if (typeof inc.autoPullEnabled !== 'undefined') s.mcg.autoPullEnabled = !!inc.autoPullEnabled;
@@ -185,7 +190,7 @@ router.put('/config', adminAuth, async (req, res) => {
   vendorCode: s.mcg.vendorCode || '',
   retailerKey: s.mcg.retailerKey ? '***' : '',
       retailerClientId: s.mcg.retailerClientId || '',
-      taxMultiplier: typeof s.mcg.taxMultiplier === 'number' ? s.mcg.taxMultiplier : 1.18,
+      taxMultiplier: normalizeTaxMultiplier(s.mcg.taxMultiplier ?? 1.18),
       pushStockBackEnabled: !!s.mcg.pushStockBackEnabled,
       autoPullEnabled: !!s.mcg.autoPullEnabled,
       pullEveryMinutes: typeof s.mcg.pullEveryMinutes === 'number' ? s.mcg.pullEveryMinutes : 1,
@@ -428,7 +433,7 @@ router.post('/sync-items', adminAuth, async (req, res) => {
     }
     if (!categoryId) return res.status(400).json({ message: 'No category available; create a category first or pass defaultCategoryId' });
 
-    const taxMultiplier = Number(s?.mcg?.taxMultiplier || 1.18);
+    const taxMultiplier = normalizeTaxMultiplier(s?.mcg?.taxMultiplier ?? 1.18);
 
     // Load blocklisted + archived identifiers to avoid recreating deleted products
     const [blockDocs, archivedDocs] = await Promise.all([
@@ -908,7 +913,7 @@ router.post('/sync-product/:productId', adminAuth, async (req, res) => {
     // Map fields
   const nameFromMcg = (it?.Name ?? it?.name ?? it?.item_name ?? '').toString();
   const descFromMcg = (it?.Description ?? it?.description ?? (it?.item_department ? `Department: ${it.item_department}` : '')).toString();
-    const taxMultiplier = Number(s?.mcg?.taxMultiplier || 1.18);
+    const taxMultiplier = normalizeTaxMultiplier(s?.mcg?.taxMultiplier ?? 1.18);
     let price;
     if (it && (it.item_final_price !== undefined && it.item_final_price !== null)) {
       const pf = Number(it.item_final_price);

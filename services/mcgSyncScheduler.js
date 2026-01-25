@@ -12,6 +12,7 @@ import { inventoryService } from './inventoryService.js';
 import McgItemBlock from '../models/McgItemBlock.js';
 import McgArchivedItem from '../models/McgArchivedItem.js';
 import { hasArchivedAttribute } from '../utils/mcgAttributes.js';
+import { normalizeTaxMultiplier } from '../utils/mcgTax.js';
 
 let _timer = null;
 let _inFlight = false;
@@ -215,8 +216,8 @@ async function oneRun() {
                 const descSource = (descSourceFull || name) + '';
                 const description = descSource.trim().length ? descSource.trim().slice(0, 5000) : name;
                 const priceRaw = Number(it?.item_final_price ?? it?.finalPrice ?? it?.FinalPrice ?? it?.Price ?? it?.price ?? it?.item_price ?? 0);
-                const taxMultiplier = Number(mcg?.taxMultiplier || 1.18);
-                const price = Number.isFinite(priceRaw) ? Math.ceil(priceRaw * (taxMultiplier > 0 ? taxMultiplier : 1)) : 0;
+                const taxMultiplier = normalizeTaxMultiplier(mcg?.taxMultiplier ?? 1.18);
+                const price = Number.isFinite(priceRaw) ? Math.ceil(priceRaw * taxMultiplier) : 0;
                 const imgCandidate = (it?.ImageUrl || it?.image_url || it?.ImageURL || it?.image || it?.Image || '') + '';
                 // Configurable placeholder (Settings.mcg.autoCreatePlaceholderImage) or fallback inline SVG
                 const placeholderCfg = (mcg?.autoCreatePlaceholderImage || '').trim();
