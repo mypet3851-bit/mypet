@@ -14,6 +14,7 @@ import McgItemBlock from '../models/McgItemBlock.js';
 import McgArchivedItem from '../models/McgArchivedItem.js';
 import { hasArchivedAttribute } from '../utils/mcgAttributes.js';
 import { normalizeTaxMultiplier, percentToMultiplier } from '../utils/mcgTax.js';
+import { extractFinalPrice } from '../utils/mcgPrice.js';
 
 const router = express.Router();
 
@@ -40,6 +41,15 @@ function normalizeMcgImportedPrice(p) {
   const val = Number(p);
   if (!Number.isFinite(val) || val < 0) return 0;
   return Math.ceil(val);
+}
+
+function resolvePriceFromMcgItem(it, taxMultiplier) {
+  const finalPrice = extractFinalPrice(it);
+  if (finalPrice !== null) return normalizeMcgImportedPrice(finalPrice);
+  const priceRaw = Number(it?.Price ?? it?.price ?? it?.item_price ?? 0);
+  const base = Number.isFinite(priceRaw) && priceRaw >= 0 ? priceRaw : 0;
+  const multiplied = Math.round(base * taxMultiplier * 100) / 100;
+  return normalizeMcgImportedPrice(multiplied);
 }
 
 // Public health ping (no auth). Returns a simple OK to verify routing reaches this service.
@@ -573,17 +583,7 @@ router.post('/sync-items', adminAuth, async (req, res) => {
     name = (desc || barcode || mcgId || 'MCG Item') + '';
   }
       // Prefer provider's final (VAT-inclusive) price when available; otherwise apply configured tax multiplier
-      let price = 0;
-      if (it && (it.item_final_price !== undefined && it.item_final_price !== null)) {
-        const pf = Number(it.item_final_price);
-        price = Number.isFinite(pf) && pf >= 0 ? pf : 0;
-      } else {
-        const priceRaw = Number(it?.Price ?? it?.price ?? it?.item_price ?? 0);
-        const base = Number.isFinite(priceRaw) && priceRaw >= 0 ? priceRaw : 0;
-        price = Math.round(base * taxMultiplier * 100) / 100;
-      }
-      // Apply normalization rule (e.g., 9.92 -> 9.99, 9.96 -> 10.00)
-      price = normalizeMcgImportedPrice(price);
+      let price = resolvePriceFromMcgItem(it, taxMultiplier);
       const stockRaw = Number(it?.StockQuantity ?? it?.stock ?? it?.item_inventory ?? 0);
       const stock = Number.isFinite(stockRaw) ? Math.max(0, stockRaw) : 0;
       const img = (it?.ImageURL ?? it?.imageUrl ?? (it?.item_image || '')) + '';
@@ -914,18 +914,7 @@ router.post('/sync-product/:productId', adminAuth, async (req, res) => {
   const nameFromMcg = (it?.Name ?? it?.name ?? it?.item_name ?? '').toString();
   const descFromMcg = (it?.Description ?? it?.description ?? (it?.item_department ? `Department: ${it.item_department}` : '')).toString();
     const taxMultiplier = normalizeTaxMultiplier(s?.mcg?.taxMultiplier ?? 1.18);
-    let price;
-    if (it && (it.item_final_price !== undefined && it.item_final_price !== null)) {
-      const pf = Number(it.item_final_price);
-      price = Number.isFinite(pf) && pf >= 0 ? Math.round(pf * 100) / 100 : undefined;
-    } else {
-      const priceRaw = Number(it?.Price ?? it?.price ?? it?.item_price ?? 0);
-      const base = Number.isFinite(priceRaw) && priceRaw >= 0 ? priceRaw : undefined;
-      price = typeof base === 'number' ? Math.round(base * taxMultiplier * 100) / 100 : undefined;
-    }
-    if (typeof price === 'number') {
-      price = normalizeMcgImportedPrice(price);
-    }
+    let price = resolvePriceFromMcgItem(it, taxMultiplier);
   const barcodeFromMcg = ((it?.Barcode ?? it?.barcode ?? it?.item_code ?? '') + '').trim();
   const idFromMcg = ((it?.ItemID ?? it?.id ?? it?.itemId ?? it?.item_id ?? '') + '').trim();
 
