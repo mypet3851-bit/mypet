@@ -185,8 +185,13 @@ export const login = async (req, res) => {
       }
     }
 
-    // Check password
-    const isMatch = await bcrypt.compare(password, user.password);
+    // Check password (also try a trimmed variant to cover accidental spaces)
+    const pwdInput = String(password || '');
+    const pwdTrimmed = pwdInput.trim();
+    let isMatch = await bcrypt.compare(pwdInput, user.password);
+    if (!isMatch && pwdTrimmed !== pwdInput) {
+      isMatch = await bcrypt.compare(pwdTrimmed, user.password);
+    }
     if (!isMatch) {
       return res.status(401).json({ message: 'Invalid email or password' });
     }

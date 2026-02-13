@@ -51,21 +51,34 @@ router.patch('/profile', auth, async (req, res) => {
 // Update password
 router.patch('/password', auth, async (req, res) => {
   try {
-    const { currentPassword, newPassword } = req.body;
+    const currentPasswordRaw = String(req.body.currentPassword || '');
+    const newPasswordRaw = String(req.body.newPassword || '');
+    const currentPasswordTrimmed = currentPasswordRaw.trim();
+    const newPasswordTrimmed = newPasswordRaw.trim();
+
+    if (!currentPasswordTrimmed || !newPasswordTrimmed) {
+      return res.status(400).json({ message: 'Both current and new password are required' });
+    }
+    if (newPasswordTrimmed.length < 6) {
+      return res.status(400).json({ message: 'New password must be at least 6 characters' });
+    }
     const user = await User.findById(req.user._id);
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    // Verify current password
-    const isMatch = await user.comparePassword(currentPassword);
+    // Verify current password (accepting accidental leading/trailing spaces)
+    let isMatch = await user.comparePassword(currentPasswordRaw);
+    if (!isMatch && currentPasswordTrimmed !== currentPasswordRaw) {
+      isMatch = await user.comparePassword(currentPasswordTrimmed);
+    }
     if (!isMatch) {
       return res.status(400).json({ message: 'Current password is incorrect' });
     }
 
     // Update password
-    user.password = newPassword;
+    user.password = newPasswordTrimmed;
     await user.save();
 
     res.json({ message: 'Password updated successfully' });
